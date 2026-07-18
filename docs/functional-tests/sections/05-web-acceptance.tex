@@ -1,0 +1,65 @@
+\section{Web 页面与全链路验收}
+
+\subsection{当前状态}
+
+Streamlit 已接入 FastAPI。2026-07-17 已在 Codex App 内置浏览器中使用 Playwright 完成无真实订单的视觉和交互验收；隔离 FakeExchange 环境验证了多空运行行、草稿预览与编辑、停止、归档、删除、详情切换和 Cell 数据。随后以本地 HTTP Stub 和 AppTest 补充 9 项前端异常场景。验收共确认币对链接、表格裁切、旧预览残留和异常响应崩溃四类缺陷，详见执行记录。
+
+\CaseHeader{FT-WEB-001}{总览数据来自真实 API}{\OwnerAuto+\OwnerHuman}{无资金/视觉}{\StatusPass}
+
+总览每行显示币对、方向、当前价格、当前网格上下限、比例、单格金额、杠杆、网格总数、待建仓、已建仓、待平仓、状态与运行时间。做多整行绿色、做空整行红色、未启动白色。人工确认无横向滚动条且少量网格完整展示。
+
+\CaseHeader{FT-WEB-002}{新增策略与预览}{\OwnerHuman}{配置写入}{\StatusPass}
+
+点击表格下方加号，输入做多/做空配置并生成预览。确认页面预览与 \texttt{/strategies/preview} 完全一致；确认创建后 SQLite 出现草稿，未产生订单。
+
+\CaseHeader{FT-WEB-003}{编辑、启动与不可逆锁定}{\OwnerJoint}{可能启动实盘}{\StatusPartial}
+
+草稿阶段编辑成功；首次启动后编辑控件禁用，停止后仍不可编辑。启动动作必须二次确认测试币对、方向、单格金额和预计最大 Cell 数。
+
+\CaseHeader{FT-WEB-004}{停止、归档和删除}{\OwnerJoint}{状态变更}{\StatusPass}
+
+停止单组不停止共享调度器且不撤币安订单；归档和软删除保留审计数据。页面不得暗示停止等同于平仓或撤单。
+
+\CaseHeader{FT-WEB-005}{币对详情和实时价格行}{\OwnerHuman}{视觉}{\StatusFail}
+
+币对下拉在标题下方左侧；多空详情整行颜色正确；运行时间使用“3小时18分”而不是时刻。实时价格行按价格插入待平仓和待建仓之间，文字为白色。
+
+\CaseHeader{FT-WEB-006}{Cell 订单展示}{\OwnerHuman}{视觉/数据}{\StatusFail}
+
+每格展示买入价、卖出价、当前阶段、买入、卖出和成交次数。订单文字使用“挂单:\#单号”或“成交:\#单号”；待平仓不重复显示已建仓。价格顺序必须符合多空触发逻辑。
+
+\subsection{前端异常场景}
+
+以下场景全部使用本地 HTTP Stub，不连接真实后端或币安。Stub 中的 \texttt{/start} 只返回 503，不会进入交易引擎。
+
+\begin{longtable}{p{3.2cm}p{3cm}p{7.8cm}}
+  \toprule
+  用例 & 当前判定 & 验收目标 \\
+  \midrule
+  \endhead
+  FT-WEB-ERR-001 & \StatusPass & 后端不可连接时显示恢复指引，不显示 Python 异常栈。 \\
+  FT-WEB-ERR-002 & \StatusPass & Cell 详情返回 503 时保留页面并显示错误。 \\
+  FT-WEB-ERR-003 & \StatusPass & 刷新价格返回 503 时显示错误且不误报成功。 \\
+  FT-WEB-ERR-004 & \StatusPass & 启动返回 503 时开关回滚到服务端状态。 \\
+  FT-WEB-ERR-005 & \StatusPass & URL 中 strategy ID 已失效时回退到现存策略。 \\
+  FT-WEB-ERR-006 & \StatusPass & 50 组策略同时渲染时无重复 Widget Key 或超时。 \\
+  FT-WEB-ERR-007 & \StatusFail & 策略对象缺少必要字段时应显示可恢复错误，而不是整页崩溃。 \\
+  FT-WEB-ERR-008 & \StatusFail & 2xx 响应不是 JSON 时应转为 GridApiError，而不是泄露异常栈。 \\
+  FT-WEB-ERR-009 & \StatusFail & 关闭并重新打开新增对话框时必须清除旧预览，禁止空白新表单继续确认旧配置。 \\
+  \bottomrule
+\end{longtable}
+
+\CaseHeader{FT-E2E-001}{浏览器到币安全链路（旧总括用例）}{\OwnerJoint}{测试网订单}{\StatusPartial}
+
+2026-07-17 已完成后端真实单链闭环和页面显示核对，但最终策略通过隔离 API 创建、启动，不属于全程页面发起。严格的页面驱动用例与安全门禁见“页面驱动的 Binance Testnet 基本 E2E”一节。
+
+\textbf{步骤：}
+\begin{enumerate}
+  \item 从 Web 创建独立测试策略并核对预览。
+  \item Web 启动策略，确认 FastAPI 状态、共享调度器 PID 和币安挂单。
+  \item 人工在币安页面取消一张订单，观察 Web 在一个一致性周期内更新为新订单号。
+  \item 触发或用受控方式完成一次建仓/平仓闭环，核对 Cell、事件、手续费与持仓池。
+  \item Web 停止并归档测试策略，人工确认是否需要撤销剩余测试单和清理仓位。
+\end{enumerate}
+
+\textbf{通过：}五层状态（浏览器、API、SQLite、调度器、币安）一致，页面刷新不依赖模拟数据，不出现重复订单或残余测试仓位。

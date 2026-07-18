@@ -1,0 +1,70 @@
+\section{执行顺序、准入门槛与记录模板}
+
+\subsection{建议执行顺序}
+
+\begin{longtable}{p{1.4cm}p{4.2cm}p{3.2cm}p{5.4cm}}
+  \toprule
+  阶段 & 内容 & 主要执行者 & 进入下一阶段的门槛 \\
+  \midrule
+  \endhead
+  P0 & 环境、安全与测试数据库 & \OwnerJoint & 无既有测试币对仓位/挂单；权限和清理方案确认。 \\
+  P1 & 75+5 自动回归与 LLT & \OwnerAuto & 全部通过。 \\
+  P2 & FastAPI 与本地共享调度器 & \OwnerAuto & API、状态锁和单 PID 通过。 \\
+  P3 & 币安只读与 \texttt{/order/test} & \OwnerLive & 签名、Hedge Mode、规则和订单参数通过。 \\
+  P4 & 10 USDT LONG/SHORT 开平仓 & \OwnerLive & 双向均归零，手续费和 PnL 可回查。 \\
+  P5 & 人工删单/平仓一致性 & \OwnerJoint & FT-CON-L01--L05 通过，无重复或超额订单。 \\
+  P6 & 前端接入与浏览器 E2E & \OwnerJoint & 页面不再使用模拟状态，五层数据一致。 \\
+  P7 & 重启、负载与 24 小时观察 & \OwnerJoint & 无 OOM、无持续错误、无未解释仓位差。 \\
+  P8 & 数据迁移评审 & 人工决策 & 才允许设计并执行旧 CSV 迁移。 \\
+  \bottomrule
+\end{longtable}
+
+\subsection{第一轮打通清单}
+
+建议下一轮立即执行：
+
+\begin{enumerate}[label=\arabic*.]
+  \item Codex 创建独立功能测试数据库，自动跑 P1。
+  \item Codex 先打通统一的 \texttt{.env} 加载，再启动 FastAPI，执行 P2 API 测试；此时不启动真实策略。
+  \item Codex 复查币安测试币对无仓位无挂单，执行 P3。
+  \item 用户授权后，Codex 执行 P4 的 10 USDT 多空闭环。
+  \item Codex 创建一组最小限价网格；用户在币安页面完成 FT-CON-L01/L02/L03，Codex实时核对收敛。
+  \item 一致性通过后再修改 Streamlit 数据层，进入 P6。
+\end{enumerate}
+
+\subsection{停止条件}
+
+出现任一情况立即停止实盘阶段：
+
+\begin{itemize}
+  \item 测试币对出现无法解释的仓位或订单；
+  \item 平仓单总量超过真实仓位且一个协调周期后仍未报警；
+  \item 同一 Cell 产生两张有效建仓单或两张系统管理的有效平仓单；
+  \item 清理脚本无法确认本次新增数量；
+  \item 连续三轮持仓查询、撤单或补单失败；
+  \item 发现 API Key、Secret 或完整签名参数进入日志/证据。
+\end{itemize}
+
+\subsection{单项执行记录模板}
+
+\begin{tabularx}{\textwidth}{>{\bfseries}p{3.2cm}X}
+  \toprule
+  用例编号 & \\
+  执行时间 & \\
+  执行者 & Codex / 人工 / 联合 \\
+  环境 & 本地 / 测试服务器 / Binance 主网 \\
+  strategy ID / Cell ID & \\
+  测试前仓位与挂单 & \\
+  实际步骤 & \\
+  实际结果 & \\
+  订单号与事件 ID & \\
+  清理结果 & 仓位：\_\_\_；挂单：\_\_\_ \\
+  判定 & PASS / FAIL / BLOCKED \\
+  证据路径 & \\
+  备注/缺陷编号 & \\
+  \bottomrule
+\end{tabularx}
+
+\subsection{最终准入条件}
+
+进入旧数据迁移设计前，至少满足：P1--P5 全部通过，P6 浏览器 E2E 通过，P7 至少完成一次重启恢复和 24 小时小额观察；所有 FAIL 均已修复并回归，所有残余人工检查项都有明确处置记录。

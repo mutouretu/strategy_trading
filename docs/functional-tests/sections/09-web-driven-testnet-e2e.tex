@@ -1,0 +1,78 @@
+\section{页面驱动的 Binance Testnet 基本 E2E}
+
+\subsection{目标与判定边界}
+
+本组用例验证真正的用户链路：\textbf{Playwright 在 Streamlit 页面输入和点击，应用经 FastAPI、SQLite 与共享调度器处理后，在 Binance Futures Testnet 产生对应结果。} 创建、编辑、刷新价格、启动、停止、归档和删除等业务动作不得由测试代码绕过页面直接调用 FastAPI，也不得直接写 SQLite。
+
+币安 API 在本组测试中只允许承担三类辅助职责：
+
+\begin{enumerate}
+  \item 只读查询标记价格、交易规则、开放订单、订单详情与仓位；
+  \item 模拟用户在币安侧的外部动作，例如取消页面启动后产生的测试订单；
+  \item 无论测试成功或失败都执行的紧急清场，包括撤销残余订单和关闭残余测试仓位。
+\end{enumerate}
+
+2026-07-17 的真实单链验收证明了后端交易闭环，但最终策略由隔离 API 创建并启动，因此不能替代本组页面驱动验收。2026-07-18 已按本节边界执行全部七项基本用例，结果均为\StatusPass；实际订单与缺陷记录见下一节。
+
+\subsection{统一安全门禁与测试夹具}
+
+\begin{longtable}{p{3.3cm}p{11.2cm}}
+  \toprule
+  项目 & 强制要求 \\
+  \midrule
+  \endhead
+  显式开关 & 仅当 \texttt{RUN\_BINANCE\_TESTNET\_WEB\_E2E=1} 时执行；默认跳过。 \\
+  主机白名单 & \texttt{BINANCE\_BASE\_URL} 的 hostname 必须严格等于 \texttt{testnet.binancefuture.com}，否则在启动浏览器前失败。 \\
+  环境隔离 & 使用 \texttt{test.env}、临时 SQLite、独立 FastAPI/Streamlit 端口和独立调度器 PID；不得连接 8000/8100 的日常服务。 \\
+  账户前置条件 & UNIUSDT 的 LONG、SHORT 仓位均为 0，开放订单为 0；不满足时拒绝执行，禁止自动接管不明资源。 \\
+  固定预算 & 每次仅运行一组、1 Cell、15 USDT、3 倍杠杆、\texttt{move\_grid=false}；订单名义价值必须在 10--20 USDT。 \\
+  稳定挂单参数 & 比例 8\%；做多锚点约为标记价的 1.04 倍，做空锚点约为标记价的 0.96 倍，使建仓单远离现价并保持 NEW，避免基础用例依赖行情成交。计算值必须由 Playwright 输入页面。 \\
+  串行锁 & 同一测试账户一次只能有一个页面驱动 E2E 运行，禁止并行测试争用 UNIUSDT。 \\
+  订单归属 & 只观察或处理本次页面创建策略生成的 \texttt{clientOrderId} 前缀；不得按 symbol 无条件操作其他订单。 \\
+  无条件清场 & \texttt{finally} 中停止隔离策略、撤销本轮订单、关闭本轮残余仓位，并再次断言开放订单和非零仓位均为 0。若 UI 失效，可用 API 紧急清场，但必须标记为 cleanup，不得把清场结果算作业务步骤通过。 \\
+  \bottomrule
+\end{longtable}
+
+\subsection{基本功能用例}
+
+\CaseHeader{FT-WEB-LIVE-001}{页面预览并创建做多草稿}{\OwnerAuto+\OwnerLive}{测试网只读}{\StatusPass}
+
+Playwright 点击总览下方“＋”，输入动态计算的 UNIUSDT 做多参数，点击“生成预览”，核对方向、上下限、1 个 Cell 的买入价和卖出价，再点击“确认创建”。页面应出现一行白色的未启动策略；币安开放订单和仓位仍为 0。通过证据包括表单截图、浏览器发出的 preview/create 请求、页面策略 ID、SQLite 只读快照和币安零资源快照。
+
+\CaseHeader{FT-WEB-LIVE-002}{草稿编辑与页面刷新价格}{\OwnerAuto+\OwnerLive}{测试网只读/配置写入}{\StatusPass}
+
+Playwright 点击草稿行的编辑按钮，将比例修改后保存，再点击刷新价格按钮。页面必须显示新比例与测试网标记价格；策略仍未启动，币安不得出现订单。测试代码不得直接调用 update 或 refresh 接口。
+
+\CaseHeader{FT-WEB-LIVE-003}{页面启动做多并生成平台建仓单}{\OwnerAuto+\OwnerLive}{测试网挂单}{\StatusPass}
+
+Playwright 打开做多策略的“启动”开关。等待不超过两个策略轮询周期，随后从页面详情读取 Cell 的买入挂单号，并用币安只读查询核对：订单为 BUY/LONG、状态 NEW、价格等于页面买入价、数量对应 10--20 USDT、\texttt{clientOrderId} 属于本策略。SQLite 的 \texttt{entry\_order\_id} 必须与页面和币安一致，平台只能有这一张本轮订单。
+
+\CaseHeader{FT-WEB-LIVE-004}{平台撤销做多建仓单后页面显示补单}{\OwnerAuto+\OwnerLive}{测试网撤单与补单}{\StatusPass}
+
+测试驱动在币安侧取消 FT-WEB-LIVE-003 产生的订单，不修改页面、API 或数据库。等待轮询后，页面必须仍为“待建仓”，并显示一个不同的新挂单号；新订单的方向、价格、数量和 Cell 归属与原订单一致。再次等待一个轮询周期，订单号不得继续变化，以证明只补一次。
+
+\CaseHeader{FT-WEB-LIVE-005}{页面停止、重启与配置锁}{\OwnerAuto+\OwnerLive}{生命周期/测试网挂单}{\StatusPass}
+
+Playwright 关闭启动开关，确认页面状态为已停止；停止不得暗示撤单，因此平台现有建仓单应保持原订单号。等待两个轮询周期，数据库和订单号均不得变化。页面编辑按钮必须继续禁用。随后由 Playwright 再次启动，系统应接管原订单而不是重复挂单；开放订单总数仍为 1。
+
+\CaseHeader{FT-WEB-LIVE-006}{页面删除策略与显式平台清场}{\OwnerAuto+\OwnerLive}{删除/残余资源}{\StatusPass}
+
+Playwright 先停止策略，再点击删除按钮并选择“永久删除”。策略应从页面消失，SQLite 保留软删除审计记录。由于当前产品语义是删除不替用户撤单或平仓，币安原订单可继续存在；测试必须明确记录这一点，然后只由 cleanup 辅助程序撤销本轮订单。清场后页面不得重新补单。
+
+\CaseHeader{FT-WEB-LIVE-007}{做空方向的页面镜像链路}{\OwnerAuto+\OwnerLive}{测试网挂单/撤单}{\StatusPass}
+
+在做多用例清场完成后，Playwright 从空白页面创建 1 Cell 做空策略并启动。币安订单必须为 SELL/SHORT，页面订单号、价格和数量与平台一致；取消订单后只补一张同方向建仓单。最后通过页面停止、删除，并由 cleanup 撤销残余订单。此用例禁止复用做多策略或通过 API 修改方向。
+
+\subsection{基础门槛与后续扩展}
+
+基础页面链路只有在 FT-WEB-LIVE-001 至 FT-WEB-LIVE-007 全部通过且最终清场为零时才算打通。一次执行至少保留以下证据：
+
+\begin{itemize}
+  \item 每个页面业务动作前后的截图或 Playwright trace；
+  \item 页面触发的 HTTP method、path、status 与时间，但不得记录密钥或签名；
+  \item 页面订单号、币安订单快照、SQLite Cell 快照的三方对照表；
+  \item 调度器 PID 与事件序列，证明页面启动进入共享调度器；
+  \item 测试结束时 UNIUSDT 开放订单为 0、LONG/SHORT 仓位均为 0 的清场证明。
+\end{itemize}
+
+以下内容不纳入第一批基本功能门槛，待上述用例稳定通过后再增加：真实成交与平仓闭环、多组同币对耦合、部分成交、持仓穿透、接口故障注入、进程恢复、服务器负载、HLT、收益优化和爆仓风险测试。

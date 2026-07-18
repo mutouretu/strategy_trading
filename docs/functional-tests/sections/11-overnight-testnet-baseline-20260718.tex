@@ -1,0 +1,78 @@
+\section{2026-07-18 Testnet 过夜成交闭环基线}
+
+\subsection{目标与隔离边界}
+
+本轮继续以 Streamlit 页面作为唯一业务写入口，建立两组高波动交易对网格并留跑一晚。观察目标是：价格越过正方向 Cell 后触发建仓挂单、价格回撤后真实成交、自动产生对偶平仓单、成交次数累加，以及平仓后下一轮建仓单恢复。执行环境严格限定为 Binance Futures Testnet。
+
+\begin{itemize}
+  \item FastAPI 为 \url{http://127.0.0.1:8110}，Streamlit 为 \url{http://127.0.0.1:8010}；
+  \item SQLite 为 \path{runtime/overnight-testnet-20260718/overnight.sqlite3}；
+  \item API、页面和共享调度器与原 8000/8100 服务隔离；
+  \item 交易主机核验为 \path{testnet.binancefuture.com}，轮询间隔为 50 秒，移动跟随已启用；
+  \item 本节只记录启动基线，过夜成交结果在后续复核时追加，不提前判定通过。
+\end{itemize}
+
+\subsection{页面创建参数}
+
+\begin{longtable}{p{3.0cm}p{2.5cm}p{2.0cm}p{1.8cm}p{1.5cm}p{2.2cm}}
+  \toprule
+  策略 ID & 方向/锚点 & 比例/格数 & 单格金额 & 杠杆 & 首次启动时间 \\
+  \midrule
+  \endhead
+  \texttt{akeusdt-long-}\linebreak\texttt{3ef7d90f} & AKEUSDT 做多 / 0.0015 & 2\% / 15 & 20 USDT & 3 倍 & 07-18 02:16:17 \\
+  \texttt{homeusdt-short-}\linebreak\texttt{3cf2d8f5} & HOMEUSDT 做空 / 0.0070 & 2\% / 15 & 20 USDT & 3 倍 & 07-18 02:16:30 \\
+  \bottomrule
+\end{longtable}
+
+锚点刻意放在现价另一侧，使网格同时包含立即进入待建仓的 Cell 和尚未触发的 Cell，覆盖“先越过预设价格、再回撤建仓”的触发式网格行为。
+
+\subsection{启动后三方一致性快照}
+
+2026-07-18 02:19（Asia/Shanghai）完成页面、SQLite 与币安测试网只读核对：
+
+\begin{longtable}{p{2.3cm}p{2.1cm}p{2.1cm}p{2.1cm}p{5.8cm}}
+  \toprule
+  策略 & 待建仓 & 未触发 & 仓位/成交 & 平台订单证据 \\
+  \midrule
+  \endhead
+  AKEUSDT 做多 & 10 & 5 & 0 / 0 & 10 张 BUY/LONG、状态均为 NEW，价格 0.0011138--0.0013316；订单号 \#210965032 至 \#210965064（非连续）。 \\
+  HOMEUSDT 做空 & 8 & 7 & 0 / 0 & 8 张 SELL/SHORT、状态均为 NEW，价格 0.0081970--0.0094110；订单号 \#209273484 至 \#209273540（非连续）。 \\
+  \bottomrule
+\end{longtable}
+
+SQLite Cell 阶段数、订单号及平台开放订单完全一致。两组策略均为 \texttt{running}，运行时无 \texttt{last\_error}。共享调度器 PID 为 61646，基线采集时 API、Streamlit 与调度器进程均存活。当前没有非零仓位，因此尚无 position pool 资源分配记录，符合尚未成交的预期。
+
+\subsection{待复核判据}
+
+下次检查应读取平台成交记录、开放订单、仓位、SQLite Cell、事件和 position pool，逐 Cell 核对以下闭环：
+
+\begin{enumerate}
+  \item 建仓挂单成交后 Cell 转为已建仓或待平仓，并创建方向正确、数量匹配的对偶平仓单；
+  \item 平仓成交后成交次数增加，并按触发式移动网格规则恢复下一轮建仓状态；
+  \item 价格未越过的 Cell 保持未触发，不得提前下发建仓单；
+  \item 任一平台异常、资源池短缺或数据库不一致均应留下事件及错误证据，不以页面汇总数字代替核对。
+\end{enumerate}
+
+\subsection{单组生命周期与故障恢复补测}
+
+2026-07-18 12:35--12:46（Asia/Shanghai）继续执行单组生命周期和恢复测试，结果如下：
+
+\begin{longtable}{p{3.3cm}p{2.1cm}p{8.4cm}}
+  \toprule
+  场景 & 结果 & 证据与结论 \\
+  \midrule
+  \endhead
+  未触发不下单 & \ResultPass & 页面创建并启动 \texttt{uniusdt-long-999b41f2}；现价未越过做多建仓触发价，Cell 保持 \texttt{untriggered}，UNIUSDT 开放订单和仓位始终为 0。 \\
+  带仓停止 & \ResultPass & 页面停止 AKE 组后跨过两个 50 秒轮询窗口，状态持续为 \texttt{stopped}，heartbeat 未复活；三张退出单 \#211815834、\#211815845、\#211815852 的订单号、价格和数量均未被改写，平台多仓保持 34830。 \\
+  带仓恢复及边界成交 & \ResultPass & 页面恢复时退出单 \#211815852 自然成交 11840；系统只结算一次，Cell 成交次数加一并创建下一轮建仓单 \#211826490。其余两张退出单保持原订单号；SQLite 逻辑仓位与平台仓位均收敛为 22990，资源池为 \texttt{consistent}。 \\
+  调度器强制终止恢复 & \ResultPass & 强制终止 PID 40310 后由 Supervisor 拉起 PID 46755。AKE/HOME 重启前后各 15 张活动订单，订单号集合无增删；仓位分别保持 22990 LONG 和 2973 SHORT。完整轮询后无缺单、孤儿单、未分配量或 shortage。 \\
+  下单响应丢失 & \ResultPass & 自动故障注入模拟平台接受订单后客户端超时；重启按稳定 \texttt{clientOrderId} 回写原订单，开放订单始终只有一张。 \\
+  下单后数据库写失败 & \ResultPass & 自动故障注入模拟平台接受订单后 SQLite 保存失败；重启从平台开放订单恢复对应 Cell，不重复建仓。 \\
+  429/5xx 节奏 & \ResultPass & 首次市场请求模拟返回 HTTP 429；调度器在 1 秒和 49 秒均不重试，到配置的第 50 秒才恢复请求和策略状态，未发生紧密重试。 \\
+  隔离策略清场 & \ResultPass & UNI 组经页面停止并永久删除，SQLite 保留软删除时间；平台开放订单 0、非零仓位 0。AKE/HOME 保持运行。 \\
+  \bottomrule
+\end{longtable}
+
+本轮新增 3 项自动故障注入用例。全量回归共运行 120 项并全部通过，另有 13 项需显式启用的 Binance Testnet LLT 按设计跳过。
+
+当前状态：\StatusPass。单组多空成交闭环、移动窗口、部分建仓成交、带仓停止/恢复、非正常进程恢复和关键下单不确定性均已有证据，可进入多组合耦合测试设计；真实退出单部分成交仍保留为非阻塞的自然行情观察项。
