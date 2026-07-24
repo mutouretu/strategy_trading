@@ -79,6 +79,22 @@ class FakeExchange:
             raise OrderNotFoundError(f"{order_id} missing")
         return self.orders[order_id]
 
+    def get_order_by_client_id(
+        self,
+        symbol: str,
+        client_order_id: str,
+    ) -> OrderSnapshot:
+        self._called("get_order_by_client_id")
+        matches = [
+            order
+            for order in self.orders.values()
+            if self.order_symbols.get(order.order_id) == symbol
+            and order.client_order_id == client_order_id
+        ]
+        if not matches:
+            raise OrderNotFoundError(f"{client_order_id} missing")
+        return max(matches, key=lambda order: order.order_id)
+
     def get_open_orders(self, symbol: str) -> list[OrderSnapshot]:
         self._called("get_open_orders")
         return [

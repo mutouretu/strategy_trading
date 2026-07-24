@@ -106,6 +106,7 @@ class ReconciliationLowLevelTests(unittest.TestCase):
         self.exchange.set_position("BTCUSDT", "LONG", Decimal("1.400"))
 
         scheduler.run_once(now=100)
+        scheduler.run_once(now=105)
 
         cells = self.cells(strategy_ids)
         self.assertEqual(
@@ -150,7 +151,7 @@ class ReconciliationLowLevelTests(unittest.TestCase):
 
         reviewed = self.cells(strategy_ids)[0]
         self.assertEqual(reviewed.stage, CellStage.MANUAL_REVIEW)
-        self.assertIsNone(reviewed.entry_order_id)
+        self.assertEqual(reviewed.entry_order_id, old_entry_id)
         self.assertEqual(reviewed.open_qty, Decimal("0"))
         self.assertEqual(len(self.exchange.placed), placed_before)
         pool = self.store.list_position_pools()[0]

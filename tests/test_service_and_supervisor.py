@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from decimal import Decimal
@@ -79,6 +80,40 @@ class ServiceAndSupervisorTests(unittest.TestCase):
         self.assertEqual(self.store.get_strategy(self.config.strategy_id).status, StrategyStatus.STOPPED)
         self.assertTrue(self.supervisor.is_running(second.strategy_id))
         self.assertIsNone(process.terminate.call_args)
+
+    @patch("gridtrader.supervisor.subprocess.Popen")
+    def test_scheduler_paths_do_not_change_with_working_directory(self, popen):
+        process = MagicMock()
+        process.pid = 43211
+        process.poll.return_value = None
+        popen.return_value = process
+
+        original_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as scheduler_dir:
+            try:
+                os.chdir(scheduler_dir)
+                store = SQLiteStore("relative.sqlite3")
+                supervisor = StrategySupervisor(store)
+                service = GridService(store, supervisor)
+                config = service.create(
+                    "UNIUSDT", Mode.LONG, Decimal("3.65"), Decimal("0.02"), 5,
+                    Decimal("20"), 4, Decimal("0.001")
+                )
+            finally:
+                os.chdir(original_cwd)
+
+            service.start(config.strategy_id)
+            command = popen.call_args.args[0]
+            self.assertTrue(supervisor.pid_path.is_absolute())
+            self.assertTrue(supervisor.log_dir.is_absolute())
+            self.assertEqual(
+                Path(command[command.index("--db") + 1]),
+                (Path(scheduler_dir) / "relative.sqlite3").resolve(),
+            )
+            self.assertEqual(
+                Path(command[command.index("--pid-file") + 1]),
+                (Path(scheduler_dir) / "runtime" / "scheduler.pid").resolve(),
+            )
 
 
 if __name__ == "__main__":

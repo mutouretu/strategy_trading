@@ -23,6 +23,7 @@ runtime/
 *.out
 *.toc
 *.xdv
+*.synctex.gz
 docs/functional-tests/main.pdf
 output/
 tmp/

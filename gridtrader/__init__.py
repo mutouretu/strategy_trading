@@ -1,9 +1,9 @@
 """Web-native triggered grid trading backend."""
 
 from .domain import CellStage, GridCell, Mode, StrategyConfig, StrategyStatus
-from .engine import TradingEngine
-from .service import GridService
-from .store import SQLiteStore
+from .application.engine import TradingEngine
+from .application.service import GridService
+from .infrastructure.sqlite_store import SQLiteStore
 
 __all__ = [
     "CellStage",

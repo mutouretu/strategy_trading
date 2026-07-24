@@ -154,6 +154,10 @@ class StrategySchedulerLoadTests(unittest.TestCase):
         self.assertEqual(scheduler.run_once(now=0), 1)
         self.assertEqual(attempts, 1)
         self.assertEqual(self.store.get_strategy(config.strategy_id).status, StrategyStatus.ERROR)
+        incidents = self.store.list_scheduler_incidents()
+        self.assertEqual(len(incidents), 1)
+        self.assertIsNone(incidents[0]["recovered_at"])
+        self.assertEqual(incidents[0]["failure_count"], 1)
         self.assertEqual(scheduler.run_once(now=1), 0)
         self.assertEqual(scheduler.run_once(now=49), 0)
         self.assertEqual(attempts, 1)
@@ -162,6 +166,39 @@ class StrategySchedulerLoadTests(unittest.TestCase):
         self.assertEqual(attempts, 2)
         self.assertEqual(self.store.get_strategy(config.strategy_id).status, StrategyStatus.RUNNING)
         self.assertIsNotNone(self.store.list_cells(config.strategy_id)[0].entry_order_id)
+        incident = self.store.list_scheduler_incidents()[0]
+        self.assertIsNotNone(incident["recovered_at"])
+        event_types = {
+            event["event_type"]
+            for event in self.store.list_events(config.strategy_id)
+        }
+        self.assertIn("SCHEDULER_FAILURE_STARTED", event_types)
+        self.assertIn("SCHEDULER_RECOVERED", event_types)
+
+    def test_long_loop_pause_is_persisted_as_one_gap(self):
+        wall_time = [100.0]
+        scheduler = StrategyScheduler(
+            self.store,
+            self.exchange,
+            wall_clock=lambda: wall_time[0],
+            gap_threshold_sec=5.0,
+        )
+
+        # Normal strategy processing may take longer than the gap threshold;
+        # completing the loop moves the idle-gap baseline forward.
+        wall_time[0] = 112.5
+        scheduler.complete_loop()
+        wall_time[0] = 113.0
+        scheduler.observe_loop()
+        self.assertEqual(self.store.list_scheduler_gaps(), [])
+
+        wall_time[0] = 125.5
+        scheduler.observe_loop()
+
+        gaps = self.store.list_scheduler_gaps()
+        self.assertEqual(len(gaps), 1)
+        self.assertEqual(gaps[0]["gap_seconds"], 12.5)
+        self.assertEqual(gaps[0]["active_strategy_count"], 0)
 
     def test_pending_cell_action_runs_before_regular_poll_is_due(self):
         config = self.service.create(

@@ -6,7 +6,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from gridtrader.config import api_base_url, binance_credentials, load_environment
+from gridtrader.config import (
+    api_base_url,
+    binance_coinm_base_url,
+    binance_credentials,
+    load_environment,
+)
 
 
 class ConfigTests(unittest.TestCase):
@@ -39,6 +44,31 @@ class ConfigTests(unittest.TestCase):
             with patch.dict(os.environ, {"GRID_ENV_FILE": str(env_file)}, clear=True):
                 self.assertEqual(api_base_url(), "http://frontend-api:9000")
                 self.assertNotIn("BINANCE_API_SECRET", os.environ)
+
+    def test_coinm_demo_endpoint_is_independent_from_usdm_demo_endpoint(self):
+        with patch.dict(
+            os.environ,
+            {"BINANCE_BASE_URL": "https://demo-fapi.binance.com"},
+            clear=True,
+        ):
+            self.assertEqual(
+                binance_coinm_base_url(),
+                "https://testnet.binancefuture.com",
+            )
+
+    def test_explicit_coinm_endpoint_wins(self):
+        with patch.dict(
+            os.environ,
+            {
+                "BINANCE_BASE_URL": "https://demo-fapi.binance.com",
+                "BINANCE_COINM_BASE_URL": "https://coinm.example.test",
+            },
+            clear=True,
+        ):
+            self.assertEqual(
+                binance_coinm_base_url(),
+                "https://coinm.example.test",
+            )
 
 
 if __name__ == "__main__":

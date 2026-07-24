@@ -83,6 +83,52 @@ class SQLiteStoreTests(unittest.TestCase):
         loaded = self.store.list_strategies()
         self.assertEqual({item.strategy_id for item in loaded}, {"btc-long", "btc-long-second"})
 
+    def test_scheduler_audit_records_runs_gaps_and_aggregated_incidents(self):
+        self.store.record_scheduler_run_start(
+            "run-a",
+            123,
+            observed_at="2026-07-23T00:00:00+00:00",
+        )
+        self.store.record_scheduler_gap(
+            "run-a",
+            "2026-07-23T00:00:00+00:00",
+            "2026-07-23T00:10:00+00:00",
+            600,
+            1,
+        )
+        first = self.store.record_scheduler_failure(
+            "strategy:btc-long",
+            "run-a",
+            ConnectionError("offline"),
+            strategy_id="btc-long",
+        )
+        repeated = self.store.record_scheduler_failure(
+            "strategy:btc-long",
+            "run-a",
+            ConnectionError("still offline"),
+            strategy_id="btc-long",
+        )
+        recovered = self.store.record_scheduler_recovery(
+            "strategy:btc-long",
+            "run-a",
+        )
+        self.store.stop_scheduler_run(
+            "run-a",
+            "stop_requested",
+            observed_at="2026-07-23T00:11:00+00:00",
+        )
+
+        self.assertTrue(first["opened"])
+        self.assertFalse(repeated["opened"])
+        self.assertEqual(repeated["failure_count"], 2)
+        self.assertEqual(recovered["failure_count"], 2)
+        self.assertIsNotNone(recovered["recovered_at"])
+        self.assertEqual(self.store.list_scheduler_gaps()[0]["gap_seconds"], 600.0)
+        self.assertEqual(
+            self.store.list_scheduler_runs()[0]["stop_reason"],
+            "stop_requested",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

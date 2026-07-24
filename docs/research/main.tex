@@ -1,0 +1,359 @@
+\documentclass[11pt,a4paper,fontset=none]{ctexart}
+
+\setCJKmainfont{Songti SC}
+\setCJKsansfont{PingFang SC}
+\setCJKmonofont{Songti SC}
+
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\usepackage{lastpage}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage[table]{xcolor}
+
+\definecolor{ResearchGold}{HTML}{F0B90B}
+\definecolor{ResearchDark}{HTML}{1E2329}
+\definecolor{ResearchGray}{HTML}{5E6673}
+\definecolor{ResearchLight}{HTML}{F5F5F5}
+\definecolor{ResearchGreen}{HTML}{0ECB81}
+\definecolor{ResearchRed}{HTML}{F6465D}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=ResearchDark,
+  urlcolor=ResearchGray,
+  pdftitle={触发式移动等比网格 HLT 理论研究提纲},
+  pdfauthor={Codex / 项目负责人}
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{触发式移动等比网格 HLT 研究}
+\rhead{提纲 v0.1}
+\cfoot{第 \thepage\ 页 / 共 \pageref{LastPage} 页}
+\setlength{\headheight}{14pt}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.45em}
+\setlist{nosep,leftmargin=2em}
+\renewcommand{\arraystretch}{1.22}
+
+\newcommand{\todoitem}{\textcolor{ResearchGold}{\textbf{待计算}}}
+\newcommand{\decisionitem}{\textcolor{ResearchRed}{\textbf{待决策}}}
+\newcommand{\outputitem}{\textcolor{ResearchGreen}{\textbf{预期产物}}}
+
+\begin{document}
+
+\begin{titlepage}
+  \centering
+  \vspace*{3.2cm}
+  {\Huge\bfseries 触发式移动等比网格\par}
+  \vspace{0.6cm}
+  {\LARGE HLT 理论研究提纲\par}
+  \vspace{1.0cm}
+  {\large 收益、仓位、爆仓风险与“网格的网格”\par}
+  \vfill
+  \begin{tabular}{rl}
+    文档版本： & v0.1（提纲） \\
+    编制日期： & 2026-07-20 \\
+    当前阶段： & 只明确计算内容、假设和验收指标，不下策略结论 \\
+    适用范围： & Binance USD-M，单向 LONG 或 SHORT，多策略组共享账户 \\
+  \end{tabular}
+  \vfill
+  {\small 本文讨论策略和经营层模型，不替代软件功能、一致性及可靠性测试。\par}
+\end{titlepage}
+
+\pagenumbering{roman}
+\tableofcontents
+\clearpage
+\pagenumbering{arabic}
+
+\section{研究目标与最终要回答的问题}
+
+本研究的目标不是证明“网格一定盈利”，而是在给定价格路径、交易规则和资金约束时，
+计算策略的收益来源、风险暴露及可持续运行边界。最终至少回答以下问题：
+
+\begin{enumerate}
+  \item 一格完成一次开平仓，扣除手续费、滑点和资金费率后实际赚多少？
+  \item 网格比例、单格金额、格数、杠杆和轮询周期如何共同影响交易频率与净收益？
+  \item 行情单边逆向发展时，一组网格的最大仓位、保证金占用和爆仓距离是多少？
+  \item 多组同币对或多币对同时运行时，相关性和共振下跌/上涨会怎样放大尾部风险？
+  \item “在新价格开新组，重叠后退出旧组”的网格组迁移规则，何时能减轻风险，何时只是转移亏损？
+  \item 在手续费、资金费率和爆仓概率约束下，哪一组参数更接近长期经营最优？
+\end{enumerate}
+
+\section{策略边界与状态机数学化}
+
+\subsection{单组参数}
+
+先统一以下符号，后续所有推导和回测共用一套定义：
+
+\begin{longtable}{p{2.2cm}p{4.3cm}p{7.2cm}}
+  \toprule
+  符号 & 含义 & 说明 \\
+  \midrule
+  \endhead
+  $P_0$ & 锚定价格 & 建组时选定的参考边界 \\
+  $r$ & 等比网格比例 & 例如 $r=0.02$ 表示相邻价格约差 2\% \\
+  $N$ & 单组 Cell 数 & 实际经营目标通常约为 5 格，压力测试可以更多 \\
+  $Q$ & 单格名义金额 & 以 USDT 计价，下单数量还受步长和最小名义金额影响 \\
+  $L$ & 杠杆倍数 & 与保证金模式、维持保证金档位共同决定爆仓风险 \\
+  $\Delta t$ & 策略轮询周期 & 测试期为几十秒，长期可能为 10 分钟至 1 小时 \\
+  $f_m,f_t$ & Maker/Taker 费率 & 实际成交身份必须由订单成交记录判断 \\
+  $F(t)$ & 资金费率现金流 & 与持仓方向、数量和跨越的结算时点有关 \\
+  \bottomrule
+\end{longtable}
+
+做多向下生成价位：
+\begin{equation}
+  P_{i+1}=\frac{P_i}{1+r}.
+\end{equation}
+
+做空向上生成价位：
+\begin{equation}
+  P_{i+1}=P_i(1+r).
+\end{equation}
+
+\subsection{触发式语义}
+
+普通静态网格默认所有价位从开始时就可以成交，本策略不是如此。理论模型必须明确表示：
+
+\begin{enumerate}
+  \item Cell 首先为 \texttt{untriggered}；
+  \item 价格在某次轮询观察中越过触发边界后，Cell 才进入 \texttt{pending\_entry}；
+  \item 随后价格回撤穿过建仓价，建仓单才可能成交；
+  \item 建仓成交后立即生成对偶平仓单，Cell 进入 \texttt{pending\_exit}；
+  \item 平仓完成后 Cell 回到未触发，必须再次越过触发条件才能开始下一轮。
+\end{enumerate}
+
+因此回测状态应写成离散时刻 $t_k=k\Delta t$ 下的状态转移，而不能只按 K 线
+最高价、最低价假设同一根 K 线内所有格子都来回成交。
+
+\subsection{移动窗口与边界回收}
+
+单组只保留 $N$ 个 Cell。行情沿趋势方向移动时新增前方 Cell，并仅在最远端 Cell
+没有成交、持仓、部分成交或状态不确定时回收。需要证明或仿真：
+
+\begin{itemize}
+  \item 窗口移动后，单组最大逻辑仓位是否严格受 $NQ$ 附近的名义金额约束；
+  \item 长轮询造成跨越多格时，新增、激活和回收的顺序是否引入额外风险；
+  \item 最远 Cell 异常时停止回收，对窗口长度和风险上限的影响。
+\end{itemize}
+
+\section{第一层：单 Cell 确定性收益}
+
+\subsection{毛利润与净利润}
+
+对数量为 $q$ 的做多 Cell，买入价 $P_b$、卖出价 $P_s$，毛利润为
+\begin{equation}
+  \Pi_{\mathrm{gross,long}}=q(P_s-P_b).
+\end{equation}
+
+做空方向符号相反，但完成一次高卖低买后的毛利润数值相同。净利润需要扣除：
+\begin{equation}
+  \Pi_{\mathrm{net}}
+  =\Pi_{\mathrm{gross}}-C_{\mathrm{fee}}-C_{\mathrm{slippage}}
+  +C_{\mathrm{funding}}.
+\end{equation}
+
+\todoitem：分别推导按固定 USDT 金额和固定币数量下单时，单格净收益率的精确表达式；
+纳入价格/数量舍入、最小名义金额、Maker/Taker 组合及盈亏平衡网格比例 $r_{\min}$。
+
+\subsection{一次交易占用的时间和资金}
+
+单次收益不能脱离持仓时间评价。需要同时记录：
+
+\begin{itemize}
+  \item 从激活到建仓的等待时间；
+  \item 从建仓到平仓的持有时间；
+  \item 资金占用期间经历的资金费率结算次数；
+  \item 单 Cell 年化收益、资金周转率以及长期不平仓的机会成本。
+\end{itemize}
+
+\section{第二层：单组收益与仓位扩张}
+
+\subsection{成交次数模型}
+
+候选价格模型至少包括几何布朗运动、带漂移随机游走、均值回复过程和跳跃过程。
+对每一种模型估计：
+
+\begin{equation}
+  \mathbb{E}[K(T)\mid r,N,\Delta t,\text{price process}],
+\end{equation}
+
+其中 $K(T)$ 为时间区间 $T$ 内完成的平仓循环次数。重点比较轮询周期从 50 秒扩大到
+10 分钟、1 小时时，过滤噪声和错失机会之间的关系。
+
+\subsection{单组最大仓位与浮亏}
+
+设已建仓 Cell 集合为 $\mathcal{O}(t)$，则逻辑仓位和按标记价格计算的未实现盈亏为：
+
+\begin{align}
+  H(t) &= \sum_{i\in\mathcal{O}(t)} q_i,\\
+  U_{\mathrm{long}}(t) &= \sum_{i\in\mathcal{O}(t)}q_i(P(t)-P_{b,i}),\\
+  U_{\mathrm{short}}(t) &= \sum_{i\in\mathcal{O}(t)}q_i(P_{s,i}-P(t)).
+\end{align}
+
+\todoitem：计算有限 $N$ 下的最大名义仓位、保证金占用和最坏浮亏，并区分“窗口内正常
+持仓上限”与“异常 Cell 阻止回收后超过 $N$ 格”的保守上限。
+
+\section{第三层：保证金与爆仓风险}
+
+\subsection{账户权益方程}
+
+账户在时刻 $t$ 的风险资源先写为：
+\begin{equation}
+  E(t)=B_0+\Pi_{\mathrm{realized}}(t)+U(t)
+  -C_{\mathrm{fee}}(t)+C_{\mathrm{funding}}(t),
+\end{equation}
+其中 $B_0$ 为初始权益。随后结合 Binance 的保证金模式、维持保证金档位和清算费用，
+建立实际可执行的清算条件，而不是只使用“价格反向 $1/L$ 即爆仓”的粗略近似。
+
+\subsection{必须计算的风险指标}
+
+\begin{itemize}
+  \item 最低保证金率、最大保证金占用率和到清算价格的距离；
+  \item 给定时间范围内的爆仓概率与风险破产概率；
+  \item 最大回撤、预期短缺（Expected Shortfall）和极端跳空损失；
+  \item 资金费率长期不利时的权益侵蚀速度；
+  \item 交易所价格异常、流动性枯竭和无法撤单期间的压力情景。
+\end{itemize}
+
+\decisionitem：后续需要明确真实运行采用全仓还是逐仓，以及手工仓位是否与网格共享保证金；
+这会改变爆仓模型的账户边界。
+
+\section{第四层：“网格的网格”与组迁移}
+
+计划中的经营方式是：每组只承担约 5 格风险；价格逆向移动后，在新价格区域再开轻量
+新组；当新组随行情移动到旧组区域时，取消或归档旧组。理论上需要把每个策略组看成
+更高一层的节点 $G_j$。
+
+\subsection{组级状态与迁移规则}
+
+为每组定义创建价、当前窗口中心、逻辑仓位、浮盈亏、已实现利润和生命周期状态。
+研究以下迁移触发条件：
+
+\begin{itemize}
+  \item 新组与旧组的价格区间重叠比例；
+  \item 旧组是否仍有持仓或保护性平仓单；
+  \item 关闭旧组是只停止新增仓位，还是同时手工结算存量仓位；
+  \item 旧组亏损是否已被新组利润覆盖；
+  \item 同一币对允许同时存在的最大组数和最大总名义仓位。
+\end{itemize}
+
+\subsection{需要验证的核心命题}
+
+\begin{enumerate}
+  \item 多开轻量组是否真的限制了单组风险，还是在账户层面累积为相同甚至更大的总风险；
+  \item 什么迁移规则能避免在趋势末端反复开新组；
+  \item 旧组退出时的已实现亏损，对长期复利和回本周期有何影响；
+  \item 是否存在稳定的组间距、最大组数和退出阈值组合。
+\end{enumerate}
+
+\section{第五层：多币对组合风险}
+
+50 组策略不能按 50 个独立样本计算。熊市中的小币种通常具有共同因子、相关性上升和
+流动性同时恶化。组合层至少需要：
+
+\begin{itemize}
+  \item 按币对、方向、板块和共同市场因子分解敞口；
+  \item 使用动态相关矩阵，而不是固定历史平均相关性；
+  \item 设计 BTC 急涨、山寨币集体反弹、交易所故障等联合压力情景；
+  \item 计算单币对、单方向、全账户的仓位和保证金预算；
+  \item 比较“50 个低频组”和“少量高频组”的收益/尾部风险差异。
+\end{itemize}
+
+\section{第六层：数据、回测与仿真方法}
+
+\subsection{数据粒度}
+
+\begin{itemize}
+  \item 轮询周期为几十秒时，优先使用逐笔成交、聚合成交或秒/分钟级数据；
+  \item 使用 OHLC K 线时，同一根 K 线内的高低价先后顺序未知，必须采用保守顺序或桥接仿真；
+  \item 需要同步资金费率、合约规则、价格精度、数量步长和维持保证金档位历史；
+  \item 下架币、改名币和幸存者偏差必须保留，否则会高估“做空过气项目”的效果。
+\end{itemize}
+
+\subsection{回测执行器必须复现的语义}
+
+\begin{enumerate}
+  \item 触发后才挂建仓单，禁止用未来高低价提前成交；
+  \item 轮询间隔内只按已有挂单成交，策略状态到下一轮才更新；
+  \item 建仓成交后平仓单的最早可用时间要符合真实调度过程；
+  \item 模拟手续费、资金费率、滑点、部分成交、最小下单额和舍入；
+  \item 多组共享同一币对仓位资源池，并按当前系统一致性规则分配；
+  \item 允许注入 API 超时、延迟确认和停机窗口，但不得把软件异常误算成策略优势。
+\end{enumerate}
+
+\subsection{确定性、历史回放与 Monte Carlo 三类实验}
+
+\begin{longtable}{p{3.0cm}p{5.0cm}p{5.7cm}}
+  \toprule
+  实验类型 & 用途 & 主要产物 \\
+  \midrule
+  \endhead
+  确定性路径 & 上涨、下跌、V 形、跳空等可解释路径 & 状态机正确性、仓位上界、逐步现金流 \\
+  历史回放 & 验证真实市场阶段和具体币对 & 收益、回撤、成交率、持有时间、资金费率 \\
+  Monte Carlo & 扩展到未见路径并估计尾部概率 & 爆仓概率、风险破产概率、置信区间 \\
+  \bottomrule
+\end{longtable}
+
+\section{参数优化与 HLT 验收指标}
+
+\subsection{优化变量与约束}
+
+候选优化变量为 $(r,N,Q,L,\Delta t)$，以及组间距、最大组数和旧组退出阈值。
+优化不能只最大化净利润，应采用带约束或多目标形式，例如：
+
+\begin{equation}
+  \max_{\theta}\quad
+  \mathbb{E}[\Pi_{\mathrm{net}}(T)]
+  -\lambda_1\operatorname{ES}_{\alpha}
+  -\lambda_2\Pr(\text{liquidation}),
+\end{equation}
+
+并约束最大保证金占用、单币对敞口、组合敞口及最小流动性。
+
+\subsection{HLT 最终验收表}
+
+\begin{longtable}{p{3.6cm}p{6.0cm}p{4.1cm}}
+  \toprule
+  维度 & 建议指标 & 阈值状态 \\
+  \midrule
+  \endhead
+  收益 & 净利润、年化收益、利润因子、每格净收益 & \decisionitem \\
+  交易质量 & 成交次数、持仓时间、Maker 比例、费用占毛利比例 & \decisionitem \\
+  风险 & 最大回撤、ES、爆仓概率、最低保证金率 & \decisionitem \\
+  资金效率 & 平均/峰值保证金、资金周转率、闲置资金比例 & \decisionitem \\
+  稳健性 & 参数扰动、样本外、不同市场阶段、故障情景 & \decisionitem \\
+  可经营性 & 最大组数、迁移频率、人工干预次数、回本周期 & \decisionitem \\
+  \bottomrule
+\end{longtable}
+
+\section{建议的推导顺序与阶段产物}
+
+\begin{enumerate}
+  \item \textbf{单 Cell 公式：}净利润、盈亏平衡比例、资金占用时间。\outputitem：公式表和计算器。
+  \item \textbf{单组确定性路径：}状态机、最大仓位、浮亏和窗口移动。\outputitem：路径模拟器。
+  \item \textbf{保证金模型：}接入实际维持保证金档位。\outputitem：爆仓与压力计算器。
+  \item \textbf{历史回放：}严格实现触发和轮询语义。\outputitem：单组回测报告。
+  \item \textbf{网格组迁移：}比较多个组级退出规则。\outputitem：同币对多组 HLT。
+  \item \textbf{组合与 Monte Carlo：}相关性和联合压力。\outputitem：50 组账户级风险报告。
+  \item \textbf{参数优化：}在风险门槛内搜索。\outputitem：候选参数区间，而非单一最优点。
+\end{enumerate}
+
+\section{进入正式计算前需要确认的决策}
+
+\begin{enumerate}
+  \item HLT 首个基准方向：长期做空过气项目，还是 LONG/SHORT 都覆盖？
+  \item 账户采用全仓还是逐仓；是否存在网格外手工仓位？
+  \item 单组常态参数基线，例如 $N=5$、$Q=10$ 或 20 USDT、$r$ 的候选范围和杠杆。
+  \item 新组的建立条件，以及旧组重叠后的具体退出动作。
+  \item 可接受的最大账户回撤、保证金占用率和目标爆仓概率。
+  \item 第一批历史币对、时间范围和所需数据粒度。
+\end{enumerate}
+
+\end{document}

@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from html import escape
 from urllib.parse import quote
 
 import pandas as pd
 import streamlit as st
 
-from gridtrader.config import api_base_url
-from gridtrader.price_format import format_price, infer_price_precision
-from gridtrader.web_client import GridApiClient, GridApiError
+from gridtrader.interfaces.web_client import GridApiClient, GridApiError
+from gridtrader.shared.config import api_base_url
+from gridtrader.shared.price_format import format_price, infer_price_precision
 
 
 st.set_page_config(page_title="网格交易管理", layout="wide", initial_sidebar_state="expanded")
@@ -135,6 +135,7 @@ def updated_text(value: str | None, has_started: bool) -> str:
 
 def normalize_strategy(item: dict) -> dict:
     mode = "做多" if item["mode"] == "long" else "做空"
+    market_type = item.get("market_type", "usdm")
     price_precision = infer_price_precision(
         item.get("anchor_price"),
         item.get("lower_price"),
@@ -143,6 +144,12 @@ def normalize_strategy(item: dict) -> dict:
     return {
         "id": item["strategy_id"],
         "symbol": item["symbol"],
+        "market_type": market_type,
+        "market_label": "币本位永续" if market_type == "coinm" else "U 本位永续",
+        "quantity_unit": item.get(
+            "quantity_unit",
+            "contract" if market_type == "coinm" else "base_asset",
+        ),
         "mode": mode,
         "mode_value": item["mode"],
         "price_precision": price_precision,
@@ -151,6 +158,14 @@ def normalize_strategy(item: dict) -> dict:
         "upper_price": None if item.get("upper_price") is None else decimal_number(item["upper_price"]),
         "grid_ratio": decimal_number(item["grid_ratio"]) * 100,
         "order_usdt": decimal_number(item["order_usdt"]),
+        "order_coin_qty": (
+            None
+            if item.get("order_coin_qty") is None
+            else decimal_number(item["order_coin_qty"])
+        ),
+        "order_amount": decimal_number(item.get("order_amount", item["order_usdt"])),
+        "order_unit": item.get("order_unit", "USD"),
+        "contract_size": decimal_number(item.get("contract_size", "0")),
         "leverage": int(item["leverage"]),
         "grid_count": int(item["grid_count"]),
         "pending_entry": int(item.get("pending_entry", 0)),
@@ -176,28 +191,34 @@ def load_strategies() -> list[dict]:
 
 def form_payload(
     symbol: str,
+    market: str,
     mode: str,
     anchor_price: float,
     ratio_percent: float,
     grid_count: int,
-    order_usdt: float,
+    order_amount: float,
     leverage: int,
     *,
     poll_interval_sec: float = 50.0,
     move_grid: bool = True,
 ) -> dict:
     ratio = Decimal(str(ratio_percent)) / Decimal("100")
-    return {
+    payload = {
         "symbol": symbol.strip().upper(),
+        "market_type": "coinm" if market == "币本位" else "usdm",
         "mode": "long" if mode == "做多" else "short",
         "anchor_price": str(anchor_price),
         "grid_ratio": str(ratio),
         "grid_count": int(grid_count),
-        "order_usdt": str(order_usdt),
         "leverage": int(leverage),
         "poll_interval_sec": float(poll_interval_sec),
         "move_grid": bool(move_grid),
     }
+    if market == "币本位":
+        payload["order_coin_qty"] = str(order_amount)
+    else:
+        payload["order_usdt"] = str(order_amount)
+    return payload
 
 
 def display_flash() -> None:
@@ -211,8 +232,18 @@ def display_flash() -> None:
 
 @st.dialog("新增币对网格")
 def create_grid_dialog() -> None:
+    market = st.segmented_control(
+        "合约类型",
+        ["U 本位", "币本位"],
+        default="币本位",
+        selection_mode="single",
+        key="create_market_type",
+    ) or "币本位"
     with st.form("create_grid_preview_form"):
-        symbol = st.text_input("交易对", placeholder="例如 SOLUSDT")
+        symbol = st.text_input(
+            "交易对",
+            placeholder="例如 BTCUSD_PERP" if market == "币本位" else "例如 SOLUSDT",
+        )
         mode = st.selectbox("方向", ["做多", "做空"])
         anchor_price = st.number_input(
             "锚定价格",
@@ -226,7 +257,19 @@ def create_grid_dialog() -> None:
         grid_ratio = c1.number_input("等比比例（%）", min_value=0.01, value=0.50, step=0.10)
         grid_count = c2.number_input("网格数量", min_value=1, max_value=20, value=5, step=1)
         c3, c4 = st.columns(2)
-        order_usdt = c3.number_input("单格金额（USDT）", min_value=0.01, value=10.0, step=10.0, format="%.2f")
+        order_amount = c3.number_input(
+            "单格币数量" if market == "币本位" else "单格名义金额（USD）",
+            min_value=0.01,
+            value=1.0 if market == "币本位" else 10.0,
+            step=0.1 if market == "币本位" else 10.0,
+            format="%.8f" if market == "币本位" else "%.2f",
+            help=(
+                "填写 LINK、UNI、XRP 等标的币数量；下单时按该 Cell 价格换算为最接近的整数张。"
+                if market == "币本位"
+                else None
+            ),
+            key=f"create_order_amount_{market}",
+        )
         leverage = c4.number_input("杠杆", min_value=1, max_value=125, value=3, step=1)
         preview_clicked = st.form_submit_button("生成预览", type="primary")
 
@@ -241,11 +284,12 @@ def create_grid_dialog() -> None:
         else:
             payload = form_payload(
                 symbol,
+                market,
                 mode,
                 float(anchor_price),
                 float(grid_ratio),
                 int(grid_count),
-                float(order_usdt),
+                float(order_amount),
                 int(leverage),
             )
             try:
@@ -316,6 +360,11 @@ def edit_grid_dialog(grid: dict) -> None:
         return
 
     with st.form(f"edit_grid_{grid['id']}"):
+        market = st.selectbox(
+            "合约类型",
+            ["U 本位", "币本位"],
+            index=1 if grid["market_type"] == "coinm" else 0,
+        )
         symbol = st.text_input("交易对", value=grid["symbol"])
         mode = st.selectbox("方向", ["做多", "做空"], index=0 if grid["mode"] == "做多" else 1)
         anchor_price = st.number_input(
@@ -329,7 +378,17 @@ def edit_grid_dialog(grid: dict) -> None:
         ratio = left.number_input("等比比例（%）", min_value=0.01, value=float(grid["grid_ratio"]), step=0.10)
         count = right.number_input("网格数量", min_value=1, max_value=20, value=int(grid["grid_count"]), step=1)
         left2, right2 = st.columns(2)
-        order_usdt = left2.number_input("单格金额（USDT）", min_value=0.01, value=float(grid["order_usdt"]), step=10.0)
+        order_amount = left2.number_input(
+            (
+                f"单格币数量（{base_asset(symbol)}）"
+                if market == "币本位"
+                else "单格名义金额（USD）"
+            ),
+            min_value=0.01,
+            value=float(grid["order_amount"]),
+            step=0.1 if market == "币本位" else 10.0,
+            format="%.8f" if market == "币本位" else "%.2f",
+        )
         leverage = right2.number_input("杠杆", min_value=1, max_value=125, value=int(grid["leverage"]), step=1)
         save = st.form_submit_button("保存", type="primary")
 
@@ -340,11 +399,12 @@ def edit_grid_dialog(grid: dict) -> None:
         return
     payload = form_payload(
         symbol,
+        market,
         mode,
         float(anchor_price),
         float(ratio),
         int(count),
-        float(order_usdt),
+        float(order_amount),
         int(leverage),
         poll_interval_sec=grid["poll_interval_sec"],
         move_grid=grid["move_grid"],
@@ -446,7 +506,7 @@ def render_overview(strategies: list[dict]) -> None:
 
     widths = [1.1, .65, .85, 1.35, .7, .8, .6, .7, .7, .7, .7, 1.05, .65, 1.25]
     header = st.columns(widths)
-    labels = ["币对", "方向", "当前价格", "当前网格范围", "间距", "单格金额", "杠杆", "网格总数", "待建仓", "已建仓", "待平仓", "状态 / 更新", "启动", "操作"]
+    labels = ["币对", "方向", "当前价格", "当前网格范围", "间距", "单格数量", "杠杆", "网格总数", "待建仓", "已建仓", "待平仓", "状态 / 更新", "启动", "操作"]
     for col, label in zip(header, labels):
         col.markdown(f"**{label}**")
     st.divider()
@@ -462,7 +522,7 @@ def render_overview(strategies: list[dict]) -> None:
         cols[0].markdown(
             f"<a href='{href}' target='_self' "
             f"style='color:{row_color};font-weight:700;text-decoration:none'>"
-            f"{escape(item['symbol'])}</a><br><span style='color:{row_color};opacity:.7;font-size:.8rem'>U 本位永续</span>",
+            f"{escape(item['symbol'])}</a><br><span style='color:{row_color};opacity:.7;font-size:.8rem'>{item['market_label']}</span>",
             unsafe_allow_html=True,
         )
         cell(cols[1], item["mode"])
@@ -474,7 +534,7 @@ def render_overview(strategies: list[dict]) -> None:
             f"{format_price(item['upper_price'], precision)}",
         )
         cell(cols[4], f"{item['grid_ratio']:.2f}%")
-        cell(cols[5], f"{item['order_usdt']:,.2f} U")
+        cell(cols[5], f"{format_quantity(item['order_amount'])} {item['order_unit']}")
         cell(cols[6], f"{item['leverage']}×")
         cell(cols[7], item["grid_count"])
         cell(cols[8], item["pending_entry"])
@@ -531,26 +591,38 @@ def render_overview(strategies: list[dict]) -> None:
 
 
 def base_asset(symbol: str) -> str:
+    root = symbol.upper().split("_", 1)[0]
     for quote_asset in ("USDT", "USDC", "FDUSD", "BUSD"):
-        if symbol.endswith(quote_asset):
-            return symbol[: -len(quote_asset)]
-    return symbol
+        if root.endswith(quote_asset):
+            return root[: -len(quote_asset)]
+    if root.endswith("USD"):
+        return root[:-3]
+    return root
 
 
 def format_quantity(value: object) -> str:
     quantity = Decimal(str(value))
+    if quantity != quantity.to_integral_value():
+        quantity = quantity.quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
     text = format(quantity.normalize(), "f")
     integer, dot, fraction = text.partition(".")
     grouped = f"{int(integer):,}"
     return grouped if not dot else f"{grouped}.{fraction}"
 
 
-def order_text(prefix: str, order_id: int | None, quantity: object, symbol: str) -> str:
+def order_text(
+    prefix: str,
+    order_id: int | None,
+    quantity: object,
+    symbol: str,
+    quantity_unit: str = "base_asset",
+) -> str:
     if order_id is None:
         return ""
     text = f"{prefix}:#{order_id}"
     if quantity not in (None, ""):
-        text += f" · {format_quantity(quantity)} {base_asset(symbol)}"
+        unit = "张" if quantity_unit == "contract" else base_asset(symbol)
+        text += f" · {format_quantity(quantity)} {unit}"
     return text
 
 
@@ -565,12 +637,14 @@ def build_cell_rows(grid: dict, cells: list[dict]) -> list[dict]:
             cell.get("entry_order_id"),
             cell.get("entry_qty"),
             grid["symbol"],
+            grid["quantity_unit"],
         )
         exit_text = order_text(
             "挂单",
             cell.get("exit_order_id"),
             cell.get("exit_qty"),
             grid["symbol"],
+            grid["quantity_unit"],
         )
         buy_order = ""
         sell_order = ""
@@ -691,6 +765,7 @@ def _render_detail_live(strategy_id: str) -> None:
     direction_color = BINANCE_GREEN if grid["mode"] == "做多" else BINANCE_RED
     precision = grid["price_precision"]
     summary_items = [
+        ("合约", grid["market_label"]),
         ("方向", grid["mode"]),
         ("当前价格", format_price(grid["current_price"], precision)),
         (
@@ -699,7 +774,10 @@ def _render_detail_live(strategy_id: str) -> None:
             f"{format_price(grid['upper_price'], precision)}",
         ),
         ("间距", f"{grid['grid_ratio']:.2f}%"),
-        ("单格金额", f"{grid['order_usdt']:,.2f} U"),
+        (
+            "单格币数量" if grid["market_type"] == "coinm" else "单格名义金额",
+            f"{format_quantity(grid['order_amount'])} {grid['order_unit']}",
+        ),
         ("网格总数", str(grid["grid_count"])),
         ("杠杆", f"{grid['leverage']}×"),
         ("运行时间", grid["runtime"]),
@@ -820,7 +898,7 @@ def render_detail(strategies: list[dict]) -> None:
     st.markdown(f"### {grid['symbol']} 网格详情")
     options = [item["id"] for item in strategies]
     labels = {
-        item["id"]: f"{item['symbol']} · {item['mode']} · {item['id'][-8:]}"
+        item["id"]: f"{item['symbol']} · {item['market_label']} · {item['mode']} · {item['id'][-8:]}"
         for item in strategies
     }
     selector, _ = st.columns([1.7, 6])

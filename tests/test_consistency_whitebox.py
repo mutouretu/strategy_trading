@@ -187,7 +187,10 @@ class PositionOwnershipWhiteBoxTests(unittest.TestCase):
         snapshot.begin_cycle()
         for engine in engines.values():
             engine.exchange = snapshot
-        PositionCoordinator(store, snapshot, "priority-pool").reconcile(engines)
+        coordinator = PositionCoordinator(store, snapshot, "priority-pool")
+        coordinator.reconcile(engines)
+        snapshot.begin_cycle()
+        coordinator.reconcile(engines)
 
         result = []
         for cell in store.list_all_cells():

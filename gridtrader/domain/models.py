@@ -10,6 +10,17 @@ class Mode(StrEnum):
     SHORT = "short"
 
 
+class FuturesMarket(StrEnum):
+    """Binance futures product family.
+
+    USD-M quantities are base-asset amounts. COIN-M quantities are contract
+    counts whose USD face value is supplied by ``contractSize``.
+    """
+
+    USDM = "usdm"
+    COINM = "coinm"
+
+
 class StrategyStatus(StrEnum):
     DRAFT = "draft"
     STARTING = "starting"
@@ -49,12 +60,18 @@ class StrategyConfig:
     grid_ratio: Decimal
     grid_count: int
     order_usdt: Decimal
+    market_type: FuturesMarket = FuturesMarket.USDM
     leverage: int = 3
     poll_interval_sec: float = 1.0
     move_grid: bool = True
     status: StrategyStatus = StrategyStatus.DRAFT
     has_started: bool = False
     archived: bool = False
+    # USD-M is configured by quote notional. COIN-M is configured by the
+    # amount of its margin/base coin and converted to integer contracts only
+    # at the order price.
+    order_coin_qty: Decimal | None = None
+    contract_size: Decimal = Decimal("0")
 
     def validate(self) -> None:
         if not self.strategy_id.strip():
@@ -67,12 +84,29 @@ class StrategyConfig:
             raise ValueError("grid_ratio must be > 0")
         if self.grid_count < 1:
             raise ValueError("grid_count must be >= 1")
-        if self.order_usdt <= 0:
+        if self.market_type == FuturesMarket.COINM:
+            if self.order_coin_qty is None or self.order_coin_qty <= 0:
+                raise ValueError("order_coin_qty must be > 0 for COIN-M")
+            if self.contract_size < 0:
+                raise ValueError("contract_size must be >= 0")
+        elif self.order_usdt <= 0:
             raise ValueError("order_usdt must be > 0")
         if self.leverage < 1:
             raise ValueError("leverage must be >= 1")
         if self.poll_interval_sec < 0.2:
             raise ValueError("poll_interval_sec must be >= 0.2")
+
+    @property
+    def order_value_usd(self) -> Decimal:
+        """Per-cell USD notional for USD-M strategies."""
+
+        return self.order_usdt
+
+    @property
+    def order_base_quantity(self) -> Decimal:
+        """Configured per-cell margin/base-coin amount for COIN-M."""
+
+        return self.order_coin_qty or Decimal("0")
 
 
 @dataclass
@@ -105,6 +139,10 @@ class SymbolFilters:
     step_size: Decimal
     min_qty: Decimal = Decimal("0")
     min_notional: Decimal = Decimal("0")
+    contract_size: Decimal = Decimal("0")
+    base_asset: str = ""
+    margin_asset: str = ""
+    contract_type: str = ""
 
 
 @dataclass(frozen=True)

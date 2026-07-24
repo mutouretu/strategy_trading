@@ -38,6 +38,7 @@ class TradingEngineTests(unittest.TestCase):
         engine.tick()
         cell = store.list_cells("test-long")[0]
         self.assertEqual(cell.stage, CellStage.PENDING_ENTRY)
+        first_entry_client_id = cell.entry_client_id
         self.assertEqual(exchange.placed[-1]["side"], OrderSide.BUY)
         self.assertEqual(exchange.placed[-1]["price"], Decimal("100"))
 
@@ -53,6 +54,7 @@ class TradingEngineTests(unittest.TestCase):
         cell = store.list_cells("test-long")[0]
         self.assertEqual(cell.cycle_count, 1)
         self.assertEqual(cell.stage, CellStage.PENDING_ENTRY)
+        self.assertNotEqual(cell.entry_client_id, first_entry_client_id)
         self.assertEqual([event["event_type"] for event in store.list_events("test-long")][-3:], [
             "EXIT_PLACED", "CYCLE_CLOSED", "ENTRY_PLACED"
         ])
@@ -179,10 +181,16 @@ class TradingEngineTests(unittest.TestCase):
             raise TimeoutError("response lost after exchange accepted order")
 
         exchange.place_limit_order = accept_then_timeout
-        with self.assertRaises(TimeoutError):
-            engine.tick()
+        engine.tick()
         self.assertEqual(len(exchange.get_open_orders("BTCUSDT")), 1)
-        self.assertEqual(store.list_cells("test-long")[0].stage, CellStage.UNTRIGGERED)
+        uncertain = store.list_cells("test-long")[0]
+        self.assertEqual(uncertain.stage, CellStage.PENDING_ENTRY)
+        self.assertIsNone(uncertain.entry_order_id)
+        self.assertTrue(uncertain.entry_client_id)
+        self.assertIn(
+            "ENTRY_SUBMISSION_UNKNOWN",
+            [event["event_type"] for event in store.list_events("test-long")],
+        )
 
         exchange.place_limit_order = original_place
         restarted = TradingEngine(store, exchange, "test-long", run_id="restarted")
@@ -211,7 +219,10 @@ class TradingEngineTests(unittest.TestCase):
         with self.assertRaises(OSError):
             engine.tick()
         self.assertEqual(len(exchange.get_open_orders("BTCUSDT")), 1)
-        self.assertEqual(store.list_cells("test-long")[0].stage, CellStage.UNTRIGGERED)
+        uncertain = store.list_cells("test-long")[0]
+        self.assertEqual(uncertain.stage, CellStage.PENDING_ENTRY)
+        self.assertIsNone(uncertain.entry_order_id)
+        self.assertTrue(uncertain.entry_client_id)
 
         store.save_cell = original_save
         restarted = TradingEngine(store, exchange, "test-long", run_id="restarted")

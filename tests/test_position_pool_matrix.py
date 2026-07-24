@@ -121,6 +121,7 @@ class PositionPoolCorrectionMatrixTests(unittest.TestCase):
         self.exchange.set_position("BTCUSDT", "LONG", Decimal("0.400"))
 
         self.scheduler.run_once(now=100)
+        self.scheduler.run_once(now=105)
 
         stopped = self.store.list_cells(stopped_id)[0]
         running = self.store.list_cells(running_id)[0]
@@ -142,6 +143,7 @@ class PositionPoolCorrectionMatrixTests(unittest.TestCase):
 
         self.exchange.cancel_order = fail_cancel  # type: ignore[method-assign]
         self.scheduler.run_once(now=100)
+        self.scheduler.run_once(now=105)
 
         cells_after = self.cells()
         self.assertEqual(
@@ -174,6 +176,7 @@ class PositionPoolCorrectionMatrixTests(unittest.TestCase):
         )
 
         self.scheduler.run_once(now=100)
+        self.scheduler.run_once(now=105)
 
         cells = self.cells()
         reviewed = next(cell for cell in cells if cell.open_qty == Decimal("0.4"))

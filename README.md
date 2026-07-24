@@ -1,6 +1,6 @@
 # Grid Trading Web
 
-面向 Web 服务重构的 Binance U 本位触发式移动等比网格。项目保留原始 `GRID_TRADING` 作为行为基线，新后端不再依赖 CSV 恢复或 tmux 管理。
+面向 Web 服务重构的 Binance U 本位与币本位永续触发式移动等比网格。项目保留原始 `GRID_TRADING` 作为行为基线，新后端不再依赖 CSV 恢复或 tmux 管理。
 
 ## 架构
 
@@ -17,21 +17,22 @@ StrategySupervisor
 StrategyScheduler ── N lightweight TradingEngine states
         │ shared symbol snapshots
         ▼
-Binance USDⓈ-M Futures
+Binance USDⓈ-M / COIN-M Futures
 ```
 
-主要模块：
+后端按职责分层：
 
-- `gridtrader/domain.py`：Web 原生策略、Cell、订单和生命周期模型。
-- `gridtrader/grid_math.py`：做多向下、做空向上的等比 Cell 生成及稳定 Cell ID。
-- `gridtrader/store.py`：SQLite 事务、配置锁定、Cell、事件和 heartbeat。
-- `gridtrader/engine.py`：可单步测试的触发、建仓、平仓、恢复和移动窗口引擎。
-- `gridtrader/scheduler.py`：单进程调度全部策略，每组策略只是一个轻量状态机。
-- `gridtrader/snapshot_exchange.py`：同一调度轮次按币对复用价格和开放订单快照。
-- `gridtrader/position_coordinator.py`：按币对和方向分配真实持仓资源并修复平仓单。
-- `gridtrader/supervisor.py`：保证共享调度器只启动一次；停止单组不会影响其他组。
-- `gridtrader/api.py`：前端可直接调用的 FastAPI 接口。
+- `gridtrader/domain/`：策略、Cell、订单模型及纯等比网格计算。
+- `gridtrader/ports/`：交易所等外部能力的抽象接口。
+- `gridtrader/application/`：触发、开平仓、移动窗口、策略用例和持仓一致性。
+- `gridtrader/infrastructure/`：Binance、SQLite 和轮询快照的具体适配器。
+- `gridtrader/runtime/`：共享调度器、进程监管和 worker 入口。
+- `gridtrader/interfaces/`：FastAPI 接口和 Streamlit 使用的 HTTP 客户端。
+- `gridtrader/shared/`：环境配置、价格格式化等无业务状态工具。
+- `gridtrader/*.py`：旧导入路径的薄兼容层，不再承载业务实现。
 - `legacy_grid/`：原仓库快照，仅用于行为对照和特征测试。
+
+更完整的依赖边界和文件归属说明见 `docs/architecture.md`。
 
 ## 锚点语义
 
@@ -64,7 +65,7 @@ python3 -m venv .venv
 项目会从仓库根目录的 `.env` 统一加载配置；已经由 shell/export 提供的变量优先，不会被 `.env` 覆盖。可参考 `.env.example`。因此无需再手动导出币安密钥：
 
 ```bash
-.venv/bin/uvicorn gridtrader.api:create_app --factory --host 127.0.0.1 --port 8100 --workers 1
+.venv/bin/uvicorn gridtrader.interfaces.api:create_app --factory --host 127.0.0.1 --port 8100 --workers 1
 ```
 
 接口文档：`http://127.0.0.1:8100/docs`
@@ -94,7 +95,24 @@ export GRID_POSITION_SETTLEMENT_GRACE_SEC=15
 - 同一轮中同一币对只查询一次价格和一次开放订单列表。
 - 仍在开放订单快照中的订单不再逐张查询；只有消失的订单才单独查询成交或撤单结果。
 - 交易规则仍按策略组隔离，停止一组不会停止调度器或其他策略。
-- 当前阶段只处理 USDⓈ-M，COIN-M 不在本轮范围内。
+- USDⓈ-M 与 COIN-M 使用独立 REST 适配器和快照缓存，不会共享订单或持仓资源池。
+- 调度器启动、待机间隔、连续请求失败和恢复会聚合写入 SQLite 审计表，不会按每次失败刷日志。
+
+## 合约产品与数量语义
+
+- `market_type=usdm`：使用 `order_usdt` 配置单格 USD 名义金额，交易所数量按 `USD ÷ 价格` 换算为基础币数量。
+- `market_type=coinm`：使用 `order_coin_qty` 配置单格标的币数量；下单时按 `币数量 × Cell 价格 ÷ contractSize` 换算为最接近的整数张。
+- 币本位订单与仓位资源池内部仍以张数精确对账，API 和页面把订单张数按对应买卖价格换算为币数量展示。
+- 资源池主键是 `market_type + symbol + positionSide`，两个产品族不能互相占用持仓资源。
+
+生产和测试入口分别配置，不能用一个 URL 推断另一个产品的写入目标：
+
+```dotenv
+BINANCE_BASE_URL=https://fapi.binance.com
+BINANCE_COINM_BASE_URL=https://dapi.binance.com
+```
+
+COIN-M 测试环境使用 `BINANCE_COINM_BASE_URL=https://testnet.binancefuture.com`。所有真实下单测试还需显式测试开关和域名保护。
 
 ## 启动前端
 
@@ -123,7 +141,7 @@ export GRID_POSITION_SETTLEMENT_GRACE_SEC=15
 
 ## 持仓资源池
 
-协调器以 `symbol + positionSide` 为资源池，将币安聚合持仓按以下顺序分配：
+协调器以 `market_type + symbol + positionSide` 为资源池，将币安聚合持仓按以下顺序分配：
 
 1. 停止或归档策略的逻辑持仓先保留，但系统不会修改这些策略。
 2. 外部手工平仓挂单先预留“平仓订单覆盖量”，但在实际成交前不会缩减 Cell 的逻辑持仓。
@@ -139,6 +157,10 @@ API 停止或删除可以与正在执行的调度 tick 并发发生。调度器�
 
 ## 测试
 
+24～72 小时测试网只读巡检使用 `scripts/reliability_probe.py`，由 systemd timer 或 cron 每几分钟调用一次，采样结束即退出。安装、告警语义、周期汇总和重启/强杀观察方法见 `docs/reliability-monitoring.md`。
+
+50 组 × 5 Cell 的离线性能矩阵和 24 小时耐久测试使用 `scripts/performance_acceptance.py`。它只连接独立 SQLite 和内存模拟交易所，具体场景、指标及 2 核 2 GB 验收方法见 `docs/performance-acceptance.md`。
+
 新后端测试：
 
 ```bash
@@ -151,4 +173,4 @@ API 停止或删除可以与正在执行的调度 tick 并发发生。调度器�
 PYTHONPATH=legacy_grid python3 -m unittest discover -s legacy_grid/tests -p 'test_*.py' -v
 ```
 
-测试覆盖等比计算、稳定 Cell ID、同币对多组网格隔离、配置不可逆锁定、SQLite 重启、软删除、API、做多/做空开平仓闭环、平台手动删单和删全部单后的分类恢复、部分成交后撤单、真实持仓部分/全部减少、外部平仓单预留/部分成交/取消、停止组隔离、未知订单防重复建仓、接口失败后的延迟重试、开放订单恢复、移动窗口，以及 50 组 × 5 Cell 的同币对和多币对调度负载。
+测试覆盖等比计算、稳定 Cell ID、同币对多组网格隔离、配置不可逆锁定、SQLite 重启、软删除、API、做多/做空开平仓闭环、平台手动删单和删全部单后的分类恢复、部分成交后撤单、真实持仓部分/全部减少、外部平仓单预留/部分成交/取消、停止组隔离、未知订单防重复建仓、接口失败后的延迟重试、开放订单恢复、移动窗口、COIN-M 合约张数换算与产品资源池隔离，以及 50 组 × 5 Cell 的同币对和多币对调度负载。

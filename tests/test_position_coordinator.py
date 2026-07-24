@@ -73,6 +73,13 @@ class PositionCoordinatorTests(unittest.TestCase):
         self.exchange.set_position("BTCUSDT", "LONG", Decimal("1.400"))
 
         self.scheduler.run_once(now=100)
+        self.assertEqual(
+            [cell.open_qty for cell in self.cells()],
+            [Decimal("1.000"), Decimal("1.000")],
+        )
+        self.assertEqual(self.store.list_position_pools()[0]["status"], "shortage_pending")
+
+        self.scheduler.run_once(now=105)
         cells = self.cells()
         self.assertEqual(sorted(cell.open_qty for cell in cells), [Decimal("0.400"), Decimal("1.000")])
         self.assertTrue(all(cell.stage == CellStage.PENDING_EXIT for cell in cells))
@@ -90,6 +97,28 @@ class PositionCoordinatorTests(unittest.TestCase):
         self.assertEqual(pool["actual_qty"], "1.400")
         self.assertEqual(pool["logical_qty"], "1.400")
 
+    def test_transient_position_shortage_never_rewrites_cell_ownership(self):
+        original_exit_ids = [cell.exit_order_id for cell in self.cells()]
+        self.exchange.set_position("BTCUSDT", "LONG", Decimal("1.400"))
+
+        self.scheduler.run_once(now=100)
+
+        pending = self.cells()
+        self.assertEqual([cell.open_qty for cell in pending], [Decimal("1.000")] * 2)
+        self.assertEqual([cell.exit_order_id for cell in pending], original_exit_ids)
+        self.assertEqual(self.store.list_position_pools()[0]["status"], "shortage_pending")
+
+        self.exchange.set_position("BTCUSDT", "LONG", Decimal("2.000"))
+        self.scheduler.run_once(now=105)
+
+        recovered = self.cells()
+        self.assertEqual([cell.open_qty for cell in recovered], [Decimal("1.000")] * 2)
+        self.assertEqual([cell.exit_order_id for cell in recovered], original_exit_ids)
+        pool = self.store.list_position_pools()[0]
+        self.assertEqual(pool["status"], "consistent")
+        self.assertEqual(pool["unassigned_qty"], "0")
+        self.assertEqual(pool["shortage_qty"], "0")
+
     def test_position_shortage_uses_price_distance_even_when_near_exit_is_active(self):
         farther, nearer = self.cells()
         farther.buy_price = Decimal("70")
@@ -100,6 +129,7 @@ class PositionCoordinatorTests(unittest.TestCase):
         self.exchange.set_position("BTCUSDT", "LONG", Decimal("1.400"))
 
         self.scheduler.run_once(now=100)
+        self.scheduler.run_once(now=105)
 
         farther_after = self.store.list_cells(farther.strategy_id)[0]
         nearer_after = self.store.list_cells(nearer.strategy_id)[0]
@@ -130,6 +160,8 @@ class PositionCoordinatorTests(unittest.TestCase):
 
         self.exchange.cancel_order = fill_then_cancel  # type: ignore[method-assign]
         self.scheduler.run_once(now=100)
+        self.scheduler.run_once(now=105)
+        self.scheduler.run_once(now=110)
 
         cells = self.cells()
         self.assertEqual(sorted(cell.open_qty for cell in cells), [Decimal("0.200"), Decimal("1.000")])
@@ -150,12 +182,13 @@ class PositionCoordinatorTests(unittest.TestCase):
         self.exchange.set_position("BTCUSDT", "LONG", Decimal("0"))
 
         self.scheduler.run_once(now=100)
+        self.scheduler.run_once(now=105)
         released = self.cells()
         self.assertTrue(all(cell.stage == CellStage.UNTRIGGERED for cell in released))
         self.assertTrue(all(cell.open_qty == 0 for cell in released))
         self.assertEqual(self.exchange.get_open_orders("BTCUSDT"), [])
 
-        self.scheduler.run_once(now=101)
+        self.scheduler.run_once(now=106)
         rearmed = self.cells()
         self.assertTrue(all(cell.stage == CellStage.PENDING_ENTRY for cell in rearmed))
         self.assertEqual(len(self.exchange.get_open_orders("BTCUSDT")), 2)
@@ -169,6 +202,7 @@ class PositionCoordinatorTests(unittest.TestCase):
         self.exchange.set_position("BTCUSDT", "LONG", Decimal("1.400"))
 
         self.scheduler.run_once(now=100)
+        self.scheduler.run_once(now=105)
         stopped = self.store.list_cells(stopped_id)[0]
         running = self.store.list_cells(running_id)[0]
         self.assertEqual(stopped.open_qty, Decimal("1.000"))
@@ -247,6 +281,7 @@ class PositionCoordinatorTests(unittest.TestCase):
         self.exchange.partial_fill(external_id, Decimal("0.200"))
 
         self.scheduler.run_once(now=100)
+        self.scheduler.run_once(now=105)
 
         self.assertEqual(
             sorted(cell.open_qty for cell in self.cells()),
@@ -326,6 +361,7 @@ class PositionCoordinatorTests(unittest.TestCase):
         self.scheduler.run_once(now=55)
         self.exchange.set_position("ETHUSDT", "SHORT", Decimal("1.400"))
         self.scheduler.run_once(now=60)
+        self.scheduler.run_once(now=65)
 
         cells = [self.store.list_cells(strategy_id)[0] for strategy_id in short_ids]
         self.assertEqual(sorted(cell.open_qty for cell in cells), [Decimal("0.491"), Decimal("0.909")])

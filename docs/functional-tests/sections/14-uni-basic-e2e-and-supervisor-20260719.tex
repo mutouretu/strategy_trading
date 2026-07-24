@@ -1,0 +1,44 @@
+\section{2026-07-19 UNI 页面基础 E2E 与调度器路径异常}
+
+\subsection{执行范围与最终安全状态}
+
+本轮全部业务写操作由 Codex App 内置浏览器从 8010 Streamlit 页面发起，后端为 8110，环境明确连接 \url{https://testnet.binancefuture.com}，正式环境 8000/8100 未操作。测试策略参数如下：
+
+\begin{itemize}
+  \item 策略：\path{uniusdt-long-56c700ae}，方向：做多；
+  \item 锚点 3.65、比例 2\%、5 Cell、单格 20 USDT、4 倍杠杆。
+\end{itemize}
+
+测试完成后页面停止并软删除该策略，四张测试网订单全部取消。最终 UNIUSDT 开放订单为 0，LONG/SHORT 非零仓位为 0；原 AKE/HOME 三组继续运行且唯一共享调度器为 PID 59072。
+
+\begin{longtable}{p{3.5cm}p{2.0cm}p{8.4cm}}
+  \toprule
+  场景 & 结果 & 页面、SQLite 与平台证据 \\
+  \midrule
+  \endhead
+  页面预览与创建 & \ResultPass & 页面输入参数并生成 3.303--3.65 预览；确认创建后总览显示 5 格、未启动、无订单和仓位。 \\
+  草稿编辑与刷新价格 & \ResultPass & 页面将杠杆从 3 倍改为 4 倍并成功保存；手动刷新显示测试网标记价约 3.5237，启动前 UNI 开放订单为 0。 \\
+  启动与触发式挂单 & \ResultPass & 最高 Cell 3.5780--3.650 保持未触发；下面四格在 Binance Testnet 建立 BUY/LONG 单，价格分别为 3.3030、3.3700、3.4380、3.5070，数量分别为 6、5、5、5 UNI。 \\
+  总览与详情页 & \ResultPass & 总览显示 5 格、待建仓 4、运行中；币对链接在当前标签页进入详情，方向、范围、间距、金额、杠杆和运行时间均与后端一致。 \\
+  停止、删除与清场 & \ResultPass & 页面停止后调度器不再恢复订单；取消四张测试订单后页面永久删除，活动列表恢复原三组，SQLite 保留 11 条审计事件并标记 \texttt{deleted\_at}。 \\
+  全量回归 & \ResultPass & \texttt{python -m unittest discover -s tests -v} 共 137 项通过，14 项需显式测试网开关而按设计跳过。 \\
+  \bottomrule
+\end{longtable}
+
+\subsection{执行中发现的双调度器缺陷}
+
+首次启动 UNI 时，平台存在四张有效订单，但最低 Cell 在同一秒先记录 \texttt{ENTRY\_PLACED}，随后被另一轮处理记录为 \texttt{ENTRY\_MISSING} 并进入 \texttt{manual\_review}。检查发现测试数据库同时被 PID 59072 与 PID 6512 两个调度器轮询。
+
+旧进程从不同工作目录启动，命令中的相对 \path{runtime/scheduler.pid} 实际解析为下列路径：
+
+\begin{quote}
+  \small\path{runtime/overnight-testnet-20260718/runtime/scheduler.pid}
+\end{quote}
+
+API 在项目根目录查找 \path{runtime/scheduler.pid}，没有发现旧 PID，因而错误启动第二个调度器。两个进程共享 SQLite，但各自持有不同订单快照，造成刚下发订单被另一个进程短暂判为不存在。
+
+本轮立即停止新 PID 6512，保留原 PID 59072。页面执行 UNI 停止和重启后，唯一调度器按四个 \texttt{clientOrderId} 产生四条 \texttt{OPEN\_ORDER\_RECOVERED}，最低 Cell 从人工检查恢复为待建仓；平台订单总数始终为四张，没有重复补单。
+
+代码修复将 SQLite 路径、日志目录和 PID 文件在对象构造时统一解析为绝对路径，子进程参数也只传绝对路径。新增 \path{test_scheduler_paths_do_not_change_with_working_directory}，验证创建 Store/Supervisor 后即使进程工作目录变化，数据库和 PID 文件仍指向同一绝对位置。
+
+本轮结论：\StatusPass。页面基本业务链路和订单恢复链路通过；同时发现并修复了一个可能导致重复共享调度器的高风险进程管理缺陷。部署新代码时必须在安全窗口重启 FastAPI 与共享调度器，使绝对路径修复在长期运行进程中生效。

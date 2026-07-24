@@ -64,7 +64,7 @@ class OrderConsistencyTests(unittest.TestCase):
         engine.tick()
         reviewed = self.store.list_cells("btc-long-single")[0]
         self.assertEqual(reviewed.stage, CellStage.MANUAL_REVIEW)
-        self.assertIsNone(reviewed.entry_order_id)
+        self.assertEqual(reviewed.entry_order_id, old_order_id)
         self.assertEqual(self.exchange.get_open_orders("BTCUSDT"), [])
         self.assertIn("ENTRY_MISSING", [event["event_type"] for event in self.store.list_events("btc-long-single")])
 
@@ -129,7 +129,7 @@ class OrderConsistencyTests(unittest.TestCase):
         restored = self.store.list_cells("btc-long-exit")[0]
         self.assertEqual(restored.stage, CellStage.MANUAL_REVIEW)
         self.assertEqual(restored.open_qty, open_qty)
-        self.assertIsNone(restored.exit_order_id)
+        self.assertEqual(restored.exit_order_id, old_exit_id)
         self.assertEqual(len(self.exchange.get_open_orders("BTCUSDT")), 0)
         self.assertIn("EXIT_MISSING", [event["event_type"] for event in self.store.list_events("btc-long-exit")])
 
