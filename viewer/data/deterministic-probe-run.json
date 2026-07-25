@@ -1,0 +1,303 @@
+{
+  "schema_version": 1,
+  "manifest": {
+    "description": "Deterministic order lifecycle, bar execution, and ledger probe",
+    "run_id": "deterministic-runtime-probe",
+    "instrument": "BTCUSD",
+    "interval": "1d",
+    "source": "fixed_bar_probe",
+    "seed": null
+  },
+  "market": [
+    {
+      "sequence": 0,
+      "timestamp": 1767225600000,
+      "date": "2026-01-01",
+      "instrument": "BTCUSD",
+      "open": "100",
+      "high": "102",
+      "low": "98",
+      "close": "101"
+    },
+    {
+      "sequence": 1,
+      "timestamp": 1767312000000,
+      "date": "2026-01-02",
+      "instrument": "BTCUSD",
+      "open": "101",
+      "high": "103",
+      "low": "97",
+      "close": "100"
+    },
+    {
+      "sequence": 2,
+      "timestamp": 1767398400000,
+      "date": "2026-01-03",
+      "instrument": "BTCUSD",
+      "open": "100",
+      "high": "104",
+      "low": "98",
+      "close": "103"
+    },
+    {
+      "sequence": 3,
+      "timestamp": 1767484800000,
+      "date": "2026-01-04",
+      "instrument": "BTCUSD",
+      "open": "103",
+      "high": "109",
+      "low": "101",
+      "close": "108"
+    },
+    {
+      "sequence": 4,
+      "timestamp": 1767571200000,
+      "date": "2026-01-05",
+      "instrument": "BTCUSD",
+      "open": "108",
+      "high": "109",
+      "low": "96",
+      "close": "97"
+    },
+    {
+      "sequence": 5,
+      "timestamp": 1767657600000,
+      "date": "2026-01-06",
+      "instrument": "BTCUSD",
+      "open": "96",
+      "high": "100",
+      "low": "94",
+      "close": "99"
+    }
+  ],
+  "orders": [
+    {
+      "order_key": "probe:entry:original",
+      "instrument": "BTCUSD",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "2",
+      "price": "95",
+      "active_from_sequence": 0,
+      "active_to_sequence": 1,
+      "status": "CANCELLED",
+      "tags": {
+        "probe_step": "original-entry"
+      }
+    },
+    {
+      "order_key": "probe:entry:replacement",
+      "instrument": "BTCUSD",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "2",
+      "price": "99",
+      "active_from_sequence": 1,
+      "active_to_sequence": 2,
+      "status": "FILLED",
+      "tags": {
+        "probe_step": "replacement-entry"
+      }
+    },
+    {
+      "order_key": "probe:exit:take-profit",
+      "instrument": "BTCUSD",
+      "side": "SELL",
+      "order_type": "LIMIT",
+      "quantity": "1",
+      "price": "108",
+      "active_from_sequence": 2,
+      "active_to_sequence": 3,
+      "status": "FILLED",
+      "tags": {
+        "probe_step": "take-profit"
+      }
+    },
+    {
+      "order_key": "probe:exit:market",
+      "instrument": "BTCUSD",
+      "side": "SELL",
+      "order_type": "MARKET",
+      "quantity": "1",
+      "price": null,
+      "active_from_sequence": 4,
+      "active_to_sequence": 5,
+      "status": "FILLED",
+      "tags": {
+        "probe_step": "market-exit"
+      }
+    }
+  ],
+  "fills": [
+    {
+      "fill_id": "probe:entry:replacement@2",
+      "order_key": "probe:entry:replacement",
+      "instrument": "BTCUSD",
+      "sequence": 2,
+      "timestamp": 1767398400000,
+      "date": "2026-01-03",
+      "side": "BUY",
+      "price": "99",
+      "quantity": "2",
+      "tags": {
+        "probe_step": "replacement-entry"
+      }
+    },
+    {
+      "fill_id": "probe:exit:take-profit@3",
+      "order_key": "probe:exit:take-profit",
+      "instrument": "BTCUSD",
+      "sequence": 3,
+      "timestamp": 1767484800000,
+      "date": "2026-01-04",
+      "side": "SELL",
+      "price": "108",
+      "quantity": "1",
+      "tags": {
+        "probe_step": "take-profit"
+      }
+    },
+    {
+      "fill_id": "probe:exit:market@5",
+      "order_key": "probe:exit:market",
+      "instrument": "BTCUSD",
+      "sequence": 5,
+      "timestamp": 1767657600000,
+      "date": "2026-01-06",
+      "side": "SELL",
+      "price": "96",
+      "quantity": "1",
+      "tags": {
+        "probe_step": "market-exit"
+      }
+    }
+  ],
+  "equity": [
+    {
+      "sequence": 0,
+      "timestamp": 1767225600000,
+      "date": "2026-01-01",
+      "cash": "1000",
+      "positions": {},
+      "average_costs": {},
+      "marks": {
+        "BTCUSD": "101"
+      },
+      "realized_pnl": "0",
+      "equity": "1000",
+      "equity_asset": "USDT",
+      "account_metrics": {
+        "total_equity_usdt": "1000"
+      }
+    },
+    {
+      "sequence": 1,
+      "timestamp": 1767312000000,
+      "date": "2026-01-02",
+      "cash": "1000",
+      "positions": {},
+      "average_costs": {},
+      "marks": {
+        "BTCUSD": "100"
+      },
+      "realized_pnl": "0",
+      "equity": "1000",
+      "equity_asset": "USDT",
+      "account_metrics": {
+        "total_equity_usdt": "1000"
+      }
+    },
+    {
+      "sequence": 2,
+      "timestamp": 1767398400000,
+      "date": "2026-01-03",
+      "cash": "802",
+      "positions": {
+        "BTCUSD": "2"
+      },
+      "average_costs": {
+        "BTCUSD": "99"
+      },
+      "marks": {
+        "BTCUSD": "103"
+      },
+      "realized_pnl": "0",
+      "equity": "1008",
+      "equity_asset": "USDT",
+      "account_metrics": {
+        "total_equity_usdt": "1008"
+      }
+    },
+    {
+      "sequence": 3,
+      "timestamp": 1767484800000,
+      "date": "2026-01-04",
+      "cash": "910",
+      "positions": {
+        "BTCUSD": "1"
+      },
+      "average_costs": {
+        "BTCUSD": "99"
+      },
+      "marks": {
+        "BTCUSD": "108"
+      },
+      "realized_pnl": "9",
+      "equity": "1018",
+      "equity_asset": "USDT",
+      "account_metrics": {
+        "total_equity_usdt": "1018"
+      }
+    },
+    {
+      "sequence": 4,
+      "timestamp": 1767571200000,
+      "date": "2026-01-05",
+      "cash": "910",
+      "positions": {
+        "BTCUSD": "1"
+      },
+      "average_costs": {
+        "BTCUSD": "99"
+      },
+      "marks": {
+        "BTCUSD": "97"
+      },
+      "realized_pnl": "9",
+      "equity": "1007",
+      "equity_asset": "USDT",
+      "account_metrics": {
+        "total_equity_usdt": "1007"
+      }
+    },
+    {
+      "sequence": 5,
+      "timestamp": 1767657600000,
+      "date": "2026-01-06",
+      "cash": "1006",
+      "positions": {},
+      "average_costs": {},
+      "marks": {
+        "BTCUSD": "99"
+      },
+      "realized_pnl": "6",
+      "equity": "1006",
+      "equity_asset": "USDT",
+      "account_metrics": {
+        "total_equity_usdt": "1006"
+      }
+    }
+  ],
+  "summary": {
+    "initial_equity": "1000",
+    "final_cash": "1006",
+    "final_positions": {},
+    "final_average_costs": {},
+    "realized_pnl": "6",
+    "final_equity": "1006",
+    "equity_asset": "USDT",
+    "final_account_metrics": {
+      "total_equity_usdt": "1006"
+    }
+  }
+}

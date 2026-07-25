@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "market-protocol"
+version = "0.1.0"
+description = "Small shared market-data protocol for simulation decision hosts"
+requires-python = ">=3.11"
+
+[tool.setuptools.packages.find]
+where = ["src"]

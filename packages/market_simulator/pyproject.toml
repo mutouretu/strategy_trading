@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "market-simulator"
+version = "0.1.0"
+description = "Deterministic and synthetic market data sources"
+requires-python = ">=3.11"
+dependencies = ["market-protocol>=0.1,<0.2"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
