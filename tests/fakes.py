@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from gridtrader.domain import OrderSide, OrderSnapshot, OrderStatus, PositionSnapshot, SymbolFilters
-from gridtrader.exchange import OrderNotFoundError
+from grid_server.domain import OrderSide, OrderSnapshot, OrderStatus, PositionSnapshot, SymbolFilters
+from grid_server.exchange import OrderNotFoundError
 
 
 class FakeExchange:

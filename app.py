@@ -8,9 +8,9 @@ from urllib.parse import quote
 import pandas as pd
 import streamlit as st
 
-from gridtrader.interfaces.web_client import GridApiClient, GridApiError
-from gridtrader.shared.config import api_base_url
-from gridtrader.shared.price_format import format_price, infer_price_precision
+from grid_server.interfaces.web_client import GridApiClient, GridApiError
+from grid_server.shared.config import api_base_url
+from grid_server.shared.price_format import format_price, infer_price_precision
 
 
 st.set_page_config(page_title="网格交易管理", layout="wide", initial_sidebar_state="expanded")
@@ -928,7 +928,7 @@ except GridApiError as exc:
     st.sidebar.title("交易管理")
     st.sidebar.caption(f"API {api_base_url()}")
     st.error(str(exc))
-    st.info("请先启动 FastAPI：.venv/bin/uvicorn gridtrader.api:create_app --factory --port 8100 --workers 1")
+    st.info("请先启动 FastAPI：.venv/bin/uvicorn grid_server.api:create_app --factory --port 8100 --workers 1")
     st.stop()
 
 current_page = render_sidebar(strategies)

@@ -11,13 +11,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from gridtrader.application.reliability import (
+from grid_server.application.reliability import (
     append_jsonl,
     collect_sample,
     summarize_jsonl,
 )
-from gridtrader.infrastructure.binance import BinanceFuturesExchange
-from gridtrader.shared.config import (
+from grid_server.infrastructure.binance import BinanceFuturesExchange
+from grid_server.shared.config import (
     api_base_url,
     binance_base_url,
     binance_credentials,

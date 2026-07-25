@@ -6,10 +6,10 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from gridtrader.domain import CellStage, Mode, OrderSide, StrategyStatus
-from gridtrader.scheduler import StrategyScheduler
-from gridtrader.service import GridService
-from gridtrader.store import SQLiteStore
+from grid_server.domain import CellStage, Mode, OrderSide, StrategyStatus
+from grid_server.scheduler import StrategyScheduler
+from grid_server.service import GridService
+from grid_server.store import SQLiteStore
 
 from tests.fakes import FakeExchange
 

@@ -7,8 +7,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from gridtrader.api import create_app
-from gridtrader.domain import CellStage
+from grid_server.api import create_app
+from grid_server.domain import CellStage
 from tests.fakes import FakeExchange
 
 

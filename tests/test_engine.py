@@ -5,9 +5,9 @@ import unittest
 from decimal import Decimal
 from pathlib import Path
 
-from gridtrader.domain import CellStage, Mode, OrderSide, StrategyConfig
-from gridtrader.engine import TradingEngine
-from gridtrader.store import SQLiteStore
+from grid_server.domain import CellStage, Mode, OrderSide, StrategyConfig
+from grid_server.engine import TradingEngine
+from grid_server.store import SQLiteStore
 
 from tests.fakes import FakeExchange
 

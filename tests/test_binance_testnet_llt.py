@@ -10,15 +10,15 @@ from urllib.parse import urlparse
 
 from fastapi.testclient import TestClient
 
-from gridtrader.api import create_app
-from gridtrader.binance import BinanceFuturesExchange, decimal_text
-from gridtrader.config import binance_base_url, binance_credentials, load_environment
-from gridtrader.domain import CellStage, Mode, OrderSide, OrderStatus, SymbolFilters
-from gridtrader.engine import TradingEngine
-from gridtrader.position_coordinator import PositionCoordinator
-from gridtrader.service import GridService
-from gridtrader.snapshot_exchange import SnapshotExchange
-from gridtrader.store import SQLiteStore
+from grid_server.api import create_app
+from grid_server.binance import BinanceFuturesExchange, decimal_text
+from grid_server.config import binance_base_url, binance_credentials, load_environment
+from grid_server.domain import CellStage, Mode, OrderSide, OrderStatus, SymbolFilters
+from grid_server.engine import TradingEngine
+from grid_server.position_coordinator import PositionCoordinator
+from grid_server.service import GridService
+from grid_server.snapshot_exchange import SnapshotExchange
+from grid_server.store import SQLiteStore
 
 from tests.test_binance_testnet_orders import round_to_step, wait_for_status
 

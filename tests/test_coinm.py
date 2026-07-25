@@ -9,19 +9,19 @@ from unittest.mock import Mock
 
 from fastapi.testclient import TestClient
 
-from gridtrader.api import create_app
-from gridtrader.binance import BinanceCoinMExchange
-from gridtrader.domain import (
+from grid_server.api import create_app
+from grid_server.binance import BinanceCoinMExchange
+from grid_server.domain import (
     CellStage,
     FuturesMarket,
     Mode,
     StrategyConfig,
     SymbolFilters,
 )
-from gridtrader.engine import TradingEngine
-from gridtrader.scheduler import StrategyScheduler
-from gridtrader.service import GridService
-from gridtrader.store import SQLiteStore
+from grid_server.engine import TradingEngine
+from grid_server.scheduler import StrategyScheduler
+from grid_server.service import GridService
+from grid_server.store import SQLiteStore
 from tests.fakes import FakeExchange
 
 

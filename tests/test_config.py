@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from gridtrader.config import (
+from grid_server.config import (
     api_base_url,
     binance_coinm_base_url,
     binance_credentials,

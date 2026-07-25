@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from gridtrader.application.performance import percentile, run_benchmark_case
+from grid_server.application.performance import percentile, run_benchmark_case
 
 
 class PerformanceAcceptanceTests(unittest.TestCase):

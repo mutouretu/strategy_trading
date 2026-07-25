@@ -1,8 +1,30 @@
-# Grid Trading Web 架构
+# Grid Trading 架构
 
-## 目标
+## 顶层边界
 
-后端按变化原因拆分，而不是按开发先后堆在同一目录。交易规则、币安协议、数据库、进程管理和 HTTP 展示可以分别修改与测试。
+工程由三个业务命名空间组成：
+
+| 命名空间 | 负责 | 不负责 |
+| --- | --- | --- |
+| `grid_rule/` | 给定网格参数后的 Cell、订单意图和成交状态转换 | 建仓时机、资金分配、实盘可靠执行 |
+| `grid_strategies/` | 创建、组合、调整和退出一组或多组网格 | Binance、SQLite、HTTP、仿真循环 |
+| `grid_server/` | 实盘 API、页面、调度、存储、交易所接入和一致性恢复 | 仿真市场生成、策略研究框架 |
+
+依赖方向为：
+
+```text
+grid_server ───────► grid_strategies ───────► grid_rule
+                              ▲
+                              │ adapter injection
+simulation_runtime ───────────┘
+```
+
+`market_simulator` 只调用注入的通用决策接口，不导入任何具体网格策略。当前
+`grid_server` 尚未切换到新规则和策略包；上图是仿真验证完成后的目标依赖方向。
+
+## Grid Server 内部结构
+
+服务内部按变化原因拆分。交易所协议、数据库、进程管理和 HTTP 展示可以分别修改与测试。
 
 ```text
 app.py (Streamlit)
@@ -16,7 +38,7 @@ interfaces ─────► application ─────► domain
 runtime ───────────────┘
 ```
 
-`runtime` 是进程组合层：它把 application 用例与 infrastructure 适配器装配成长期运行的服务。`interfaces` 是请求组合层：它把 FastAPI 请求转换成 application 调用。
+`runtime` 是进程组合层：它把 application 用例与 infrastructure 适配器装配成长期运行的服务。`interfaces` 是请求组合层：它把 FastAPI 请求转换成 application 调用。以下目录都位于 `grid_server/`。
 
 ## 目录职责
 
@@ -37,7 +59,9 @@ runtime ───────────────┘
 3. `application` 决定业务行为，不读取环境变量，也不直接发 HTTP 请求。
 4. `runtime` 和 `interfaces` 负责实例化具体实现。
 5. Streamlit 页面只通过 `interfaces.web_client` 访问后端，不直接导入数据库、交易引擎或 Binance 密钥。
-6. 根目录旧模块只是兼容入口；新增代码必须导入分层后的规范路径。
+6. `grid_server` 根目录旧模块只是兼容入口；新增代码必须导入分层后的规范路径。
+7. `grid_rule` 和 `grid_strategies` 不得反向依赖 `grid_server`。
+8. 策略核心不得依赖仿真运行时；协议转换只能放入 `adapters/`。
 
 ## 常见修改的位置
 
@@ -54,7 +78,7 @@ runtime ───────────────┘
 
 ## 兼容策略
 
-旧路径（例如 `gridtrader.engine`、`gridtrader.store`、`gridtrader.api`）暂时继续可用，并转发到规范实现。现有脚本和测试无需一次性修改；新代码应使用 `gridtrader.application.engine`、`gridtrader.infrastructure.sqlite_store`、`gridtrader.interfaces.api` 等规范路径。
+旧路径（例如 `grid_server.engine`、`grid_server.store`、`grid_server.api`）暂时继续可用，并转发到规范实现。现有脚本和测试无需一次性修改；新代码应使用 `grid_server.application.engine`、`grid_server.infrastructure.sqlite_store`、`grid_server.interfaces.api` 等规范路径。
 
 兼容层不允许新增业务代码。等所有部署脚本和外部调用迁移完成后，可以单独版本化删除。
 

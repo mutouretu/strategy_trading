@@ -4,7 +4,7 @@ import unittest
 
 import requests
 
-from gridtrader.web_client import GridApiClient, GridApiError
+from grid_server.web_client import GridApiClient, GridApiError
 
 
 class FakeResponse:

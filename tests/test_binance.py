@@ -4,9 +4,9 @@ import unittest
 from decimal import Decimal
 from unittest.mock import Mock
 
-from gridtrader.binance import BinanceAPIError, BinanceFuturesExchange
-from gridtrader.domain import OrderSide
-from gridtrader.exchange import ExchangeExecutionUnknownError, OrderNotFoundError
+from grid_server.binance import BinanceAPIError, BinanceFuturesExchange
+from grid_server.domain import OrderSide
+from grid_server.exchange import ExchangeExecutionUnknownError, OrderNotFoundError
 
 
 class BinanceFuturesExchangeTests(unittest.TestCase):

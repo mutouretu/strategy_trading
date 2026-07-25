@@ -3,8 +3,8 @@ from __future__ import annotations
 import unittest
 from decimal import Decimal
 
-from gridtrader.domain import Mode, StrategyConfig
-from gridtrader.grid_math import build_cells
+from grid_server.domain import Mode, StrategyConfig
+from grid_server.grid_math import build_cells
 
 
 class GridMathTests(unittest.TestCase):

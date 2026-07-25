@@ -1,6 +1,8 @@
-# Grid Trading Web
+# Grid Trading
 
-面向 Web 服务重构的 Binance U 本位与币本位永续触发式移动等比网格。项目保留原始 `GRID_TRADING` 作为行为基线，新后端不再依赖 CSV 恢复或 tmux 管理。
+网格交易规则、策略研究与生产级实盘服务的一体化工程。当前实盘服务支持 Binance
+U 本位与币本位永续触发式移动等比网格，使用 SQLite、共享调度器和 Web/API，
+不依赖旧命令行版本的 CSV 恢复或 tmux 管理。
 
 ## 架构
 
@@ -20,19 +22,30 @@ StrategyScheduler ── N lightweight TradingEngine states
 Binance USDⓈ-M / COIN-M Futures
 ```
 
-后端按职责分层：
+顶层代码按业务语义分为：
 
-- `gridtrader/domain/`：策略、Cell、订单模型及纯等比网格计算。
-- `gridtrader/ports/`：交易所等外部能力的抽象接口。
-- `gridtrader/application/`：触发、开平仓、移动窗口、策略用例和持仓一致性。
-- `gridtrader/infrastructure/`：Binance、SQLite 和轮询快照的具体适配器。
-- `gridtrader/runtime/`：共享调度器、进程监管和 worker 入口。
-- `gridtrader/interfaces/`：FastAPI 接口和 Streamlit 使用的 HTTP 客户端。
-- `gridtrader/shared/`：环境配置、价格格式化等无业务状态工具。
-- `gridtrader/*.py`：旧导入路径的薄兼容层，不再承载业务实现。
-- `legacy_grid/`：原仓库快照，仅用于行为对照和特征测试。
+- `grid_rule/`：单组网格的机械交易规则；核心不依赖 Web、交易所或 simulator。
+- `grid_strategies/`：高层网格策略；当前包含用于验证完整调用链的单组跟随网格策略。
+- `grid_server/`：生产级实盘前后端服务，内部职责如下。
+
+`grid_server` 按职责分层：
+
+- `grid_server/domain/`：策略、Cell、订单模型及纯等比网格计算。
+- `grid_server/ports/`：交易所等外部能力的抽象接口。
+- `grid_server/application/`：触发、开平仓、移动窗口、策略用例和持仓一致性。
+- `grid_server/infrastructure/`：Binance、SQLite 和轮询快照的具体适配器。
+- `grid_server/runtime/`：共享调度器、进程监管和 worker 入口。
+- `grid_server/interfaces/`：FastAPI 接口和 Streamlit 使用的 HTTP 客户端。
+- `grid_server/shared/`：环境配置、价格格式化等无业务状态工具。
+- `grid_server/*.py`：旧导入路径的薄兼容层，不再承载业务实现。
+
+当前 `grid_server` 仍运行已经过实盘验证的原有实现，尚未切换到 `grid_rule` 或
+`grid_strategies`。规则和策略完成仿真验证后，再单独进行一次实盘迁移和验收。
 
 更完整的依赖边界和文件归属说明见 `docs/architecture.md`。
+旧命令行版本的代码谱系和行为测试迁移记录见 `docs/legacy-cli-history.md`。
+规则引擎仿真的当前范围和运行方法见 `docs/grid-rule-simulation.md`。这里的规则引擎只处理
+给定参数后的 Cell 与订单转换；建网格时机、资本分配和整体退出属于后续高层策略。
 
 ## 锚点语义
 
@@ -42,20 +55,9 @@ Binance USDⓈ-M / COIN-M Futures
 
 ## 安装
 
-项目通过 Git submodule 引用原始 `GRID_TRADING` 行为基线。首次克隆请初始化子模块：
-
 ```bash
-git clone --recurse-submodules git@github.com:mutouretu/grid_trading_web.git
-cd grid_trading_web
-```
-
-如果已经完成普通克隆，则执行：
-
-```bash
-git submodule update --init --recursive
-```
-
-```bash
+git clone git@github.com:mutouretu/grid_trading_web.git grid_trading
+cd grid_trading
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
@@ -65,7 +67,7 @@ python3 -m venv .venv
 项目会从仓库根目录的 `.env` 统一加载配置；已经由 shell/export 提供的变量优先，不会被 `.env` 覆盖。可参考 `.env.example`。因此无需再手动导出币安密钥：
 
 ```bash
-.venv/bin/uvicorn gridtrader.interfaces.api:create_app --factory --host 127.0.0.1 --port 8100 --workers 1
+.venv/bin/uvicorn grid_server.interfaces.api:create_app --factory --host 127.0.0.1 --port 8100 --workers 1
 ```
 
 接口文档：`http://127.0.0.1:8100/docs`
@@ -161,16 +163,8 @@ API 停止或删除可以与正在执行的调度 tick 并发发生。调度器�
 
 50 组 × 5 Cell 的离线性能矩阵和 24 小时耐久测试使用 `scripts/performance_acceptance.py`。它只连接独立 SQLite 和内存模拟交易所，具体场景、指标及 2 核 2 GB 验收方法见 `docs/performance-acceptance.md`。
 
-新后端测试：
-
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
-```
-
-原引擎基线测试：
-
-```bash
-PYTHONPATH=legacy_grid python3 -m unittest discover -s legacy_grid/tests -p 'test_*.py' -v
 ```
 
 测试覆盖等比计算、稳定 Cell ID、同币对多组网格隔离、配置不可逆锁定、SQLite 重启、软删除、API、做多/做空开平仓闭环、平台手动删单和删全部单后的分类恢复、部分成交后撤单、真实持仓部分/全部减少、外部平仓单预留/部分成交/取消、停止组隔离、未知订单防重复建仓、接口失败后的延迟重试、开放订单恢复、移动窗口、COIN-M 合约张数换算与产品资源池隔离，以及 50 组 × 5 Cell 的同币对和多币对调度负载。

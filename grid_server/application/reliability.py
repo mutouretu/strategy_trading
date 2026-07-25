@@ -514,7 +514,7 @@ def inspect_scheduler_processes(
             if len(parts) < 3:
                 continue
             pid_text, elapsed, command = parts
-            if "gridtrader.runtime.scheduler" not in command and "gridtrader.scheduler" not in command:
+            if "grid_server.runtime.scheduler" not in command and "grid_server.scheduler" not in command:
                 continue
             exact_db = False
             try:

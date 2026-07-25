@@ -22,11 +22,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from gridtrader.application.engine import TradingEngine
-from gridtrader.domain import CellStage, GridCell, OrderStatus, StrategyStatus
-from gridtrader.infrastructure.binance import BinanceFuturesExchange
-from gridtrader.infrastructure.sqlite_store import SQLiteStore, utc_now
-from gridtrader.shared.config import (
+from grid_server.application.engine import TradingEngine
+from grid_server.domain import CellStage, GridCell, OrderStatus, StrategyStatus
+from grid_server.infrastructure.binance import BinanceFuturesExchange
+from grid_server.infrastructure.sqlite_store import SQLiteStore, utc_now
+from grid_server.shared.config import (
     binance_base_url,
     binance_credentials,
     load_environment,

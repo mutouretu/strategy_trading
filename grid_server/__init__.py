@@ -1,4 +1,4 @@
-"""Web-native triggered grid trading backend."""
+"""Production grid trading server, runtime, and exchange adapters."""
 
 from .domain import CellStage, GridCell, Mode, StrategyConfig, StrategyStatus
 from .application.engine import TradingEngine

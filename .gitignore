@@ -13,7 +13,7 @@ __pycache__/
 *.sqlite3
 *.sqlite3-shm
 *.sqlite3-wal
-runtime/
+/runtime/
 *.log
 
 # Generated documentation and temporary inspection artifacts

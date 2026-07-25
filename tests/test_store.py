@@ -6,9 +6,9 @@ from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
-from gridtrader.domain import Mode, StrategyConfig, StrategyStatus
-from gridtrader.grid_math import build_cells
-from gridtrader.store import SQLiteStore
+from grid_server.domain import Mode, StrategyConfig, StrategyStatus
+from grid_server.grid_math import build_cells
+from grid_server.store import SQLiteStore
 
 
 class SQLiteStoreTests(unittest.TestCase):

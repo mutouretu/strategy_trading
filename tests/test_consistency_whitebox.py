@@ -5,12 +5,12 @@ import unittest
 from decimal import Decimal
 from pathlib import Path
 
-from gridtrader.domain import CellStage, Mode, OrderSide, OrderSnapshot
-from gridtrader.engine import TradingEngine
-from gridtrader.position_coordinator import PositionCoordinator
-from gridtrader.service import GridService
-from gridtrader.snapshot_exchange import SnapshotExchange
-from gridtrader.store import SQLiteStore
+from grid_server.domain import CellStage, Mode, OrderSide, OrderSnapshot
+from grid_server.engine import TradingEngine
+from grid_server.position_coordinator import PositionCoordinator
+from grid_server.service import GridService
+from grid_server.snapshot_exchange import SnapshotExchange
+from grid_server.store import SQLiteStore
 
 from tests.fakes import FakeExchange
 

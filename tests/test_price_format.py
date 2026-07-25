@@ -1,7 +1,7 @@
 import unittest
 from decimal import Decimal
 
-from gridtrader.price_format import format_price, infer_price_precision
+from grid_server.price_format import format_price, infer_price_precision
 
 
 class PriceFormatTests(unittest.TestCase):

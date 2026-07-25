@@ -21,8 +21,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from gridtrader.binance import BinanceAPIError, BinanceFuturesExchange, decimal_text
-from gridtrader.config import binance_base_url, binance_credentials, load_environment
+from grid_server.binance import BinanceAPIError, BinanceFuturesExchange, decimal_text
+from grid_server.config import binance_base_url, binance_credentials, load_environment
 
 
 TERMINAL_ORDER_STATUSES = {"FILLED", "CANCELED", "EXPIRED", "REJECTED"}

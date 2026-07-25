@@ -7,10 +7,10 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from gridtrader.domain import Mode, StrategyStatus
-from gridtrader.service import GridService
-from gridtrader.store import SQLiteStore
-from gridtrader.supervisor import StrategySupervisor
+from grid_server.domain import Mode, StrategyStatus
+from grid_server.service import GridService
+from grid_server.store import SQLiteStore
+from grid_server.supervisor import StrategySupervisor
 
 
 class ServiceAndSupervisorTests(unittest.TestCase):
@@ -37,7 +37,7 @@ class ServiceAndSupervisorTests(unittest.TestCase):
             (Decimal("110"), Decimal("121")),
         ])
 
-    @patch("gridtrader.supervisor.subprocess.Popen")
+    @patch("grid_server.supervisor.subprocess.Popen")
     def test_first_start_locks_config_before_process_spawn(self, popen):
         process = MagicMock()
         process.pid = 43210
@@ -52,7 +52,7 @@ class ServiceAndSupervisorTests(unittest.TestCase):
                 self.service.editable_copy(self.config.strategy_id, grid_count=4), Decimal("0.01")
             )
 
-    @patch("gridtrader.supervisor.subprocess.Popen", side_effect=OSError("spawn failed"))
+    @patch("grid_server.supervisor.subprocess.Popen", side_effect=OSError("spawn failed"))
     def test_spawn_failure_does_not_unlock_configuration(self, _popen):
         with self.assertRaises(OSError):
             self.service.start(self.config.strategy_id)
@@ -60,7 +60,7 @@ class ServiceAndSupervisorTests(unittest.TestCase):
         self.assertTrue(loaded.has_started)
         self.assertEqual(loaded.status, StrategyStatus.ERROR)
 
-    @patch("gridtrader.supervisor.subprocess.Popen")
+    @patch("grid_server.supervisor.subprocess.Popen")
     def test_multiple_strategies_share_one_scheduler_and_stop_is_isolated(self, popen):
         process = MagicMock()
         process.pid = 43210
@@ -81,7 +81,7 @@ class ServiceAndSupervisorTests(unittest.TestCase):
         self.assertTrue(self.supervisor.is_running(second.strategy_id))
         self.assertIsNone(process.terminate.call_args)
 
-    @patch("gridtrader.supervisor.subprocess.Popen")
+    @patch("grid_server.supervisor.subprocess.Popen")
     def test_scheduler_paths_do_not_change_with_working_directory(self, popen):
         process = MagicMock()
         process.pid = 43211

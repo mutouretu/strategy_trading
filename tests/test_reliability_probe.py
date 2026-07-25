@@ -7,14 +7,14 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from gridtrader.application.reliability import (
+from grid_server.application.reliability import (
     analyze_state,
     build_alerts,
     managed_client_id,
     read_database,
     summarize_jsonl,
 )
-from gridtrader.domain import (
+from grid_server.domain import (
     CellStage,
     GridCell,
     Mode,
@@ -25,7 +25,7 @@ from gridtrader.domain import (
     StrategyConfig,
     StrategyStatus,
 )
-from gridtrader.store import SQLiteStore
+from grid_server.store import SQLiteStore
 
 
 class ReliabilityProbeTests(unittest.TestCase):

@@ -48,8 +48,8 @@ After=network-online.target
 [Service]
 Type=oneshot
 User=grid
-WorkingDirectory=/opt/grid_trading_web
-ExecStart=/opt/grid_trading_web/.venv/bin/python scripts/reliability_probe.py --env-file test.env --streamlit-url http://127.0.0.1:8010 --pid-file runtime/scheduler.pid --label periodic --output runtime/reliability/testnet.jsonl
+WorkingDirectory=/opt/grid_trading
+ExecStart=/opt/grid_trading/.venv/bin/python scripts/reliability_probe.py --env-file test.env --streamlit-url http://127.0.0.1:8010 --pid-file runtime/scheduler.pid --label periodic --output runtime/reliability/testnet.jsonl
 ```
 
 `/etc/systemd/system/grid-reliability-probe.timer`：
@@ -80,7 +80,7 @@ journalctl -u grid-reliability-probe.service -n 50 --no-pager
 如果不使用 systemd，也可以加入运行用户的 `crontab -e`：
 
 ```cron
-*/5 * * * * cd /opt/grid_trading_web && .venv/bin/python scripts/reliability_probe.py --env-file test.env --streamlit-url http://127.0.0.1:8010 --pid-file runtime/scheduler.pid --label periodic --output runtime/reliability/testnet.jsonl >> runtime/reliability/probe.log 2>&1
+*/5 * * * * cd /opt/grid_trading && .venv/bin/python scripts/reliability_probe.py --env-file test.env --streamlit-url http://127.0.0.1:8010 --pid-file runtime/scheduler.pid --label periodic --output runtime/reliability/testnet.jsonl >> runtime/reliability/probe.log 2>&1
 ```
 
 同一套环境只配置一种定时方式，避免重复采样。

@@ -18,9 +18,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from gridtrader.domain.grid import round_down
-from gridtrader.infrastructure.binance import BinanceFuturesExchange
-from gridtrader.shared.config import (
+from grid_server.domain.grid import round_down
+from grid_server.infrastructure.binance import BinanceFuturesExchange
+from grid_server.shared.config import (
     binance_base_url,
     binance_credentials,
     load_environment,

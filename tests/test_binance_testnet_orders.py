@@ -7,10 +7,10 @@ from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from pathlib import Path
 from urllib.parse import urlparse
 
-from gridtrader.binance import BinanceFuturesExchange
-from gridtrader.config import binance_base_url, binance_credentials, load_environment
-from gridtrader.domain import OrderSide, OrderSnapshot, OrderStatus
-from gridtrader.exchange import OrderNotFoundError
+from grid_server.binance import BinanceFuturesExchange
+from grid_server.config import binance_base_url, binance_credentials, load_environment
+from grid_server.domain import OrderSide, OrderSnapshot, OrderStatus
+from grid_server.exchange import OrderNotFoundError
 
 
 SYMBOL = "UNIUSDT"

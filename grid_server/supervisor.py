@@ -5,7 +5,7 @@ import subprocess
 from .runtime.supervisor import StrategySupervisor
 
 # ``subprocess`` remains available because older tests and integrations patch
-# ``gridtrader.supervisor.subprocess.Popen``.  Both modules reference Python's
+# ``grid_server.supervisor.subprocess.Popen``.  Both modules reference Python's
 # same subprocess module object, so the compatibility patch still reaches the
 # canonical runtime implementation.
 __all__ = ["StrategySupervisor", "subprocess"]
