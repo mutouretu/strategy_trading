@@ -5,9 +5,11 @@ from __future__ import annotations
 from typing import Sequence
 
 from grid_rule import (
-    GridFill,
     GridOrderIntent,
-    GridOrderSide,
+)
+from grid_rule.adapters.passive_execution import (
+    PassiveGridIntentBook,
+    simulation_fills_to_grid_fills,
 )
 from grid_strategies.single_following_grid import (
     SingleFollowingGridStrategy,
@@ -15,82 +17,92 @@ from grid_strategies.single_following_grid import (
 )
 from market_protocol import MarketFrame
 from simulation_runtime import (
-    OrderSide,
-    OrderType,
+    IntentSnapshot,
     SimFill,
-    SimOrder,
-    SimulationDecision,
+    TradeInstruction,
 )
 
 
 class SingleFollowingGridSimulationAdapter:
-    """Expose the strategy through the generic simulation decision port."""
+    """Resolve one following grid's passive intents for simulation.
+
+    The adapter owns passive intent timing and exposes explicit trades only.
+    """
 
     def __init__(
         self,
         config: SingleFollowingGridStrategyConfig,
     ) -> None:
         self.strategy = SingleFollowingGridStrategy(config)
+        self._intent_book = PassiveGridIntentBook()
 
-    def initialize(self, frame: MarketFrame) -> SimulationDecision:
+    def initialize(self, frame: MarketFrame) -> None:
         self._check_instrument(frame.instrument)
-        return self._decision(self.strategy.initialize(frame.close))
+        intents = self.strategy.initialize(frame.close)
+        self._intent_book.synchronize(
+            intents,
+            current_sequence=frame.sequence,
+        )
 
-    def on_market(self, frame: MarketFrame) -> SimulationDecision:
+    def instructions_for(
+        self,
+        frame: MarketFrame,
+    ) -> tuple[TradeInstruction, ...]:
         self._check_instrument(frame.instrument)
-        return self._decision(self.strategy.on_market(frame.close))
+        return self._intent_book.instructions_for(
+            frame,
+            tags_for=self._tags,
+        )
+
+    def visible_intents(self) -> tuple[IntentSnapshot, ...]:
+        return self._intent_book.visible_intents(tags_for=self._tags)
+
+    def on_market(self, frame: MarketFrame) -> None:
+        self._check_instrument(frame.instrument)
+        intents = self.strategy.on_market(frame.close)
+        self._intent_book.synchronize(
+            intents,
+            current_sequence=frame.sequence,
+        )
 
     def on_fills(
         self,
         fills: Sequence[SimFill],
-    ) -> SimulationDecision:
-        grid_fills = tuple(
-            GridFill(
-                order_key=fill.order_key,
-                instrument=fill.instrument,
-                side=GridOrderSide(fill.side.value),
-                price=fill.price,
-                quantity=fill.quantity,
-                sequence=fill.sequence,
-                timestamp=fill.timestamp,
-            )
-            for fill in fills
+    ) -> None:
+        current_sequence = self._fill_sequence(fills)
+        grid_fills = simulation_fills_to_grid_fills(fills)
+        intents = self.strategy.on_fills(grid_fills)
+        self._intent_book.synchronize(
+            intents,
+            current_sequence=current_sequence,
         )
-        return self._decision(self.strategy.on_fills(grid_fills))
 
-    def _decision(
-        self,
-        intents: tuple[GridOrderIntent, ...],
-    ) -> SimulationDecision:
+    def _tags(self, intent: GridOrderIntent) -> dict[str, str]:
         rule = self.strategy.config.rule
-        return SimulationDecision(
-            tuple(
-                SimOrder(
-                    order_key=intent.order_key,
-                    instrument=intent.instrument,
-                    side=OrderSide(intent.side.value),
-                    order_type=OrderType.LIMIT,
-                    quantity=intent.quantity,
-                    limit_price=intent.price,
-                    tags={
-                        "strategy": "single_following_grid",
-                        "strategy_id": self.strategy.config.strategy_id,
-                        "rule_engine": "grid_rule",
-                        "market_type": rule.market_type.value,
-                        "quantity_unit": (
-                            "contracts"
-                            if rule.market_type.value == "coinm"
-                            else "base_asset"
-                        ),
-                        "contract_size": str(rule.contract_size),
-                        "cell_id": intent.cell_id,
-                        "role": intent.role.value,
-                        "cycle": str(intent.cycle),
-                    },
-                )
-                for intent in intents
-            )
-        )
+        return {
+            "strategy": "single_following_grid",
+            "strategy_id": self.strategy.config.strategy_id,
+            "rule_engine": "grid_rule",
+            "market_type": rule.market_type.value,
+            "quantity_unit": (
+                "contracts"
+                if rule.market_type.value == "coinm"
+                else "base_asset"
+            ),
+            "contract_size": str(rule.contract_size),
+            "cell_id": intent.cell_id,
+            "role": intent.role.value,
+            "cycle": str(intent.cycle),
+        }
+
+    @staticmethod
+    def _fill_sequence(fills: Sequence[SimFill]) -> int:
+        if not fills:
+            raise ValueError("fills must not be empty")
+        sequences = {fill.sequence for fill in fills}
+        if len(sequences) != 1:
+            raise ValueError("all fills must belong to the same frame")
+        return next(iter(sequences))
 
     def _check_instrument(self, instrument: str) -> None:
         expected = self.strategy.config.rule.instrument

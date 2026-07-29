@@ -104,7 +104,7 @@ class SingleFollowingGridStrategyTests(unittest.TestCase):
 
         result = SimulationRunner(
             source,
-            adapter,
+            trade_port=adapter,
             initial_equity=Decimal("1000"),
         ).run()
 
@@ -125,6 +125,10 @@ class SingleFollowingGridStrategyTests(unittest.TestCase):
         self.assertEqual(
             {fill.tags["strategy_id"] for fill in result.fills},
             {"simulation-call-chain"},
+        )
+        self.assertEqual(
+            [record.intent.reduce_only for record in result.intents],
+            [False, True, False],
         )
 
 

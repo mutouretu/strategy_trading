@@ -26,13 +26,14 @@ from grid_rule import (  # noqa: E402
 )
 from grid_rule.adapters import (  # noqa: E402
     GridRuleSimulationAdapter,
+    InverseContractFeeModel,
     InverseContractLedger,
 )
 from market_simulator import FixedBarMarketSource  # noqa: E402
 from scripts.run_single_following_grid_simulation import (  # noqa: E402
     build_run,
 )
-from simulation_runtime import OrderStatus, SimulationRunner  # noqa: E402
+from simulation_runtime import IntentStatus, SimulationRunner  # noqa: E402
 
 
 class GridRuleSimulationTests(unittest.TestCase):
@@ -40,12 +41,20 @@ class GridRuleSimulationTests(unittest.TestCase):
         document = build_run()
 
         self.assertEqual(
-            document["manifest"]["decision_component"],
-            "single_following_grid_strategy",
+            document["manifest"]["simulation_adapter"],
+            "single_following_grid_simulation_adapter",
         )
         self.assertEqual(
             document["manifest"]["strategy_id"],
             "single-following-grid-coinm-long-3y",
+        )
+        self.assertEqual(
+            document["manifest"]["maker_fee_rate"],
+            "0.0002",
+        )
+        self.assertEqual(
+            document["manifest"]["taker_fee_rate"],
+            "0.0005",
         )
         self.assertEqual(len(document["market"]), 1097)
         self.assertEqual(
@@ -69,13 +78,34 @@ class GridRuleSimulationTests(unittest.TestCase):
             document["summary"]["final_account_metrics"][
                 "total_equity_btc"
             ],
-            "1.122667821737918014344094411",
+            "1.122361740844490370041605073",
         )
         self.assertEqual(
             document["summary"]["final_account_metrics"][
                 "total_equity_usdt"
             ],
-            "179626.8514780668822950551058",
+            "179577.8785351184592066568117",
+        )
+        self.assertEqual(
+            document["summary"]["total_fees"],
+            "0.0003060808934276443024893379629",
+        )
+        self.assertEqual(
+            sum(
+                (
+                    Decimal(fill["fee_amount"])
+                    for fill in document["fills"]
+                ),
+                Decimal("0"),
+            ),
+            Decimal(document["summary"]["total_fees"]),
+        )
+        self.assertEqual(
+            {
+                fill["liquidity_role"]
+                for fill in document["fills"]
+            },
+            {"MAKER"},
         )
         self.assertTrue(
             document["summary"]["futures_equity_nonpositive"]
@@ -91,8 +121,8 @@ class GridRuleSimulationTests(unittest.TestCase):
         document = build_run(move_grid=False)
 
         self.assertEqual(
-            document["manifest"]["decision_component"],
-            "grid_rule_baseline",
+            document["manifest"]["simulation_adapter"],
+            "grid_rule_simulation_adapter",
         )
         self.assertIsNone(document["manifest"]["strategy_id"])
 
@@ -121,7 +151,7 @@ class GridRuleSimulationTests(unittest.TestCase):
 
         result = SimulationRunner(
             source,
-            adapter,
+            trade_port=adapter,
             initial_equity=Decimal("1000"),
         ).run()
 
@@ -133,8 +163,16 @@ class GridRuleSimulationTests(unittest.TestCase):
         self.assertEqual(result.final_equity, Decimal("1010"))
         self.assertEqual(adapter.engine.completed_cycles, 1)
         self.assertEqual(
-            [record.status for record in result.orders],
-            [OrderStatus.FILLED, OrderStatus.FILLED, OrderStatus.ACTIVE],
+            [record.status for record in result.intents],
+            [
+                IntentStatus.FILLED,
+                IntentStatus.FILLED,
+                IntentStatus.WAITING,
+            ],
+        )
+        self.assertEqual(
+            [record.intent.reduce_only for record in result.intents],
+            [False, True, False],
         )
         self.assertEqual(result.fills[0].tags["role"], "entry")
         self.assertEqual(result.fills[1].tags["role"], "exit")
@@ -164,7 +202,7 @@ class GridRuleSimulationTests(unittest.TestCase):
 
         result = SimulationRunner(
             source,
-            adapter,
+            trade_port=adapter,
             initial_equity=Decimal("1000"),
         ).run()
 
@@ -175,6 +213,10 @@ class GridRuleSimulationTests(unittest.TestCase):
         self.assertEqual(result.final_positions, {})
         self.assertEqual(result.final_equity, Decimal("1009.090"))
         self.assertEqual(adapter.engine.completed_cycles, 1)
+        self.assertEqual(
+            [record.intent.reduce_only for record in result.intents],
+            [False, True, False],
+        )
 
     def test_coinm_grid_keeps_spot_btc_and_settles_contract_pnl_in_btc(
         self,
@@ -205,7 +247,12 @@ class GridRuleSimulationTests(unittest.TestCase):
 
         result = SimulationRunner(
             source,
-            adapter,
+            trade_port=adapter,
+            fee_model=InverseContractFeeModel(
+                contract_size=config.contract_size,
+                maker_fee_rate=Decimal("0.0002"),
+                taker_fee_rate=Decimal("0.0005"),
+            ),
             ledger_factory=lambda: InverseContractLedger(
                 instrument=config.instrument,
                 contract_size=config.contract_size,
@@ -218,11 +265,27 @@ class GridRuleSimulationTests(unittest.TestCase):
             Decimal("1") / Decimal("100000")
             - Decimal("1") / Decimal("110000")
         )
-        self.assertEqual(result.realized_pnl, expected_pnl)
-        self.assertEqual(result.final_cash, Decimal("0.1") + expected_pnl)
+        entry_fee = (
+            Decimal("200")
+            / Decimal("100000")
+            * Decimal("0.0002")
+        )
+        exit_fee = (
+            Decimal("200")
+            / Decimal("110000")
+            * Decimal("0.0002")
+        )
+        expected_fees = entry_fee + exit_fee
+        expected_net = expected_pnl - expected_fees
+        expected_cash = Decimal("0.1") + expected_net
+        expected_equity = Decimal("1") + expected_cash
+        self.assertEqual(result.gross_realized_pnl, expected_pnl)
+        self.assertEqual(result.total_fees, expected_fees)
+        self.assertEqual(result.realized_pnl, expected_net)
+        self.assertEqual(result.final_cash, expected_cash)
         self.assertEqual(
             result.final_equity,
-            Decimal("1.1") + expected_pnl,
+            expected_equity,
         )
         self.assertEqual(
             result.final_account_metrics["spot_btc"],
@@ -230,7 +293,11 @@ class GridRuleSimulationTests(unittest.TestCase):
         )
         self.assertEqual(
             result.final_account_metrics["total_equity_usdt"],
-            Decimal("121020"),
+            expected_equity * Decimal("110000"),
+        )
+        self.assertEqual(
+            [fill.fee_asset for fill in result.fills],
+            ["BTC", "BTC"],
         )
 
 

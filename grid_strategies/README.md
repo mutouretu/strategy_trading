@@ -7,7 +7,9 @@
 - 什么条件下加仓、减仓或整体退出。
 
 策略核心可以依赖 `grid_rule`，但不能依赖 `grid_server`、交易所、数据库或仿真运行时。
-对 `SimulationDecisionPort` 等外部接口的转换放在 `adapters/`。
+对 `SimulationTradePort` 等外部接口的转换放在 `adapters/`。适配器负责保存仿真意图
+的生效时间，并把当前 K 线覆盖的被动意图转换为明确价格的交易指令；策略核心本身不
+依赖这些仿真类型。
 
 当前最小实现是 `SingleFollowingGridStrategy`：
 

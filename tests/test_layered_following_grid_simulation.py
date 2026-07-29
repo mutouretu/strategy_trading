@@ -29,10 +29,14 @@ class LayeredFollowingGridSimulationTests(unittest.TestCase):
         summary = document["summary"]
 
         self.assertEqual(
-            document["manifest"]["decision_component"],
-            "layered_following_grid_strategy",
+            document["manifest"]["simulation_adapter"],
+            "layered_following_grid_simulation_adapter",
         )
         self.assertEqual(document["manifest"]["deployment_step"], "5000")
+        self.assertEqual(
+            document["manifest"]["maker_fee_rate"],
+            "0.0002",
+        )
         self.assertEqual(len(document["market"]), 1097)
         self.assertEqual(
             min(Decimal(bar["low"]) for bar in document["market"]),
@@ -68,11 +72,15 @@ class LayeredFollowingGridSimulationTests(unittest.TestCase):
         )
         self.assertEqual(
             summary["final_account_metrics"]["total_equity_btc"],
-            "1.218790598279244079778976014",
+            "1.218365064328432631408023886",
         )
         self.assertEqual(
             summary["final_account_metrics"]["total_equity_usdt"],
-            "195006.4957246790527646361622",
+            "194938.4102925492210252838218",
+        )
+        self.assertEqual(
+            summary["total_fees"],
+            "0.0004255339508114483709521293336",
         )
         self.assertFalse(summary["futures_equity_nonpositive"])
 

@@ -1,0 +1,50 @@
+{
+  "fixture_id": "binance-coinm-official-docs-zero-position-v1",
+  "source_kind": "official_documentation_example",
+  "captured_at": "2026-07-28T00:00:00Z",
+  "api_product": "Binance COIN-M Futures",
+  "api_version": "dapi-v1",
+  "source_urls": [
+    "https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-coin-m-futures/api/rest-api/account#account-information",
+    "https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-coin-m-futures/api/rest-api/account#notional-bracket-for-symbol"
+  ],
+  "limitations": [
+    "The official account example has no open position.",
+    "This fixture validates field mapping and the zero-position baseline only.",
+    "A captured non-zero single-position fixture is still required before claiming live liquidation-price calibration."
+  ],
+  "instrument": "BTCUSD_PERP",
+  "contract_size": "100",
+  "notional_asset": "USD",
+  "mark_price_probe": "100000",
+  "maintenance_schedule": {
+    "version": "binance-official-docs-example-2026-07-28",
+    "maintenance_margin_rate": "0.004"
+  },
+  "platform_account_asset": {
+    "asset": "BTC",
+    "walletBalance": "0.00241969",
+    "unrealizedProfit": "0.00000000",
+    "marginBalance": "0.00241969",
+    "maintMargin": "0.00000000",
+    "initialMargin": "0.00000000",
+    "positionInitialMargin": "0.00000000",
+    "openOrderInitialMargin": "0.00000000",
+    "availableBalance": "0.00241969"
+  },
+  "platform_position": {
+    "symbol": "BTCUSD_PERP",
+    "positionAmt": "0",
+    "entryPrice": "0.0",
+    "unrealizedProfit": "0.00000000",
+    "positionInitialMargin": "0",
+    "maintMargin": "0",
+    "leverage": "125",
+    "notionalValue": "0"
+  },
+  "absolute_tolerances": {
+    "BTC": "0.00000001",
+    "USD": "0.01",
+    "PRICE": "0.1"
+  }
+}

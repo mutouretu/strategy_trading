@@ -29,6 +29,15 @@ from grid_strategies import (  # noqa: E402
     LayeredFollowingGridStrategy,
     LayeredFollowingGridStrategyConfig,
 )
+from grid_strategies.adapters import (  # noqa: E402
+    LayeredFollowingGridSimulationAdapter,
+)
+from market_protocol import MarketFrame  # noqa: E402
+from simulation_runtime import (  # noqa: E402
+    LiquidityRole,
+    SimFill,
+    TradeIntentMode,
+)
 
 
 def layered_rule() -> GridRuleConfig:
@@ -69,6 +78,68 @@ def fill_for(intent, sequence: int = 1) -> GridFill:
 
 
 class LayeredFollowingGridStrategyTests(unittest.TestCase):
+    def test_simulation_adapter_marks_only_exit_intents_reduce_only(
+        self,
+    ) -> None:
+        adapter = LayeredFollowingGridSimulationAdapter(
+            LayeredFollowingGridStrategyConfig(
+                strategy_id="layered-adapter-test",
+                rule_template=layered_rule(),
+                deployment_step=Decimal("5000"),
+            )
+        )
+        adapter.initialize(
+            MarketFrame(
+                sequence=0,
+                timestamp=0,
+                instrument="BTCUSDT",
+                open=Decimal("65000"),
+                high=Decimal("65000"),
+                low=Decimal("65000"),
+                close=Decimal("65000"),
+            )
+        )
+        entry = next(
+            intent
+            for intent in adapter.visible_intents()
+            if intent.tags["role"] == GridOrderRole.ENTRY.value
+        )
+
+        self.assertFalse(entry.reduce_only)
+
+        adapter.on_fills(
+            (
+                SimFill(
+                    fill_id=f"{entry.intent_key}@1",
+                    instruction_key=f"{entry.intent_key}:frame:1",
+                    source_intent_key=entry.intent_key,
+                    intent_mode=TradeIntentMode.PASSIVE,
+                    instrument=entry.instrument,
+                    side=entry.side,
+                    price=entry.target_price,
+                    quantity=entry.quantity,
+                    sequence=1,
+                    timestamp=1,
+                    liquidity_role=LiquidityRole.MAKER,
+                    fee_rate=Decimal("0"),
+                    fee_amount=Decimal("0"),
+                    fee_asset="USDT",
+                    reduce_only=entry.reduce_only,
+                    tags=entry.tags,
+                ),
+            )
+        )
+        exit_intent = next(
+            intent
+            for intent in adapter.visible_intents()
+            if (
+                intent.tags["role"] == GridOrderRole.EXIT.value
+                and intent.tags["cell_id"] == entry.tags["cell_id"]
+            )
+        )
+
+        self.assertTrue(exit_intent.reduce_only)
+
     def test_configuration_rejects_overlapping_initial_layers(self) -> None:
         with self.assertRaisesRegex(
             ValueError,

@@ -16,7 +16,12 @@ for package_path in (
     sys.path.insert(0, str(package_path))
 
 from grid_rule.adapters import InverseContractLedger  # noqa: E402
-from simulation_runtime import OrderSide, SimFill  # noqa: E402
+from simulation_runtime import (  # noqa: E402
+    LiquidityRole,
+    OrderSide,
+    SimFill,
+    TradeIntentMode,
+)
 
 
 INSTRUMENT = "BTCUSD_PERP"
@@ -30,13 +35,20 @@ def fill(
 ) -> SimFill:
     return SimFill(
         fill_id=f"fill:{key}",
-        order_key=key,
+        instruction_key=f"instruction:{key}",
+        source_intent_key=f"intent:{key}",
+        intent_mode=TradeIntentMode.ACTIVE,
         instrument=INSTRUMENT,
         side=side,
         price=Decimal(price),
         quantity=Decimal(quantity),
         sequence=1,
         timestamp=1,
+        liquidity_role=LiquidityRole.TAKER,
+        fee_rate=Decimal("0"),
+        fee_amount=Decimal("0"),
+        fee_asset="BTC",
+        reduce_only=False,
     )
 
 
@@ -76,6 +88,32 @@ class InverseContractLedgerTests(unittest.TestCase):
         )
         self.assertEqual(ledger.realized_pnl, expected)
 
+    def test_add_and_partial_reduce_keep_inverse_weighted_cost(self) -> None:
+        ledger = self.ledger()
+
+        ledger.apply(fill("open-1", OrderSide.BUY, "100000", "2"))
+        ledger.apply(fill("open-2", OrderSide.BUY, "120000", "1"))
+
+        expected_average = Decimal("3") / (
+            Decimal("2") / Decimal("100000")
+            + Decimal("1") / Decimal("120000")
+        )
+        self.assertEqual(ledger.average_entry_price, expected_average)
+
+        ledger.apply(fill("reduce", OrderSide.SELL, "130000", "1"))
+
+        expected_realized = Decimal("100") * (
+            Decimal("1") / expected_average
+            - Decimal("1") / Decimal("130000")
+        )
+        self.assertEqual(ledger.position_quantity, Decimal("2"))
+        self.assertEqual(ledger.average_entry_price, expected_average)
+        self.assertEqual(ledger.gross_realized_pnl, expected_realized)
+        self.assertEqual(
+            ledger.futures_wallet_balance,
+            Decimal("0.1") + expected_realized,
+        )
+
     def test_account_metrics_separate_spot_wallet_and_unrealized_pnl(
         self,
     ) -> None:
@@ -101,6 +139,7 @@ class InverseContractLedgerTests(unittest.TestCase):
             metrics["total_equity_usdt"],
             expected_total_btc * Decimal("80000"),
         )
+        self.assertEqual(metrics["contract_notional_usd"], Decimal("200"))
 
 
 if __name__ == "__main__":

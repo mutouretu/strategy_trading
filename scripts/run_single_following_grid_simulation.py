@@ -24,6 +24,7 @@ from grid_rule import (  # noqa: E402
 )
 from grid_rule.adapters import (  # noqa: E402
     GridRuleSimulationAdapter,
+    InverseContractFeeModel,
     InverseContractLedger,
 )
 from grid_strategies import (  # noqa: E402
@@ -34,12 +35,15 @@ from grid_strategies.adapters import (  # noqa: E402
 )
 from market_simulator import AnchoredGBMMarketSource  # noqa: E402
 from simulation_runtime import (  # noqa: E402
+    FixedRateFeeModel,
     SimulationRunner,
     simulation_result_to_document,
 )
 
 
 SEED = 42
+MAKER_FEE_RATE = Decimal("0.0002")
+TAKER_FEE_RATE = Decimal("0.0005")
 ANCHORS = (
     ("2026-01-01", "65000"),
     ("2026-07-01", "40000"),
@@ -59,10 +63,14 @@ def build_run(
     spot_btc: Decimal = Decimal("1"),
     futures_wallet_btc: Decimal = Decimal("0.1"),
     order_coin_qty: Decimal = Decimal("0.01"),
+    maker_fee_rate: Decimal = MAKER_FEE_RATE,
+    taker_fee_rate: Decimal = TAKER_FEE_RATE,
 ) -> dict[str, object]:
     spot_btc = Decimal(spot_btc)
     futures_wallet_btc = Decimal(futures_wallet_btc)
     order_coin_qty = Decimal(order_coin_qty)
+    maker_fee_rate = Decimal(maker_fee_rate)
+    taker_fee_rate = Decimal(taker_fee_rate)
     if coinm:
         config = GridRuleConfig(
             grid_id="grid-rule-coinm-long-3y",
@@ -117,7 +125,13 @@ def build_run(
     if coinm:
         runner = SimulationRunner(
             source,
-            adapter,
+            trade_port=adapter,
+            fee_model=InverseContractFeeModel(
+                contract_size=config.contract_size,
+                maker_fee_rate=maker_fee_rate,
+                taker_fee_rate=taker_fee_rate,
+                fee_asset="BTC",
+            ),
             ledger_factory=lambda: InverseContractLedger(
                 instrument=config.instrument,
                 contract_size=config.contract_size,
@@ -130,8 +144,13 @@ def build_run(
     else:
         runner = SimulationRunner(
             source,
-            adapter,
+            trade_port=adapter,
             initial_equity=10_000,
+            fee_model=FixedRateFeeModel(
+                maker_fee_rate=maker_fee_rate,
+                taker_fee_rate=taker_fee_rate,
+                fee_asset="USDT",
+            ),
         )
     result = runner.run(seed=seed)
     document = simulation_result_to_document(
@@ -152,10 +171,10 @@ def build_run(
         source="anchored_gbm",
         seed=seed,
         manifest={
-            "decision_component": (
-                "single_following_grid_strategy"
+            "simulation_adapter": (
+                "single_following_grid_simulation_adapter"
                 if move_grid
-                else "grid_rule_baseline"
+                else "grid_rule_simulation_adapter"
             ),
             "strategy_id": strategy_id,
             "rule_engine": "grid_rule",
@@ -173,6 +192,8 @@ def build_run(
                 else str(config.order_coin_qty)
             ),
             "contract_size": str(config.contract_size),
+            "maker_fee_rate": str(maker_fee_rate),
+            "taker_fee_rate": str(taker_fee_rate),
             "initial_spot_btc": str(spot_btc) if coinm else None,
             "initial_futures_wallet_btc": (
                 str(futures_wallet_btc) if coinm else None
@@ -207,7 +228,10 @@ def build_run(
         }
         for cell in engine.cells
     ]
-    document["summary"]["order_count"] = len(result.orders)
+    document["summary"]["intent_count"] = len(result.intents)
+    document["summary"]["instruction_count"] = len(
+        result.instructions
+    )
     document["summary"]["fill_count"] = len(result.fills)
     if coinm:
         futures_equity = [
@@ -276,6 +300,16 @@ def main() -> None:
         help="Target BTC amount per COIN-M grid cell.",
     )
     parser.add_argument(
+        "--maker-fee-rate",
+        type=Decimal,
+        default=MAKER_FEE_RATE,
+    )
+    parser.add_argument(
+        "--taker-fee-rate",
+        type=Decimal,
+        default=TAKER_FEE_RATE,
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=None,
@@ -305,6 +339,8 @@ def main() -> None:
                 spot_btc=args.spot_btc,
                 futures_wallet_btc=args.futures_wallet_btc,
                 order_coin_qty=args.order_coin_qty,
+                maker_fee_rate=args.maker_fee_rate,
+                taker_fee_rate=args.taker_fee_rate,
             ),
             ensure_ascii=False,
             indent=2,

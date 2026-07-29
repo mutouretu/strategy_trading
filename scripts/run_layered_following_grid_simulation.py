@@ -18,7 +18,10 @@ for package_path in (
     sys.path.insert(0, str(package_path))
 
 from grid_rule import GridMarketType, GridMode, GridRuleConfig  # noqa: E402
-from grid_rule.adapters import InverseContractLedger  # noqa: E402
+from grid_rule.adapters import (  # noqa: E402
+    InverseContractFeeModel,
+    InverseContractLedger,
+)
 from grid_strategies import (  # noqa: E402
     LayeredFollowingGridStrategyConfig,
 )
@@ -28,6 +31,8 @@ from grid_strategies.adapters import (  # noqa: E402
 from market_simulator import AnchoredGBMMarketSource  # noqa: E402
 from scripts.run_single_following_grid_simulation import (  # noqa: E402
     ANCHORS,
+    MAKER_FEE_RATE,
+    TAKER_FEE_RATE,
 )
 from simulation_runtime import (  # noqa: E402
     SimulationRunner,
@@ -44,10 +49,14 @@ def build_run(
     spot_btc: Decimal = Decimal("1"),
     futures_wallet_btc: Decimal = Decimal("0.2"),
     order_coin_qty: Decimal = Decimal("0.003"),
+    maker_fee_rate: Decimal = MAKER_FEE_RATE,
+    taker_fee_rate: Decimal = TAKER_FEE_RATE,
 ) -> dict[str, object]:
     spot_btc = Decimal(spot_btc)
     futures_wallet_btc = Decimal(futures_wallet_btc)
     order_coin_qty = Decimal(order_coin_qty)
+    maker_fee_rate = Decimal(maker_fee_rate)
+    taker_fee_rate = Decimal(taker_fee_rate)
     rule_template = GridRuleConfig(
         grid_id="layered-following-grid-template",
         instrument="BTCUSD_PERP",
@@ -79,7 +88,13 @@ def build_run(
     )
     runner = SimulationRunner(
         source,
-        adapter,
+        trade_port=adapter,
+        fee_model=InverseContractFeeModel(
+            contract_size=rule_template.contract_size,
+            maker_fee_rate=maker_fee_rate,
+            taker_fee_rate=taker_fee_rate,
+            fee_asset="BTC",
+        ),
         ledger_factory=lambda: InverseContractLedger(
             instrument=rule_template.instrument,
             contract_size=rule_template.contract_size,
@@ -98,7 +113,9 @@ def build_run(
         source="anchored_gbm",
         seed=seed,
         manifest={
-            "decision_component": "layered_following_grid_strategy",
+            "simulation_adapter": (
+                "layered_following_grid_simulation_adapter"
+            ),
             "strategy_id": strategy_config.strategy_id,
             "rule_engine": "grid_rule",
             "instrument": rule_template.instrument,
@@ -111,6 +128,8 @@ def build_run(
             "grid_count_per_layer": rule_template.grid_count,
             "order_coin_qty": str(rule_template.order_coin_qty),
             "contract_size": str(rule_template.contract_size),
+            "maker_fee_rate": str(maker_fee_rate),
+            "taker_fee_rate": str(taker_fee_rate),
             "initial_spot_btc": str(spot_btc),
             "initial_futures_wallet_btc": str(futures_wallet_btc),
             "price_floor": "40000",
@@ -143,7 +162,8 @@ def build_run(
                 }
                 for layer in strategy.layers
             ],
-            "order_count": len(result.orders),
+            "intent_count": len(result.intents),
+            "instruction_count": len(result.instructions),
             "fill_count": len(result.fills),
         }
     )
@@ -197,6 +217,16 @@ def main() -> None:
         type=Decimal,
         default=Decimal("0.003"),
     )
+    parser.add_argument(
+        "--maker-fee-rate",
+        type=Decimal,
+        default=MAKER_FEE_RATE,
+    )
+    parser.add_argument(
+        "--taker-fee-rate",
+        type=Decimal,
+        default=TAKER_FEE_RATE,
+    )
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
     output = args.output or (
@@ -213,6 +243,8 @@ def main() -> None:
                 spot_btc=args.spot_btc,
                 futures_wallet_btc=args.futures_wallet_btc,
                 order_coin_qty=args.order_coin_qty,
+                maker_fee_rate=args.maker_fee_rate,
+                taker_fee_rate=args.taker_fee_rate,
             ),
             ensure_ascii=False,
             indent=2,
