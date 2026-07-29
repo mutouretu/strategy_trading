@@ -4,6 +4,7 @@
   const DEFAULT_RUN =
     "./data/layered-following-grid-coinm-long-3y-seed-42.json";
   const VISIBLE_CANDLES = 80;
+  const {normalizeRun} = window.SimulationRunModel;
   const layout = {
     width: 1200,
     height: 680,
@@ -26,6 +27,9 @@
     timeline: document.getElementById("timeline"),
     progress: document.getElementById("progress"),
     message: document.getElementById("message"),
+    runStatusBanner: document.getElementById("run-status-banner"),
+    runStatusTitle: document.getElementById("run-status-title"),
+    runStatusDetail: document.getElementById("run-status-detail"),
     tooltip: document.getElementById("tooltip"),
     file: document.getElementById("run-file"),
     accountEquityLabel: document.getElementById("account-equity-label"),
@@ -47,12 +51,65 @@
     accountAverage: document.getElementById("account-average"),
     accountRealizedLabel: document.getElementById("account-realized-label"),
     accountRealized: document.getElementById("account-realized"),
-    activeOrderCount: document.getElementById("active-order-count"),
+    accountFeesLabel: document.getElementById("account-fees-label"),
+    accountFees: document.getElementById("account-fees"),
+    accountFundingLabel: document.getElementById(
+      "account-funding-label",
+    ),
+    accountFunding: document.getElementById("account-funding"),
+    marginBalanceLabel: document.getElementById("margin-balance-label"),
+    marginBalance: document.getElementById("margin-balance"),
+    maintenanceMarginLabel: document.getElementById(
+      "maintenance-margin-label",
+    ),
+    maintenanceMargin: document.getElementById("maintenance-margin"),
+    availableBalanceLabel: document.getElementById(
+      "available-balance-label",
+    ),
+    availableBalance: document.getElementById("available-balance"),
+    estimatedLiquidationPrice: document.getElementById(
+      "estimated-liquidation-price",
+    ),
+    activeIntentCount: document.getElementById("active-intent-count"),
     equityChart: document.getElementById("equity-chart"),
     equityUnit: document.getElementById("equity-unit"),
     equityNote: document.getElementById("equity-note"),
     fillCount: document.getElementById("fill-count"),
     fillsBody: document.getElementById("fills-body"),
+    intentCount: document.getElementById("intent-count"),
+    intentsBody: document.getElementById("intents-body"),
+    liquidationPanel: document.getElementById("liquidation-panel"),
+    liquidationNote: document.getElementById("liquidation-note"),
+    liquidationDate: document.getElementById("liquidation-date"),
+    liquidationMark: document.getElementById("liquidation-mark"),
+    liquidationSampling: document.getElementById(
+      "liquidation-sampling",
+    ),
+    liquidationPosition: document.getElementById(
+      "liquidation-position",
+    ),
+    liquidationWallet: document.getElementById("liquidation-wallet"),
+    liquidationUnrealized: document.getElementById(
+      "liquidation-unrealized",
+    ),
+    liquidationBalance: document.getElementById(
+      "liquidation-balance",
+    ),
+    liquidationMaintenance: document.getElementById(
+      "liquidation-maintenance",
+    ),
+    liquidationBuffer: document.getElementById(
+      "liquidation-buffer",
+    ),
+    liquidationLeverage: document.getElementById(
+      "liquidation-leverage",
+    ),
+    liquidationVersion: document.getElementById(
+      "liquidation-version",
+    ),
+    liquidationOrdering: document.getElementById(
+      "liquidation-ordering",
+    ),
   };
 
   let run = null;
@@ -68,154 +125,6 @@
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#039;");
-  }
-
-  function normalizeRun(raw) {
-    if (!raw || !raw.manifest || !Array.isArray(raw.market)) {
-      throw new Error("缺少 manifest 或 market 数组");
-    }
-    if (!raw.market.length) {
-      throw new Error("market 数组为空");
-    }
-    const normalizedMarket = raw.market.map((bar, index) => {
-      const normalized = {
-        sequence: Number(bar.sequence ?? index),
-        timestamp: Number(bar.timestamp),
-        date: bar.date || new Date(Number(bar.timestamp)).toISOString().slice(0, 10),
-        instrument: String(bar.instrument || raw.manifest.instrument || ""),
-        open: Number(bar.open),
-        high: Number(bar.high),
-        low: Number(bar.low),
-        close: Number(bar.close),
-      };
-      if (
-        !normalized.instrument ||
-        !Number.isFinite(normalized.timestamp) ||
-        ![normalized.open, normalized.high, normalized.low, normalized.close].every(
-          Number.isFinite,
-        ) ||
-        normalized.low > Math.min(normalized.open, normalized.close) ||
-        normalized.high < Math.max(normalized.open, normalized.close)
-      ) {
-        throw new Error(`第 ${index + 1} 根 K 线无效`);
-      }
-      return normalized;
-    });
-    const orders = (Array.isArray(raw.orders) ? raw.orders : []).map(
-      (order, index) => {
-        const normalized = {
-          order_key: String(order.order_key || ""),
-          instrument: String(order.instrument || raw.manifest.instrument || ""),
-          side: String(order.side || "").toUpperCase(),
-          order_type: String(order.order_type || "LIMIT").toUpperCase(),
-          quantity: Number(order.quantity),
-          price:
-            order.price === null || order.price === undefined
-              ? null
-              : Number(order.price),
-          active_from_sequence: Number(
-            order.active_from_sequence ?? order.sequence ?? 0,
-          ),
-          active_to_sequence:
-            order.active_to_sequence === null ||
-            order.active_to_sequence === undefined
-              ? null
-              : Number(order.active_to_sequence),
-          status: String(order.status || "ACTIVE").toUpperCase(),
-        };
-        if (
-          !normalized.order_key ||
-          !["BUY", "SELL"].includes(normalized.side) ||
-          !["LIMIT", "MARKET"].includes(normalized.order_type) ||
-          !Number.isFinite(normalized.quantity) ||
-          normalized.quantity <= 0 ||
-          !Number.isFinite(normalized.active_from_sequence) ||
-          (normalized.active_to_sequence !== null &&
-            !Number.isFinite(normalized.active_to_sequence)) ||
-          (normalized.price !== null && !Number.isFinite(normalized.price))
-        ) {
-          throw new Error(`第 ${index + 1} 条订单记录无效`);
-        }
-        return normalized;
-      },
-    );
-    const fills = (Array.isArray(raw.fills) ? raw.fills : []).map(
-      (fill, index) => {
-        const normalized = {
-          fill_id: String(fill.fill_id || ""),
-          order_key: String(fill.order_key || ""),
-          sequence: Number(fill.sequence),
-          timestamp: Number(fill.timestamp),
-          date: fill.date || "",
-          side: String(fill.side || "").toUpperCase(),
-          price: Number(fill.price),
-          quantity: Number(fill.quantity),
-        };
-        if (
-          !["BUY", "SELL"].includes(normalized.side) ||
-          ![
-            normalized.sequence,
-            normalized.timestamp,
-            normalized.price,
-            normalized.quantity,
-          ].every(Number.isFinite)
-        ) {
-          throw new Error(`第 ${index + 1} 条成交记录无效`);
-        }
-        return normalized;
-      },
-    );
-    const equity = (Array.isArray(raw.equity) ? raw.equity : []).map(
-      (snapshot, index) => {
-        const numericMap = (values) =>
-          Object.fromEntries(
-            Object.entries(values || {}).map(([key, value]) => [
-              key,
-              Number(value),
-            ]),
-          );
-        const normalized = {
-          sequence: Number(snapshot.sequence),
-          timestamp: Number(snapshot.timestamp),
-          date: String(snapshot.date || ""),
-          cash: Number(snapshot.cash),
-          positions: numericMap(snapshot.positions),
-          average_costs: numericMap(snapshot.average_costs),
-          marks: numericMap(snapshot.marks),
-          realized_pnl: Number(snapshot.realized_pnl),
-          equity: Number(snapshot.equity),
-          equity_asset: String(snapshot.equity_asset || "USDT").toUpperCase(),
-          account_metrics: numericMap(snapshot.account_metrics),
-        };
-        const mapValues = [
-          ...Object.values(normalized.positions),
-          ...Object.values(normalized.average_costs),
-          ...Object.values(normalized.marks),
-          ...Object.values(normalized.account_metrics),
-        ];
-        if (
-          ![
-            normalized.sequence,
-            normalized.cash,
-            normalized.realized_pnl,
-            normalized.equity,
-            ...mapValues,
-          ].every(Number.isFinite)
-        ) {
-          throw new Error(`第 ${index + 1} 条权益记录无效`);
-        }
-        return normalized;
-      },
-    );
-    return {
-      schema_version: raw.schema_version || 1,
-      manifest: raw.manifest,
-      market: normalizedMarket,
-      orders,
-      fills,
-      equity,
-      summary: raw.summary || {},
-    };
   }
 
   async function loadDefault() {
@@ -251,11 +160,21 @@
       .join(" · ");
     const riskDate =
       nextRun.summary.first_nonpositive_futures_equity_date;
-    elements.message.classList.toggle("risk", Boolean(riskDate));
-    elements.message.textContent = riskDate
-      ? `风险提示：${riskDate} 合约子账户权益已不大于 0；当前模型未执行强平，此日期之后的结果仅供公式调试`
+    const liquidationEvent = nextRun.account_events.at(-1);
+    elements.message.classList.toggle(
+      "risk",
+      Boolean(riskDate) || nextRun.run_status.liquidated,
+    );
+    elements.message.textContent = nextRun.run_status.liquidated
+      ? `仿真已于 ${liquidationEvent.date} 在标记价 ${money(
+          liquidationEvent.snapshot.mark_price,
+        )} 触发平台强平并终止；没有生成虚构的强平平仓成交`
+      : riskDate
+        ? `风险提示：${riskDate} 合约子账户权益已不大于 0；此历史结果未启用 MarginModel`
       : nextRun.fills.length
-        ? `${nextRun.orders.length} 条订单生命周期 · ${nextRun.fills.length} 条成交 · ${nextRun.equity.length} 个账户快照`
+        ? nextRun.schema_version === 2
+          ? `${nextRun.intents.length} 条意图生命周期 · ${nextRun.instructions.length} 条交易指令 · ${nextRun.fills.length} 条成交 · ${nextRun.funding_events.length} 次资金费`
+          : `${nextRun.orders.length} 条订单生命周期 · ${nextRun.fills.length} 条成交 · ${nextRun.equity.length} 个账户快照`
         : "市场数据已载入；当前 run 尚无策略成交";
     const settlementAsset = String(
       nextRun.summary.equity_asset ||
@@ -270,7 +189,85 @@
     elements.equityUnit.disabled =
       settlementAsset === "USDT" || !hasQuoteEquity;
     elements.equityUnit.value = "settlement";
+    renderRunStatus(nextRun);
+    renderLiquidationPanel(nextRun);
     render();
+  }
+
+  function renderRunStatus(currentRun) {
+    const status = currentRun.run_status;
+    const event = currentRun.account_events.at(-1);
+    elements.runStatusBanner.classList.toggle(
+      "liquidated",
+      status.liquidated,
+    );
+    elements.runStatusBanner.classList.toggle(
+      "bankrupt",
+      status.bankrupt,
+    );
+    if (!status.liquidated) {
+      elements.runStatusTitle.textContent = "正常完成";
+      elements.runStatusDetail.textContent =
+        `${currentRun.market.length} 根 K 线 · 未触发平台强平`;
+      return;
+    }
+    elements.runStatusTitle.textContent = status.bankrupt
+      ? "强平终止 · 已穿越破产线"
+      : "强平终止";
+    elements.runStatusDetail.textContent = [
+      event.date,
+      `mark ${money(event.snapshot.mark_price)}`,
+      event.mark_price_sampling,
+      event.intrabar_ordering_ambiguous
+        ? "盘中顺序不确定"
+        : "顺序确定",
+    ].join(" · ");
+  }
+
+  function renderLiquidationPanel(currentRun) {
+    const event = currentRun.account_events.at(-1);
+    elements.liquidationPanel.hidden = !event;
+    if (!event) return;
+    const snapshot = event.snapshot;
+    const settlement = snapshot.settlement_asset;
+    elements.liquidationNote.textContent = event.bankrupt
+      ? "强平触发时保证金余额已经不大于零"
+      : "强平触发时仍高于破产线，仓位保留为接管前状态";
+    elements.liquidationDate.textContent = event.date;
+    elements.liquidationMark.textContent =
+      `${money(snapshot.mark_price)} ${snapshot.notional_asset}`;
+    elements.liquidationSampling.textContent =
+      event.mark_price_sampling;
+    elements.liquidationPosition.textContent =
+      `${signedNumber(snapshot.position_quantity, 0)} ${snapshot.position_unit}`;
+    elements.liquidationWallet.textContent = assetAmount(
+      snapshot.wallet_balance,
+      settlement,
+    );
+    elements.liquidationUnrealized.textContent = assetAmount(
+      snapshot.unrealized_pnl,
+      settlement,
+    );
+    elements.liquidationBalance.textContent = assetAmount(
+      snapshot.margin_balance,
+      settlement,
+    );
+    elements.liquidationMaintenance.textContent = assetAmount(
+      snapshot.maintenance_margin,
+      settlement,
+    );
+    elements.liquidationBuffer.textContent = assetAmount(
+      snapshot.margin_buffer,
+      settlement,
+    );
+    elements.liquidationLeverage.textContent =
+      `${snapshot.leverage.toLocaleString("en-US")}×`;
+    elements.liquidationVersion.textContent =
+      event.maintenance_schedule_version;
+    elements.liquidationOrdering.textContent =
+      event.intrabar_ordering_ambiguous
+        ? "不确定（保守终止）"
+        : "确定";
   }
 
   function money(value) {
@@ -292,6 +289,16 @@
     return value.toFixed(0);
   }
 
+  function isIntentVisible(intent, currentSequence) {
+    const from = Number(intent.active_from_sequence ?? 0);
+    const to =
+      intent.active_to_sequence === null ||
+      intent.active_to_sequence === undefined
+        ? Number.POSITIVE_INFINITY
+        : Number(intent.active_to_sequence);
+    return from <= currentSequence && currentSequence < to;
+  }
+
   function render() {
     if (!run) return;
     const start = Math.max(0, cursor - VISIBLE_CANDLES + 1);
@@ -299,27 +306,30 @@
     const currentSequence = market[cursor].sequence;
     const plotWidth = layout.width - layout.left - layout.right;
     const plotHeight = layout.height - layout.top - layout.bottom;
-    const activeOrders = run.orders.filter((order) => {
-      const from = Number(order.active_from_sequence ?? order.sequence ?? 0);
-      const to =
-        order.active_to_sequence === null ||
-        order.active_to_sequence === undefined
-          ? Number.POSITIVE_INFINITY
-          : Number(order.active_to_sequence);
-      return (
-        from <= currentSequence &&
-        currentSequence < to &&
-        order.price !== null &&
-        Number.isFinite(Number(order.price))
-      );
-    });
+    const activeIntents = run.intents.filter((intent) =>
+      isIntentVisible(intent, currentSequence),
+    );
+    const pricedIntents = activeIntents.filter(
+      (intent) =>
+        intent.target_price !== null &&
+        Number.isFinite(Number(intent.target_price)),
+    );
     const visibleFills = run.fills.filter((fill) => {
       const index = sequenceIndex.get(Number(fill.sequence));
       return index !== undefined && index >= start && index <= cursor;
     });
+    const visibleAccountEvents = run.account_events.filter((event) => {
+      const index = sequenceIndex.get(Number(event.sequence));
+      return index !== undefined && index >= start && index <= cursor;
+    });
     const priceValues = bars.flatMap((bar) => [bar.high, bar.low]);
-    activeOrders.forEach((order) => priceValues.push(Number(order.price)));
+    pricedIntents.forEach((intent) =>
+      priceValues.push(Number(intent.target_price)),
+    );
     visibleFills.forEach((fill) => priceValues.push(Number(fill.price)));
+    visibleAccountEvents.forEach((event) =>
+      priceValues.push(Number(event.snapshot.mark_price)),
+    );
     const minPrice = Math.min(...priceValues);
     const maxPrice = Math.max(...priceValues);
     const padding = (maxPrice - minPrice) * 0.08 || maxPrice * 0.02;
@@ -375,13 +385,13 @@
       })
       .join("");
 
-    const orderLines = activeOrders
-      .map((order) => {
-        const py = y(Number(order.price));
-        const sideClass = String(order.side).toLowerCase();
+    const intentLines = pricedIntents
+      .map((intent) => {
+        const py = y(Number(intent.target_price));
+        const sideClass = String(intent.side).toLowerCase();
         return `
-          <line class="order-line ${sideClass}" x1="${layout.left}" x2="${layout.width - layout.right}" y1="${py}" y2="${py}"></line>
-          <text class="order-label ${sideClass}" x="${layout.left + 6}" y="${py - 5}">${escapeHtml(order.side || "")} ${money(order.price)}</text>
+          <line class="intent-line ${sideClass}" x1="${layout.left}" x2="${layout.width - layout.right}" y1="${py}" y2="${py}"></line>
+          <text class="intent-label ${sideClass}" x="${layout.left + 6}" y="${py - 5}">${escapeHtml(intent.side || "")} ${money(intent.target_price)}</text>
         `;
       })
       .join("");
@@ -402,14 +412,32 @@
       })
       .join("");
 
+    const liquidationMarkers = visibleAccountEvents
+      .map((event) => {
+        const eventIndex = sequenceIndex.get(Number(event.sequence));
+        const localIndex = eventIndex - start;
+        const px = x(localIndex);
+        const py = y(Number(event.snapshot.mark_price));
+        const size = 11;
+        return `
+          <g aria-label="强平 ${money(event.snapshot.mark_price)}">
+            <line class="liquidation-line" x1="${px}" x2="${px}" y1="${layout.top}" y2="${layout.top + plotHeight}"></line>
+            <polygon class="liquidation-marker" points="${px},${py - size} ${px + size},${py} ${px},${py + size} ${px - size},${py}"></polygon>
+            <text class="liquidation-label" x="${px}" y="${py + 3}">!</text>
+          </g>
+        `;
+      })
+      .join("");
+
     elements.chart.innerHTML = `
       <title id="chart-title">仿真日线 K 线</title>
-      <desc id="chart-description">显示最近 ${VISIBLE_CANDLES} 根日线、活动订单和策略成交。</desc>
+      <desc id="chart-description">显示最近 ${VISIBLE_CANDLES} 根日线、等待中的被动意图、策略成交和强平事件。</desc>
       ${horizontalGrid}
       ${verticalGrid}
-      ${orderLines}
+      ${intentLines}
       ${candles}
       ${fillMarkers}
+      ${liquidationMarkers}
       <line class="crosshair" id="crosshair-x" x1="0" x2="0" y1="${layout.top}" y2="${layout.top + plotHeight}" visibility="hidden"></line>
       <line class="crosshair" id="crosshair-y" x1="${layout.left}" x2="${layout.width - layout.right}" y1="0" y2="0" visibility="hidden"></line>
     `;
@@ -418,14 +446,22 @@
     elements.progress.textContent = `${market[cursor].date} · ${cursor + 1}/${market.length}`;
     showOHLC(market[cursor]);
     bindChartInteractions(start, slot, y);
-    renderAccount(activeOrders, currentSequence);
+    renderAccount(activeIntents);
     renderEquity(start);
     renderFills(currentSequence);
+    renderIntents(currentSequence);
   }
 
   function currentSnapshot() {
     const currentSequence = market[cursor].sequence;
     return [...run.equity]
+      .reverse()
+      .find((snapshot) => snapshot.sequence <= currentSequence);
+  }
+
+  function currentMarginSnapshot() {
+    const currentSequence = market[cursor].sequence;
+    return [...run.margin]
       .reverse()
       .find((snapshot) => snapshot.sequence <= currentSequence);
   }
@@ -444,7 +480,7 @@
     })}`;
   }
 
-  function renderAccount(activeOrders, currentSequence) {
+  function renderAccount(activeIntents) {
     const snapshot = currentSnapshot();
     if (!snapshot) {
       [
@@ -456,8 +492,14 @@
         elements.accountPosition,
         elements.accountAverage,
         elements.accountRealized,
+        elements.accountFees,
+        elements.accountFunding,
+        elements.marginBalance,
+        elements.maintenanceMargin,
+        elements.availableBalance,
+        elements.estimatedLiquidationPrice,
       ].forEach((element) => setMetric(element, "—"));
-      setMetric(elements.activeOrderCount, String(activeOrders.length));
+      setMetric(elements.activeIntentCount, String(activeIntents.length));
       return;
     }
 
@@ -465,6 +507,8 @@
     const position = Number(snapshot.positions[instrument] || 0);
     const average = snapshot.average_costs[instrument];
     const realized = Number(snapshot.realized_pnl);
+    const totalFees = Number(snapshot.total_fees);
+    const totalFunding = Number(snapshot.total_funding);
     const metrics = snapshot.account_metrics || {};
     const settlementAsset = String(
       snapshot.equity_asset || run.summary.equity_asset || "USDT",
@@ -500,8 +544,12 @@
       ? "合约持仓（张）"
       : "持仓";
     elements.accountRealizedLabel.textContent = isCoinM
-      ? `合约已实现 ${settlementAsset}`
-      : "已实现盈亏";
+      ? `合约净已实现 ${settlementAsset}`
+      : "净已实现盈亏";
+    elements.accountFeesLabel.textContent =
+      `累计手续费 ${settlementAsset}`;
+    elements.accountFundingLabel.textContent =
+      `资金费净入账 ${settlementAsset}`;
     setMetric(
       elements.accountEquity,
       `${assetAmount(settlementEquity, settlementAsset)} (${signedNumber(
@@ -551,14 +599,70 @@
       signedNumber(realized, settlementAsset === "BTC" ? 8 : 2),
       realized > 0 ? "positive" : realized < 0 ? "negative" : "",
     );
-    const allActiveOrders = run.orders.filter((order) => {
-      const to =
-        order.active_to_sequence === null
-          ? Number.POSITIVE_INFINITY
-          : order.active_to_sequence;
-      return order.active_from_sequence <= currentSequence && currentSequence < to;
-    });
-    setMetric(elements.activeOrderCount, String(allActiveOrders.length));
+    setMetric(
+      elements.accountFees,
+      assetAmount(
+        totalFees,
+        settlementAsset,
+        settlementAsset === "BTC" ? 8 : 2,
+      ),
+      totalFees > 0 ? "negative" : "",
+    );
+    setMetric(
+      elements.accountFunding,
+      signedNumber(
+        totalFunding,
+        settlementAsset === "BTC" ? 8 : 2,
+      ),
+      totalFunding > 0
+        ? "positive"
+        : totalFunding < 0
+          ? "negative"
+          : "",
+    );
+    const margin = currentMarginSnapshot();
+    if (margin) {
+      const marginAsset = margin.settlement_asset;
+      elements.marginBalanceLabel.textContent =
+        `保证金余额 ${marginAsset}`;
+      elements.maintenanceMarginLabel.textContent =
+        `维持保证金 ${marginAsset}`;
+      elements.availableBalanceLabel.textContent =
+        `可用余额 ${marginAsset}`;
+      setMetric(
+        elements.marginBalance,
+        assetAmount(margin.margin_balance, marginAsset),
+        margin.liquidation_triggered ? "negative" : "",
+      );
+      setMetric(
+        elements.maintenanceMargin,
+        assetAmount(margin.maintenance_margin, marginAsset),
+      );
+      setMetric(
+        elements.availableBalance,
+        assetAmount(margin.available_balance, marginAsset),
+        margin.available_balance < 0 ? "negative" : "",
+      );
+      setMetric(
+        elements.estimatedLiquidationPrice,
+        margin.estimated_liquidation_price === null
+          ? "—"
+          : `${money(
+              margin.estimated_liquidation_price,
+            )} ${margin.notional_asset}`,
+      );
+    } else {
+      elements.marginBalanceLabel.textContent = "保证金余额";
+      elements.maintenanceMarginLabel.textContent = "维持保证金";
+      elements.availableBalanceLabel.textContent = "可用余额";
+      [
+        elements.marginBalance,
+        elements.maintenanceMargin,
+        elements.availableBalance,
+        elements.estimatedLiquidationPrice,
+      ].forEach((element) => setMetric(element, "—"));
+    }
+    setMetric(elements.activeIntentCount, String(activeIntents.length));
   }
 
   function renderEquity(start) {
@@ -648,7 +752,7 @@
     elements.fillCount.textContent = `截至当前日期 ${fills.length} 笔`;
     if (!fills.length) {
       elements.fillsBody.innerHTML =
-        '<tr><td colspan="5" class="empty-cell">暂无成交</td></tr>';
+        '<tr><td colspan="8" class="empty-cell">暂无成交</td></tr>';
       return;
     }
     elements.fillsBody.innerHTML = [...fills]
@@ -658,13 +762,87 @@
         const index = sequenceIndex.get(Number(fill.sequence));
         const date = fill.date || market[index]?.date || `#${fill.sequence}`;
         const side = fill.side.toLowerCase();
+        const fee = Number(fill.fee_amount);
+        const feeText = (
+          fill.fee_amount !== null &&
+          Number.isFinite(fee)
+        )
+          ? assetAmount(
+              fee,
+              fill.fee_asset || "",
+              fill.fee_asset === "BTC" ? 8 : 4,
+            )
+          : "—";
+        const slippageBps = Number(fill.slippage_bps);
+        const slippageText = Number.isFinite(slippageBps)
+          ? `${signedNumber(slippageBps, 2)} bps`
+          : "—";
+        const slippageTitle = Number.isFinite(
+          Number(fill.reference_price),
+        )
+          ? `参考价 ${money(fill.reference_price)}`
+          : "";
         return `
           <tr>
             <td>${escapeHtml(date)}</td>
             <td><span class="side ${side}">${escapeHtml(fill.side)}</span></td>
             <td>${money(fill.price)}</td>
             <td>${escapeHtml(String(fill.quantity))}</td>
-            <td><span class="order-key" title="${escapeHtml(fill.order_key)}">${escapeHtml(fill.order_key)}</span></td>
+            <td>${escapeHtml(fill.liquidity_role || "—")}</td>
+            <td title="${escapeHtml(slippageTitle)}">${escapeHtml(slippageText)}</td>
+            <td>${escapeHtml(feeText)}</td>
+            <td><span class="intent-key" title="${escapeHtml(fill.source_intent_key)}">${escapeHtml(fill.source_intent_key)}</span></td>
+          </tr>
+        `;
+      })
+      .join("");
+  }
+
+  function renderIntents(currentSequence) {
+    const born = run.intents.filter(
+      (intent) =>
+        Number(intent.active_from_sequence) <= currentSequence,
+    );
+    const waiting = born.filter((intent) =>
+      isIntentVisible(intent, currentSequence),
+    );
+    elements.intentCount.textContent =
+      `当前等待 ${waiting.length} 条 · 累计出现 ${born.length} 条`;
+    if (!born.length) {
+      elements.intentsBody.innerHTML =
+        '<tr><td colspan="5" class="empty-cell">暂无交易意图</td></tr>';
+      return;
+    }
+    const displayed = [...born]
+      .sort((left, right) => {
+        const leftWaiting = isIntentVisible(left, currentSequence);
+        const rightWaiting = isIntentVisible(right, currentSequence);
+        if (leftWaiting !== rightWaiting) {
+          return Number(rightWaiting) - Number(leftWaiting);
+        }
+        return (
+          Number(right.active_from_sequence) -
+          Number(left.active_from_sequence)
+        );
+      })
+      .slice(0, 10);
+    elements.intentsBody.innerHTML = displayed
+      .map((intent) => {
+        const status = isIntentVisible(intent, currentSequence)
+          ? "WAITING"
+          : intent.status;
+        const side = intent.side.toLowerCase();
+        const target =
+          intent.target_price === null
+            ? "下一根开盘"
+            : money(intent.target_price);
+        return `
+          <tr>
+            <td><span class="intent-status ${status.toLowerCase()}">${escapeHtml(status)}</span></td>
+            <td>${escapeHtml(intent.intent_mode)}</td>
+            <td><span class="side ${side}">${escapeHtml(intent.side)}</span></td>
+            <td>${escapeHtml(target)}</td>
+            <td><span class="intent-key" title="${escapeHtml(intent.intent_key)}">${escapeHtml(intent.intent_key)}</span></td>
           </tr>
         `;
       })

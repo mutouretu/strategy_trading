@@ -4,16 +4,19 @@ from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Sequence
 
+from examples.intent_adapter_support import (
+    ExampleTradeIntentBook,
+    PassiveTradeIntent,
+)
 from market_protocol import MarketFrame
 from market_simulator import AnchoredGBMMarketSource
 from simulation_runtime import (
+    IntentSnapshot,
     OrderSide,
-    OrderType,
     SimFill,
-    SimOrder,
-    SimulationDecision,
     SimulationResult,
     SimulationRunner,
+    TradeInstruction,
 )
 
 
@@ -44,10 +47,10 @@ class _LevelState:
     buy_price: Decimal
     sell_price: Decimal
     cycle: int = 0
-    order: SimOrder | None = None
+    intent: PassiveTradeIntent | None = None
 
 
-class GeometricLadderDecisionProvider:
+class GeometricLadderTradeProvider:
     """Long-only passive ladder used to exercise the generic runtime.
 
     Buy prices are spaced geometrically below the first close. After one level
@@ -80,52 +83,82 @@ class GeometricLadderDecisionProvider:
             raise ValueError("price_quantum must be > 0")
         self._instrument = ""
         self._levels: dict[int, _LevelState] = {}
+        self._book = ExampleTradeIntentBook()
 
-    def initialize(self, frame: MarketFrame) -> SimulationDecision:
+    def initialize(self, frame: MarketFrame) -> None:
         self._instrument = frame.instrument
         self._levels = {}
         for index in range(1, self.level_count + 1):
             buy_price = self._price(frame.close / (self.step_ratio**index))
             sell_price = self._price(buy_price * self.step_ratio)
             state = _LevelState(index, buy_price, sell_price)
-            state.order = self._order(state, OrderSide.BUY)
+            state.intent = self._intent(state, OrderSide.BUY)
             self._levels[index] = state
-        return self._output()
+        self._book.synchronize_passive(
+            self._passive_intents(),
+            current_sequence=frame.sequence,
+        )
 
-    def on_market(self, frame: MarketFrame) -> SimulationDecision:
+    def instructions_for(
+        self,
+        frame: MarketFrame,
+    ) -> tuple[TradeInstruction, ...]:
         if frame.instrument != self._instrument:
             raise ValueError(
                 f"unexpected instrument {frame.instrument}; expected {self._instrument}"
             )
-        return self._output()
+        return self._book.instructions_for(frame)
+
+    def visible_intents(self) -> tuple[IntentSnapshot, ...]:
+        return self._book.visible_intents()
+
+    def on_market(self, frame: MarketFrame) -> None:
+        if frame.instrument != self._instrument:
+            raise ValueError(
+                f"unexpected instrument {frame.instrument}; expected {self._instrument}"
+            )
 
     def on_fills(
         self,
         fills: Sequence[SimFill],
-    ) -> SimulationDecision:
+    ) -> None:
+        current_sequence = self._fill_sequence(fills)
+        self._book.on_fills(fills)
         for fill in fills:
             level_index = int(fill.tags["ladder_level"])
             state = self._levels[level_index]
-            if state.order is None or fill.order_key != state.order.order_key:
-                raise ValueError(f"unexpected fill: {fill.order_key}")
+            if (
+                state.intent is None
+                or fill.source_intent_key != state.intent.intent_key
+            ):
+                raise ValueError(
+                    f"unexpected fill: {fill.source_intent_key}"
+                )
             if fill.side == OrderSide.BUY:
-                state.order = self._order(state, OrderSide.SELL)
+                state.intent = self._intent(state, OrderSide.SELL)
             else:
                 state.cycle += 1
-                state.order = self._order(state, OrderSide.BUY)
-        return self._output()
+                state.intent = self._intent(state, OrderSide.BUY)
+        self._book.synchronize_passive(
+            self._passive_intents(),
+            current_sequence=current_sequence,
+        )
 
-    def _order(self, state: _LevelState, side: OrderSide) -> SimOrder:
+    def _intent(
+        self,
+        state: _LevelState,
+        side: OrderSide,
+    ) -> PassiveTradeIntent:
         role = side.value.lower()
-        return SimOrder(
-            order_key=f"ladder:{state.index}:{role}:{state.cycle}",
+        return PassiveTradeIntent(
+            intent_key=f"ladder:{state.index}:{role}:{state.cycle}",
             instrument=self._instrument,
             side=side,
-            order_type=OrderType.LIMIT,
             quantity=self.quantity,
-            limit_price=(
+            target_price=(
                 state.buy_price if side == OrderSide.BUY else state.sell_price
             ),
+            reduce_only=side == OrderSide.SELL,
             tags={
                 "probe": "geometric-ladder",
                 "ladder_level": str(state.index),
@@ -134,14 +167,21 @@ class GeometricLadderDecisionProvider:
             },
         )
 
-    def _output(self) -> SimulationDecision:
-        return SimulationDecision(
-            tuple(
-                state.order
-                for state in self._levels.values()
-                if state.order is not None
-            )
+    def _passive_intents(self) -> tuple[PassiveTradeIntent, ...]:
+        return tuple(
+            state.intent
+            for state in self._levels.values()
+            if state.intent is not None
         )
+
+    @staticmethod
+    def _fill_sequence(fills: Sequence[SimFill]) -> int:
+        if not fills:
+            raise ValueError("fills must not be empty")
+        sequences = {fill.sequence for fill in fills}
+        if len(sequences) != 1:
+            raise ValueError("all fills must belong to the same frame")
+        return next(iter(sequences))
 
     def _price(self, value: Decimal) -> Decimal:
         return value.quantize(self.price_quantum, rounding=ROUND_HALF_UP)
@@ -158,6 +198,6 @@ def run_ladder_probe(seed: int = SEED) -> SimulationResult:
     )
     return SimulationRunner(
         source,
-        GeometricLadderDecisionProvider(),
+        trade_port=GeometricLadderTradeProvider(),
         initial_equity=INITIAL_EQUITY,
     ).run(seed=seed)

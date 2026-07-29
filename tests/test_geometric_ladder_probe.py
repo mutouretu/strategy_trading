@@ -8,7 +8,7 @@ from examples.geometric_ladder_probe import (
     ORDER_QUANTITY,
     run_ladder_probe,
 )
-from simulation_runtime import OrderSide, OrderStatus
+from simulation_runtime import OrderSide, TradeIntentMode
 
 
 class GeometricLadderProbeTests(unittest.TestCase):
@@ -31,14 +31,15 @@ class GeometricLadderProbeTests(unittest.TestCase):
         self.assertEqual(result.realized_pnl, Decimal("972.8853"))
         self.assertEqual(result.final_equity, Decimal("10972.8853"))
         self.assertEqual(
-            len({record.order.order_key for record in result.orders}),
-            len(result.orders),
+            len({fill.source_intent_key for fill in result.fills}),
+            len(result.fills),
         )
-        records = {record.order.order_key: record for record in result.orders}
         for fill in result.fills:
-            record = records[fill.order_key]
-            self.assertEqual(record.status, OrderStatus.FILLED)
-            self.assertGreater(fill.sequence, record.active_from_sequence)
+            self.assertGreater(fill.sequence, 0)
+            self.assertEqual(
+                fill.intent_mode,
+                TradeIntentMode.PASSIVE,
+            )
         for snapshot in result.equity_curve:
             self.assertGreaterEqual(snapshot.positions.get("BTCUSD", Decimal("0")), 0)
             self.assertEqual(

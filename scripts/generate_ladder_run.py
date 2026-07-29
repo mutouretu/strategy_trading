@@ -34,7 +34,7 @@ def build_run(seed: int = SEED) -> dict[str, object]:
         source="anchored_gbm",
         seed=seed,
         manifest={
-            "decision_provider": "geometric_ladder_probe",
+            "trade_provider": "geometric_ladder_probe",
             "annual_volatility": str(ANNUAL_VOLATILITY),
             "price_floor": str(PRICE_FLOOR),
             "price_ceiling": str(PRICE_CEILING),
@@ -47,7 +47,10 @@ def build_run(seed: int = SEED) -> dict[str, object]:
             ],
         },
     )
-    document["summary"]["order_count"] = len(result.orders)
+    document["summary"]["intent_count"] = len(result.intents)
+    document["summary"]["instruction_count"] = len(
+        result.instructions
+    )
     document["summary"]["fill_count"] = len(result.fills)
     document["summary"]["completed_sell_count"] = sum(
         fill.side.value == "SELL" for fill in result.fills

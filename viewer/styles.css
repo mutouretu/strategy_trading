@@ -11,7 +11,8 @@
   --tv-blue-hover: #1e53e5;
   --tv-up: #089981;
   --tv-down: #f23645;
-  --tv-order: #ffb74d;
+  --tv-waiting: #ffb74d;
+  --tv-liquidation: #ff9800;
   --tv-crosshair: #758696;
 }
 
@@ -159,6 +160,12 @@ main {
   background: var(--tv-down);
 }
 
+.legend-swatch.liquidation {
+  border-radius: 2px;
+  background: var(--tv-liquidation);
+  transform: rotate(45deg);
+}
+
 .ohlc .up {
   color: var(--tv-up);
 }
@@ -266,30 +273,30 @@ select {
   stroke: var(--tv-down);
 }
 
-.order-line {
+.intent-line {
   stroke-width: 1;
   stroke-dasharray: 5 4;
   vector-effect: non-scaling-stroke;
 }
 
-.order-line.buy {
+.intent-line.buy {
   stroke: var(--tv-up);
 }
 
-.order-line.sell {
+.intent-line.sell {
   stroke: var(--tv-down);
 }
 
-.order-label {
+.intent-label {
   font-size: 11px;
   font-weight: 600;
 }
 
-.order-label.buy {
+.intent-label.buy {
   fill: var(--tv-up);
 }
 
-.order-label.sell {
+.intent-label.sell {
   fill: var(--tv-down);
 }
 
@@ -311,6 +318,28 @@ select {
   fill: #fff;
   font-size: 9px;
   font-weight: 700;
+  pointer-events: none;
+  text-anchor: middle;
+}
+
+.liquidation-line {
+  stroke: var(--tv-liquidation);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.liquidation-marker {
+  fill: var(--tv-liquidation);
+  stroke: #fff;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.liquidation-label {
+  fill: #131722;
+  font-size: 8px;
+  font-weight: 800;
   pointer-events: none;
   text-anchor: middle;
 }
@@ -366,6 +395,45 @@ select {
   background: rgba(255, 183, 77, 0.08);
 }
 
+.run-status-banner {
+  min-height: 42px;
+  padding: 9px 14px;
+  border-top: 1px solid var(--tv-border);
+  border-left: 3px solid var(--tv-up);
+  background: rgba(8, 153, 129, 0.08);
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.run-status-banner strong {
+  color: var(--tv-up);
+  font-size: 13px;
+}
+
+.run-status-banner span {
+  color: var(--tv-muted);
+}
+
+.run-status-banner.liquidated {
+  border-left-color: var(--tv-liquidation);
+  background: rgba(255, 152, 0, 0.1);
+}
+
+.run-status-banner.liquidated strong {
+  color: var(--tv-liquidation);
+}
+
+.run-status-banner.bankrupt {
+  border-left-color: var(--tv-down);
+  background: rgba(242, 54, 69, 0.12);
+}
+
+.run-status-banner.bankrupt strong {
+  color: var(--tv-down);
+}
+
 .account-strip {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -378,14 +446,15 @@ select {
   min-width: 0;
   padding: 13px 14px;
   border-right: 1px solid var(--tv-border);
+  border-bottom: 1px solid var(--tv-border);
 }
 
 .metric:nth-child(3n) {
   border-right: 0;
 }
 
-.metric:nth-child(-n + 6) {
-  border-bottom: 1px solid var(--tv-border);
+.metric:last-child {
+  border-bottom: 0;
 }
 
 .metric-label {
@@ -423,6 +492,47 @@ select {
 .detail-panel {
   min-width: 0;
   background: var(--tv-bg);
+}
+
+.intent-panel {
+  grid-column: 1 / -1;
+}
+
+.liquidation-panel {
+  grid-column: 1 / -1;
+}
+
+.liquidation-facts {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.liquidation-facts div {
+  min-width: 0;
+  padding: 12px 14px;
+  border-right: 1px solid var(--tv-border);
+  border-bottom: 1px solid var(--tv-border);
+}
+
+.liquidation-facts div:nth-child(4n) {
+  border-right: 0;
+}
+
+.liquidation-facts dt {
+  margin-bottom: 5px;
+  color: var(--tv-muted);
+  font-size: 11px;
+}
+
+.liquidation-facts dd {
+  margin: 0;
+  overflow: hidden;
+  color: var(--tv-text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .panel-heading {
@@ -534,13 +644,29 @@ td {
   color: var(--tv-down);
 }
 
-.order-key {
+.intent-key {
   display: inline-block;
   max-width: 160px;
   overflow: hidden;
   color: var(--tv-muted);
   text-overflow: ellipsis;
   vertical-align: bottom;
+}
+
+.intent-status {
+  font-weight: 600;
+}
+
+.intent-status.waiting {
+  color: var(--tv-waiting);
+}
+
+.intent-status.filled {
+  color: var(--tv-up);
+}
+
+.intent-status.cancelled {
+  color: var(--tv-muted);
 }
 
 td.empty-cell {
@@ -585,12 +711,28 @@ td.empty-cell {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .liquidation-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .liquidation-facts div:nth-child(4n) {
+    border-right: 1px solid var(--tv-border);
+  }
+
+  .liquidation-facts div:nth-child(2n) {
+    border-right: 0;
+  }
+
   .metric:nth-child(3n) {
     border-right: 1px solid var(--tv-border);
   }
 
   .metric:nth-child(2n) {
     border-right: 0;
+  }
+
+  .metric:nth-last-child(-n + 2) {
+    border-bottom: 0;
   }
 
   .metric:nth-child(-n + 8) {

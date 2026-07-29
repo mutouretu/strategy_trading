@@ -23,7 +23,7 @@ def build_run() -> dict[str, object]:
         source="fixed_bar_probe",
         manifest={
             "description": (
-                "Deterministic order lifecycle, bar execution, and ledger probe"
+                "Deterministic intent resolution, explicit trades, and ledger probe"
             ),
         },
     )

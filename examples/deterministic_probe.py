@@ -4,16 +4,20 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Sequence
 
+from examples.intent_adapter_support import (
+    ActiveTradeIntent,
+    ExampleTradeIntentBook,
+    PassiveTradeIntent,
+)
 from market_protocol import MarketFrame
 from market_simulator import FixedBarMarketSource
 from simulation_runtime import (
+    IntentSnapshot,
     OrderSide,
-    OrderType,
     SimFill,
-    SimOrder,
-    SimulationDecision,
     SimulationResult,
     SimulationRunner,
+    TradeInstruction,
 )
 
 
@@ -22,7 +26,8 @@ START_DATE = datetime(2026, 1, 1, tzinfo=timezone.utc)
 INITIAL_EQUITY = Decimal("1000")
 
 # This path is deliberately small and human-verifiable. It exercises a
-# cancelled limit, a replacement limit, a take-profit limit, and a market exit.
+# cancelled passive intent, its replacement, passive take profit, and an active
+# exit that executes at the following open.
 BARS = (
     ("100", "102", "98", "101"),
     ("101", "103", "97", "100"),
@@ -33,18 +38,19 @@ BARS = (
 )
 
 
-class DeterministicProbeDecisionProvider:
-    """A tiny state machine used only to verify the runtime."""
+class DeterministicProbeTradeProvider:
+    """A tiny intent-owning adapter used only to verify the runtime."""
 
     def __init__(self) -> None:
-        self._desired: tuple[SimOrder, ...] = ()
+        self._book = ExampleTradeIntentBook()
+        self._passive: tuple[PassiveTradeIntent, ...] = ()
         self._entry_filled = False
         self._partial_exit_filled = False
-        self._market_exit_submitted = False
+        self._active_exit_submitted = False
 
-    def initialize(self, frame: MarketFrame) -> SimulationDecision:
-        self._desired = (
-            self._limit(
+    def initialize(self, frame: MarketFrame) -> None:
+        self._passive = (
+            self._passive_intent(
                 "probe:entry:original",
                 frame.instrument,
                 OrderSide.BUY,
@@ -53,13 +59,25 @@ class DeterministicProbeDecisionProvider:
                 step="original-entry",
             ),
         )
-        return SimulationDecision(self._desired)
+        self._book.synchronize_passive(
+            self._passive,
+            current_sequence=frame.sequence,
+        )
 
-    def on_market(self, frame: MarketFrame) -> SimulationDecision:
+    def instructions_for(
+        self,
+        frame: MarketFrame,
+    ) -> tuple[TradeInstruction, ...]:
+        return self._book.instructions_for(frame)
+
+    def visible_intents(self) -> tuple[IntentSnapshot, ...]:
+        return self._book.visible_intents()
+
+    def on_market(self, frame: MarketFrame) -> None:
         if frame.sequence == 1 and not self._entry_filled:
-            # Omitting the original key cancels it; the new key is its replacement.
-            self._desired = (
-                self._limit(
+            # Omitting the original key cancels it; the new key replaces it.
+            self._passive = (
+                self._passive_intent(
                     "probe:entry:replacement",
                     frame.instrument,
                     OrderSide.BUY,
@@ -68,65 +86,85 @@ class DeterministicProbeDecisionProvider:
                     step="replacement-entry",
                 ),
             )
+            self._book.synchronize_passive(
+                self._passive,
+                current_sequence=frame.sequence,
+            )
         elif (
             self._partial_exit_filled
-            and not self._market_exit_submitted
+            and not self._active_exit_submitted
             and frame.close <= Decimal("98")
         ):
-            self._market_exit_submitted = True
-            self._desired = (
-                SimOrder(
-                    order_key="probe:exit:market",
-                    instrument=frame.instrument,
-                    side=OrderSide.SELL,
-                    order_type=OrderType.MARKET,
-                    quantity=Decimal("1"),
-                    tags={"probe_step": "market-exit"},
+            self._active_exit_submitted = True
+            self._book.enqueue_active(
+                (
+                    ActiveTradeIntent(
+                        intent_key="probe:exit:active",
+                        instrument=frame.instrument,
+                        side=OrderSide.SELL,
+                        quantity=Decimal("1"),
+                        reduce_only=True,
+                        tags={"probe_step": "active-exit"},
+                    ),
                 ),
+                current_sequence=frame.sequence,
             )
-        return SimulationDecision(self._desired)
 
     def on_fills(
         self,
         fills: Sequence[SimFill],
-    ) -> SimulationDecision:
+    ) -> None:
+        self._book.on_fills(fills)
         for fill in fills:
-            if fill.order_key == "probe:entry:replacement":
+            if fill.source_intent_key == "probe:entry:replacement":
                 self._entry_filled = True
-                self._desired = (
-                    self._limit(
+                self._passive = (
+                    self._passive_intent(
                         "probe:exit:take-profit",
                         fill.instrument,
                         OrderSide.SELL,
                         price="108",
                         quantity="1",
                         step="take-profit",
+                        reduce_only=True,
                     ),
                 )
-            elif fill.order_key == "probe:exit:take-profit":
+                self._book.synchronize_passive(
+                    self._passive,
+                    current_sequence=fill.sequence,
+                )
+            elif fill.source_intent_key == "probe:exit:take-profit":
                 self._partial_exit_filled = True
-                self._desired = ()
-            elif fill.order_key == "probe:exit:market":
-                self._desired = ()
-        return SimulationDecision(self._desired)
+                self._passive = ()
+                self._book.synchronize_passive(
+                    (),
+                    current_sequence=fill.sequence,
+                )
+            elif fill.source_intent_key == "probe:exit:active":
+                pass
+            else:
+                raise ValueError(
+                    f"unexpected fill: {fill.source_intent_key}"
+                )
 
     @staticmethod
-    def _limit(
-        order_key: str,
+    def _passive_intent(
+        intent_key: str,
         instrument: str,
         side: OrderSide,
         *,
         price: str,
         quantity: str,
         step: str,
-    ) -> SimOrder:
-        return SimOrder(
-            order_key=order_key,
+        reduce_only: bool = False,
+    ) -> PassiveTradeIntent:
+        return PassiveTradeIntent(
+            intent_key=intent_key,
             instrument=instrument,
             side=side,
-            order_type=OrderType.LIMIT,
-            limit_price=Decimal(price),
+            target_price=Decimal(price),
             quantity=Decimal(quantity),
+            reduce_only=reduce_only,
             tags={"probe_step": step},
         )
 
@@ -139,6 +177,6 @@ def run_probe() -> SimulationResult:
     )
     return SimulationRunner(
         source,
-        DeterministicProbeDecisionProvider(),
+        trade_port=DeterministicProbeTradeProvider(),
         initial_equity=INITIAL_EQUITY,
     ).run()
