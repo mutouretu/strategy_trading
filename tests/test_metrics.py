@@ -7,6 +7,9 @@ import strategy_simulation  # noqa: F401 - activates local checkout imports
 from metric_system import MetricInput, MetricValueStatus
 
 from strategy_simulation.metrics import BtcAccumulationMetricCalculator
+from strategy_simulation.metrics.registry import (
+    StrategySystemGridMetricCalculator,
+)
 
 
 def metric_input(strategy_type: str) -> MetricInput:
@@ -37,6 +40,12 @@ def metric_input(strategy_type: str) -> MetricInput:
 
 
 class StrategyMetricTests(unittest.TestCase):
+    def test_grid_metrics_do_not_label_non_grid_strategies(self) -> None:
+        values = StrategySystemGridMetricCalculator().calculate(
+            metric_input("hold-btc/v1")
+        )
+        self.assertEqual(values, ())
+
     def test_ladder_summary_metrics_are_complete(self) -> None:
         values = BtcAccumulationMetricCalculator().calculate(
             metric_input("target-liquidation-ladder-long/v1")
