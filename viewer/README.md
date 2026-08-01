@@ -34,7 +34,7 @@ python3 scripts/generate_ladder_run.py
 
 当前默认文件为
 `viewer/data/layered-following-grid-coinm-long-3y-seed-42.json`。该文件由相邻
-`grid_trading` 工程按 `SimulationRunner → StrategyAdapter → Strategy → GridRuleEngine`
+`strategies_system` 工程按 `SimulationRunner → StrategyAdapter → Strategy → GridRuleEngine`
 调用链生成，包含三年、40,000 至 200,000 美元边界内的固定 seed 随机日线、LONG
 多层向上跟随窗口、每跌 5,000 美元新建一层、层间碰撞复位、币本位账本、可配置
 Maker/Taker 手续费和真实规则状态转换。页面不会修改源数据。
@@ -42,14 +42,17 @@ Maker/Taker 手续费和真实规则状态转换。页面不会修改源数据�
 重新生成这份数据：
 
 ```bash
-cd ../grid_trading
-.venv/bin/python scripts/run_layered_following_grid_simulation.py
+cd ../strategies_system
+PYTHONPATH=src python3 -m strategy_simulation run \
+  experiments/layered_following_grid_baseline.json \
+  --database experiments/experiment_results/layered-following-grid.sqlite3 \
+  --market-root experiments/market_data \
+  --export-viewer ../market_simulator/viewer/data/layered-following-grid-coinm-long-3y-seed-42.json
 ```
 
-该脚本是 `experiments/layered_following_grid_baseline.json` 的薄封装：
 仿真事实先进入实验 SQLite 与 Parquet，再显式导出 Viewer JSON。单组跟随网格对应
-`experiments/single_following_grid_baseline.json`，仍可通过
-`.venv/bin/python scripts/run_single_following_grid_simulation.py` 导出后手动载入。
+`experiments/single_following_grid_baseline.json`，使用相同的
+`strategy_simulation run --export-viewer` 命令导出后手动载入。
 正式基线要求两个仓库 clean；开发期可显式增加 `--allow-dirty`。
 
 COIN-M 强平展示样例位于
@@ -98,8 +101,8 @@ BTC 计价收益优先用于区分币本位策略效果；USDT 总收益会标�
 研究入口必须通过实验结果服务启动，普通静态 HTTP Server 不提供 `/api`：
 
 ```bash
-cd ../grid_trading
-.venv/bin/python -m grid_experiments serve-results \
+cd ../strategies_system
+PYTHONPATH=src python3 -m strategy_simulation serve-results \
   experiments/experiment_results \
   --viewer-root ../market_simulator/viewer \
   --port 8088

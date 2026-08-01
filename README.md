@@ -206,7 +206,7 @@ python -m experiment_system export-run experiment.sqlite3 \
 - MetricSet 定义、输入指纹、计算版本、缺失原因和 Trace 清理后的可重算状态。
 
 通用框架不包含具体策略术语。应用通过注册输入贡献者和附加 MetricSet 扩展指标；
-例如相邻 `grid_trading` 的 `grid_metrics` 注册网格循环和 cell 指标。
+例如相邻 `strategies_system` 的策略指标注册网格循环、layer 和 cell 指标。
 
 仅计算通用指标：
 
@@ -235,13 +235,13 @@ python3 scripts/generate_ladder_run.py
 viewer/data/btc-geometric-ladder-3y-seed-42.json
 ```
 
-接入后的改进版 COIN-M 多层跟随网格示例由相邻 `grid_trading` 中的
+接入后的改进版 COIN-M 多层跟随网格示例由相邻 `strategies_system` 中的
 `experiments/layered_following_grid_baseline.json` 定义，并通过
-`scripts/run_layered_following_grid_simulation.py` 这个实验 CLI 薄封装显式导出。
+`strategy_simulation` 实验 CLI 显式导出。
 Viewer 默认载入
 `viewer/data/layered-following-grid-coinm-long-3y-seed-42.json`，并可切换查看 BTC
 总权益、按每日收盘价折算的 USDT 总权益、逐笔和累计手续费以及资金费净入账。
-原来的单组跟随网格结果仍可手动载入对照。
+单组跟随网格结果也由同一策略工程生成，可手动载入对照。
 
 启动本地播放器：
 
