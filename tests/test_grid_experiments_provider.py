@@ -29,6 +29,11 @@ EXPERIMENT_PATH = (
     / "experiments"
     / "single_following_grid_baseline.json"
 )
+KEY_PARAMETER_MATRIX_PATH = (
+    PROJECT_ROOT
+    / "experiments"
+    / "single_following_grid_key_parameter_matrix.json"
+)
 CODE_REVISIONS = {
     "market_simulator": CodeRevision(commit="a" * 40),
     "grid_trading": CodeRevision(commit="b" * 40),
@@ -48,6 +53,84 @@ def _plan():
 
 
 class GridExperimentProviderTests(unittest.TestCase):
+    def test_provider_owns_strategy_display_names(self) -> None:
+        descriptors = build_registry().component_descriptors
+
+        self.assertEqual(
+            {
+                descriptor["type"]: descriptor["display_name"]
+                for descriptor in descriptors
+            },
+            {
+                "single-following-grid/v1": "单组跟随网格",
+                "layered-following-grid/v1": "分层跟随网格",
+            },
+        )
+
+    def test_key_parameter_matrix_expands_grid_dimensions(self) -> None:
+        plan = plan_experiment(
+            load_experiment_spec(KEY_PARAMETER_MATRIX_PATH),
+            build_registry(),
+            code_revisions=CODE_REVISIONS,
+        )
+
+        combinations = {
+            (
+                run.configuration.parameter_values[
+                    "/strategy/parameters/grid_count"
+                ],
+                run.configuration.parameter_values[
+                    "/strategy/parameters/grid_ratio"
+                ],
+                run.configuration.parameter_values[
+                    "/strategy/parameters/order_coin_quantity"
+                ],
+            )
+            for run in plan.runs
+        }
+
+        self.assertEqual(plan.scenario_count, 12)
+        self.assertEqual(plan.run_count, 24)
+        self.assertEqual(
+            combinations,
+            {
+                (grid_count, grid_ratio, order_quantity)
+                for grid_count in (3, 5)
+                for grid_ratio in ("0.02", "0.04", "0.06")
+                for order_quantity in ("0.005", "0.01")
+            },
+        )
+        self.assertEqual({run.seed for run in plan.runs}, {42, 43})
+        self.assertEqual(
+            {
+                (
+                    run.configuration.account.parameters["margin_model"],
+                    run.configuration.account.parameters["leverage"],
+                    run.configuration.account.parameters[
+                        "maintenance_margin_rate"
+                    ],
+                    run.configuration.account.parameters[
+                        "mark_price_sampling"
+                    ],
+                    run.configuration.account.parameters["spot_btc"],
+                    run.configuration.account.parameters[
+                        "futures_wallet_btc"
+                    ],
+                )
+                for run in plan.runs
+            },
+            {
+                (
+                    "flat-maintenance/v1",
+                    "5",
+                    "0.005",
+                    "ADVERSE_EXTREME",
+                    "0",
+                    "1.1",
+                )
+            },
+        )
+
     def test_baseline_resolves_to_one_canonical_run(self) -> None:
         registry, plan = _plan()
         run = plan.runs[0]
@@ -100,15 +183,8 @@ class GridExperimentProviderTests(unittest.TestCase):
         self.assertEqual(provider_summary["cells_reclaimed"], 29)
         self.assertEqual(provider_summary["final_cell_count"], 5)
         self.assertEqual(provider_summary["fill_count"], 155)
-        self.assertTrue(
-            provider_summary["futures_equity_nonpositive"]
-        )
-        self.assertEqual(
-            provider_summary[
-                "first_nonpositive_futures_equity_date"
-            ],
-            "2028-04-24",
-        )
+        self.assertNotIn("minimum_futures_equity_btc", provider_summary)
+        self.assertNotIn("futures_equity_nonpositive", provider_summary)
 
     def test_provider_run_persists_grid_summary_and_external_market(
         self,

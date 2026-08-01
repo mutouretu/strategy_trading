@@ -1,0 +1,115 @@
+{
+  "schema_version": "experiment-spec/v1",
+  "experiment_id": "single-following-grid-key-parameters",
+  "description": "单组跟随网格关键参数矩阵：网格数 × 等比间距 × 每格下单量 × Seed",
+  "scenario_groups": [
+    {
+      "key": "coinm-following-grid-key-parameters",
+      "run_provider": "grid-simulation/v1",
+      "markets": [
+        {
+          "key": "btc-3y-base",
+          "type": "anchored-gbm/v1",
+          "parameters": {
+            "instrument": "BTCUSD_PERP",
+            "anchors": [
+              {"date": "2026-01-01", "price": "65000"},
+              {"date": "2026-07-01", "price": "40000"},
+              {"date": "2027-01-01", "price": "115000"},
+              {"date": "2027-07-01", "price": "55000"},
+              {"date": "2028-01-01", "price": "200000"},
+              {"date": "2028-07-01", "price": "45000"},
+              {"date": "2029-01-01", "price": "160000"}
+            ],
+            "annual_volatility": "0.60",
+            "intraday_steps": 24,
+            "periods_per_year": 365,
+            "price_quantum": "0.01",
+            "price_floor": "40000",
+            "price_ceiling": "200000",
+            "interval": "1d"
+          }
+        }
+      ],
+      "strategies": [
+        {
+          "key": "single-following-grid",
+          "type": "single-following-grid/v1",
+          "parameters": {
+            "strategy_id": "single-following-grid-key-parameters",
+            "grid_id": "grid-rule-key-parameters",
+            "instrument": "BTCUSD_PERP",
+            "mode": "long",
+            "anchor_price": "65000",
+            "grid_ratio": "0.04",
+            "grid_count": 5,
+            "order_notional": "0",
+            "tick_size": "0.1",
+            "quantity_step": "1",
+            "move_grid": true,
+            "market_type": "coinm",
+            "order_coin_quantity": "0.01",
+            "contract_size": "100"
+          }
+        }
+      ],
+      "executions": [
+        {
+          "key": "daily-passive",
+          "type": "daily-bar-execution/v1",
+          "parameters": {
+            "maker_fee_rate": "0.0002",
+            "taker_fee_rate": "0.0005",
+            "fee_asset": "BTC",
+            "funding_model": "none"
+          }
+        }
+      ],
+      "accounts": [
+        {
+          "key": "coinm-long",
+          "type": "coinm-inverse/v1",
+          "parameters": {
+            "instrument": "BTCUSD_PERP",
+            "contract_size": "100",
+            "spot_btc": "0",
+            "futures_wallet_btc": "1.1",
+            "base_asset": "BTC",
+            "quote_asset": "USDT",
+            "notional_asset": "USD",
+            "margin_model": "flat-maintenance/v1",
+            "leverage": "5",
+            "maintenance_margin_rate": "0.005",
+            "mark_price_sampling": "ADVERSE_EXTREME"
+          }
+        }
+      ],
+      "parameter_axes": [
+        {
+          "path": "/strategy/parameters/grid_count",
+          "values": [3, 5]
+        },
+        {
+          "path": "/strategy/parameters/grid_ratio",
+          "values": ["0.02", "0.04", "0.06"]
+        },
+        {
+          "path": "/strategy/parameters/order_coin_quantity",
+          "values": ["0.005", "0.01"]
+        }
+      ]
+    }
+  ],
+  "seeds": [42, 43],
+  "output": {
+    "root": "experiment_results",
+    "default_retention_class": "standard"
+  },
+  "controls": {
+    "max_runs": 24,
+    "continue_on_error": false
+  },
+  "metadata": {
+    "purpose": "grid-key-parameter-sensitivity"
+  }
+}

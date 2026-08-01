@@ -2,3 +2,4 @@
 -e ../market_simulator/packages/market_simulator
 -e ../market_simulator/packages/simulation_runtime
 -e ../market_simulator/packages/experiment_system
+-e ../market_simulator/packages/metric_system

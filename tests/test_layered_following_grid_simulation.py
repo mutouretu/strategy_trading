@@ -109,7 +109,10 @@ class LayeredFollowingGridSimulationTests(unittest.TestCase):
             result.total_fees,
             Decimal("0.0004255339508114483709521293336"),
         )
-        self.assertFalse(summary["futures_equity_nonpositive"])
+        self.assertGreater(
+            result.final_account_metrics["futures_equity_btc"],
+            Decimal("0"),
+        )
         self.assertEqual(
             {fill.tags["strategy"] for fill in result.fills},
             {"layered_following_grid"},

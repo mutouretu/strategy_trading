@@ -18,6 +18,7 @@ def ensure_simulator_packages() -> None:
         SIMULATOR_ROOT / "packages" / "market_simulator" / "src",
         SIMULATOR_ROOT / "packages" / "simulation_runtime" / "src",
         SIMULATOR_ROOT / "packages" / "experiment_system" / "src",
+        SIMULATOR_ROOT / "packages" / "metric_system" / "src",
     )
     for package_path in reversed(package_paths):
         if package_path.exists():

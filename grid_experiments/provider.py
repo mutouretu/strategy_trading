@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
 from decimal import Decimal
 
 from experiment_system import (
@@ -33,6 +32,8 @@ from .market_factories import (
     resolve_market_component,
 )
 from .strategy_factories import (
+    LAYERED_FOLLOWING_GRID_V1,
+    SINGLE_FOLLOWING_GRID_V1,
     GridStrategyAdapter,
     adapter_rule_config,
     build_strategy_adapter,
@@ -165,53 +166,46 @@ class PreparedGridRun:
                 "fill_count": len(result.fills),
             }
         )
-        equity_key = (
-            f"futures_equity_"
-            f"{self.components.account.base_asset.lower()}"
-        )
-        futures_equity = [
-            (
-                datetime.fromtimestamp(
-                    snapshot.timestamp / 1_000,
-                    tz=timezone.utc,
-                ).date().isoformat(),
-                Decimal(snapshot.account_metrics[equity_key]),
-            )
-            for snapshot in result.equity_curve
-        ]
-        minimum_date, minimum_equity = min(
-            futures_equity,
-            key=lambda item: item[1],
-        )
-        first_nonpositive = next(
-            (
-                (date, equity)
-                for date, equity in futures_equity
-                if equity <= 0
-            ),
-            None,
-        )
-        summary.update(
-            {
-                "minimum_futures_equity_btc": _decimal_text(
-                    minimum_equity
-                ),
-                "minimum_futures_equity_date": minimum_date,
-                "futures_equity_nonpositive": (
-                    first_nonpositive is not None
-                ),
-                "first_nonpositive_futures_equity_date": (
-                    None
-                    if first_nonpositive is None
-                    else first_nonpositive[0]
-                ),
-            }
-        )
         return summary
 
 
 class GridSimulationProvider:
     provider_id = GRID_SIMULATION_PROVIDER_V1
+
+    @staticmethod
+    def component_descriptors() -> tuple[dict[str, object], ...]:
+        return (
+            {
+                "kind": "strategy",
+                "type": SINGLE_FOLLOWING_GRID_V1,
+                "display_name": "单组跟随网格",
+                "description": (
+                    "围绕一个锚点建立等比网格；价格覆盖挂单价时完成被动成交，"
+                    "成交后在相邻网格价位安排反向交易，越过当前区间后网格继续跟随。"
+                ),
+                "flow": [
+                    {"title": "建立网格", "detail": "按锚点、间距和网格数生成 Cell"},
+                    {"title": "等待覆盖", "detail": "K 线高低价覆盖挂单价"},
+                    {"title": "完成换手", "detail": "成交后安排相邻反向意图"},
+                    {"title": "跟随移动", "detail": "越界后补充新 Cell 并回收旧 Cell"},
+                ],
+            },
+            {
+                "kind": "strategy",
+                "type": LAYERED_FOLLOWING_GRID_V1,
+                "display_name": "分层跟随网格",
+                "description": (
+                    "按固定价格步长部署多组跟随网格；每组独立运行，层间发生边界"
+                    "碰撞时对下位网格进行复位。"
+                ),
+                "flow": [
+                    {"title": "部署首层", "detail": "在初始锚点建立跟随网格"},
+                    {"title": "下跌加层", "detail": "每下移一个部署步长建立新层"},
+                    {"title": "独立成交", "detail": "各层分别处理 Entry 与 Exit"},
+                    {"title": "碰撞复位", "detail": "下位上沿触及上位下沿时复位"},
+                ],
+            },
+        )
 
     def resolve(
         self,

@@ -27,6 +27,7 @@ Binance USDⓈ-M / COIN-M Futures
 - `grid_rule/`：单组网格的机械交易规则；核心不依赖 Web、交易所或 simulator。
 - `grid_strategies/`：高层网格策略；当前包含用于验证完整调用链的单组跟随网格策略。
 - `grid_experiments/`：把网格组件注册到通用实验系统的薄 Provider 和 CLI 宿主。
+- `grid_metrics/`：向通用指标系统注册币本位双计价输入和网格专属指标。
 - `grid_server/`：生产级实盘前后端服务，内部职责如下。
 
 `grid_server` 按职责分层：
@@ -105,6 +106,44 @@ Binance USDⓈ-M / COIN-M Futures
 8 个 Run 按 plan 的固定顺序写入同一个 SQLite。行情只由市场配置和 Seed 决定，
 因此这个样例只产生并复用 2 条内容寻址 Parquet 市场路径。
 
+用于观察网格关键参数敏感性的实验位于
+`experiments/single_following_grid_key_parameter_matrix.json`。它显式展开：
+
+- 网格数 `grid_count`：3、5；
+- 等比网格间距 `grid_ratio`：2%、4%、6%；
+- 每格下单量 `order_coin_quantity`：0.005 BTC、0.01 BTC；
+- 随机种子：42、43。
+
+该实验账户启用 `flat-maintenance/v1`：5 倍杠杆、0.5% 固定维持保证金率，
+并用当根 K 线对持仓最不利的极值检查强平。结果因此会记录强平状态、最大维持
+保证金使用率、最低保证金缓冲和最大有效杠杆；这是研究配置，不改变无保证金的
+行为兼容基线。账户的 1.1 BTC 全部放入合约钱包，由单一 COIN-M 账户作为全仓
+保证金使用；`spot_btc` 设为 0，避免重复计算总资产。
+
+前三项产生 12 个 Scenario；每个 Scenario 使用 2 个 Seed，共 24 个 Run。结果页的
+场景标题会直接显示这三个参数，可据此比较收益、回撤、成交数和完成循环数：
+
+```bash
+.venv/bin/python -m grid_experiments run \
+  experiments/single_following_grid_key_parameter_matrix.json
+```
+
+实验完成后，使用 `grid_metrics` 一次计算通用 `core/v1` 和网格 `grid/v1`：
+
+```bash
+.venv/bin/python -m grid_metrics evaluate-experiment \
+  experiments/experiment_results/single-following-grid-matrix.sqlite3
+```
+
+它会分别保存 BTC / USDT 总权益、BTC 合约权益、收益、回撤、波动、仓位、保证金、
+强平等通用指标，以及完成循环数、未闭合 entry、按 role/generation 的成交数、每循环
+平均净收益和手续费。重复执行默认按输入指纹幂等跳过；需要用新公式覆盖同版本结果时
+必须显式增加 `--recompute`。计算某一个 Run 时使用：
+
+```bash
+.venv/bin/python -m grid_metrics evaluate-run <database> <run-id>
+```
+
 两个原 Viewer 演示脚本已经收口为实验 CLI 的薄封装，不再自行构造 MarketSource、
 策略、Runner、账本或 Summary：
 
@@ -153,8 +192,9 @@ Trace 归档和清理也通过同一薄 CLI 进入通用实验系统：
 ```
 
 访问 `http://127.0.0.1:8088/` 可以浏览实验、筛选 Run、并排查看数据库中已有的
-Summary 标量，并把带有 `STORED` Trace 的 Run 直接送入 K 线播放器。浏览过程只读，
-在内存中组合 SQLite Trace 和 Parquet K 线，不生成临时 JSON。
+Summary 和指标，按指定指标排序，查看每个 Scenario 的 P05 / 中位数 / P95 / 最差值
+与强平率，并把带有 `STORED` Trace 的 Run 直接送入 K 线播放器。浏览过程只读，
+在内存中组合 SQLite Trace 和 Parquet K 线，不生成临时 JSON，也不在前端重算指标。
 
 需要文件时再显式导出：
 
