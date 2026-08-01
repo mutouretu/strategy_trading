@@ -2,25 +2,28 @@
 
 ## 顶层边界
 
-工程由三个业务命名空间组成：
+网格实盘工程与相邻策略工程共同形成以下业务边界：
 
 | 命名空间 | 负责 | 不负责 |
 | --- | --- | --- |
 | `grid_rule/` | 给定网格参数后的 Cell、订单意图和成交状态转换 | 建仓时机、资金分配、实盘可靠执行 |
-| `grid_strategies/` | 创建、组合、调整和退出一组或多组网格 | Binance、SQLite、HTTP、仿真循环 |
+| `strategies_system/trading_strategies/` | 创建、组合、调整和退出一组或多组网格 | Binance、SQLite、HTTP、仿真循环 |
 | `grid_server/` | 实盘 API、页面、调度、存储、交易所接入和一致性恢复 | 仿真市场生成、策略研究框架 |
 
 依赖方向为：
 
 ```text
-grid_server ───────► grid_strategies ───────► grid_rule
-                              ▲
-                              │ adapter injection
-simulation_runtime ───────────┘
+trading_strategies ─────► GridRulePort ◄──── strategy_simulation/GridRuleEnginePort
+                                                   │
+                                                   ▼
+                                              GridRuleEngine
+
+simulation_runtime ─────► strategy_simulation ─────┘
 ```
 
 `market_simulator` 只调用注入的通用决策接口，不导入任何具体网格策略。当前
-`grid_server` 尚未切换到新规则和策略包；上图是仿真验证完成后的目标依赖方向。
+`grid_server` 尚未切换到新规则；高层策略经 `strategies_system` 完成研究和仿真，
+验证后再通过实盘 Adapter 接入 Server。
 
 ## Grid Server 内部结构
 
@@ -60,8 +63,9 @@ runtime ───────────────┘
 4. `runtime` 和 `interfaces` 负责实例化具体实现。
 5. Streamlit 页面只通过 `interfaces.web_client` 访问后端，不直接导入数据库、交易引擎或 Binance 密钥。
 6. `grid_server` 根目录旧模块只是兼容入口；新增代码必须导入分层后的规范路径。
-7. `grid_rule` 和 `grid_strategies` 不得反向依赖 `grid_server`。
-8. 策略核心不得依赖仿真运行时；协议转换只能放入 `adapters/`。
+7. `grid_rule` 不得反向依赖 `grid_server` 或 `strategies_system`。
+8. 策略核心只能依赖规则 DTO 和策略侧 `GridRulePort`，不得创建具体 `GridRuleEngine`。
+9. 策略核心不得依赖仿真运行时；协议转换只能放入 `strategy_simulation/adapters`。
 
 ## 常见修改的位置
 

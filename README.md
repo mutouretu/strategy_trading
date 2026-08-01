@@ -1,6 +1,7 @@
 # Grid Trading
 
-网格交易规则、策略研究与生产级实盘服务的一体化工程。当前实盘服务支持 Binance
+网格交易规则与生产级实盘服务工程。高层策略研究和仿真已经迁入相邻
+`strategies_system`。当前实盘服务支持 Binance
 U 本位与币本位永续触发式移动等比网格，使用 SQLite、共享调度器和 Web/API，
 不依赖旧命令行版本的 CSV 恢复或 tmux 管理。
 
@@ -25,9 +26,6 @@ Binance USDⓈ-M / COIN-M Futures
 顶层代码按业务语义分为：
 
 - `grid_rule/`：单组网格的机械交易规则；核心不依赖 Web、交易所或 simulator。
-- `grid_strategies/`：高层网格策略；当前包含用于验证完整调用链的单组跟随网格策略。
-- `grid_experiments/`：把网格组件注册到通用实验系统的薄 Provider 和 CLI 宿主。
-- `grid_metrics/`：向通用指标系统注册币本位双计价输入和网格专属指标。
 - `grid_server/`：生产级实盘前后端服务，内部职责如下。
 
 `grid_server` 按职责分层：
@@ -42,177 +40,22 @@ Binance USDⓈ-M / COIN-M Futures
 - `grid_server/*.py`：旧导入路径的薄兼容层，不再承载业务实现。
 
 当前 `grid_server` 仍运行已经过实盘验证的原有实现，尚未切换到 `grid_rule` 或
-`grid_strategies`。规则和策略完成仿真验证后，再单独进行一次实盘迁移和验收。
+`strategies_system`。规则和策略完成仿真验证后，再单独进行一次实盘迁移和验收。
 
 更完整的依赖边界和文件归属说明见 `docs/architecture.md`。
 旧命令行版本的代码谱系和行为测试迁移记录见 `docs/legacy-cli-history.md`。
 规则引擎仿真的当前范围和运行方法见 `docs/grid-rule-simulation.md`。这里的规则引擎只处理
 给定参数后的 Cell 与订单转换；建网格时机、资本分配和整体退出属于后续高层策略。
 
-## 实验系统
+## 策略研究与仿真
 
-`grid_experiments` 注册 `grid-simulation/v1` Provider，把以下组件组装为
-现有 `SimulationRunner`，不会复制实验展开、SQLite 或 Parquet 逻辑：
+单组和分层跟随网格的策略本体、Simulation Adapter、Plugin、实验配置、指标和测试
+均由相邻 `strategies_system` 维护。`grid_trading` 不再提供策略 Provider、实验 CLI
+或 Viewer 导出脚本。策略实验使用的市场、账户和执行组件定义也由
+`strategies_system/strategy_simulation/components` 持有；这里只向其提供既有
+`grid_rule` 及 COIN-M 数值实现。
 
-- `anchored-gbm/v1`；
-- `single-following-grid/v1`；
-- `layered-following-grid/v1`；
-- `daily-bar-execution/v1`；
-- `coinm-inverse/v1`。
-
-安装相邻 `market_simulator` 的实验依赖：
-
-```bash
-.venv/bin/pip install -r requirements-experiments.txt
-```
-
-三年单组跟随网格基线位于
-`experiments/single_following_grid_baseline.json`：
-
-```bash
-.venv/bin/python -m grid_experiments validate \
-  experiments/single_following_grid_baseline.json
-.venv/bin/python -m grid_experiments plan \
-  experiments/single_following_grid_baseline.json
-.venv/bin/python -m grid_experiments run \
-  experiments/single_following_grid_baseline.json
-```
-
-三年分层跟随网格基线位于
-`experiments/layered_following_grid_baseline.json`：
-
-```bash
-.venv/bin/python -m grid_experiments validate \
-  experiments/layered_following_grid_baseline.json
-.venv/bin/python -m grid_experiments plan \
-  experiments/layered_following_grid_baseline.json
-.venv/bin/python -m grid_experiments run \
-  experiments/layered_following_grid_baseline.json
-```
-
-批量样例位于 `experiments/single_following_grid_matrix.json`。它展开
-2 个策略候选 × 2 个 `grid_count` 参数值 × 2 个 Seed，共 4 个 Scenario、
-8 个 Run：
-
-```bash
-.venv/bin/python -m grid_experiments validate \
-  experiments/single_following_grid_matrix.json
-.venv/bin/python -m grid_experiments plan \
-  experiments/single_following_grid_matrix.json
-.venv/bin/python -m grid_experiments run \
-  experiments/single_following_grid_matrix.json
-```
-
-8 个 Run 按 plan 的固定顺序写入同一个 SQLite。行情只由市场配置和 Seed 决定，
-因此这个样例只产生并复用 2 条内容寻址 Parquet 市场路径。
-
-用于观察网格关键参数敏感性的实验位于
-`experiments/single_following_grid_key_parameter_matrix.json`。它显式展开：
-
-- 网格数 `grid_count`：3、5；
-- 等比网格间距 `grid_ratio`：2%、4%、6%；
-- 每格下单量 `order_coin_quantity`：0.005 BTC、0.01 BTC；
-- 随机种子：42、43。
-
-该实验账户启用 `flat-maintenance/v1`：5 倍杠杆、0.5% 固定维持保证金率，
-并用当根 K 线对持仓最不利的极值检查强平。结果因此会记录强平状态、最大维持
-保证金使用率、最低保证金缓冲和最大有效杠杆；这是研究配置，不改变无保证金的
-行为兼容基线。账户的 1.1 BTC 全部放入合约钱包，由单一 COIN-M 账户作为全仓
-保证金使用；`spot_btc` 设为 0，避免重复计算总资产。
-
-前三项产生 12 个 Scenario；每个 Scenario 使用 2 个 Seed，共 24 个 Run。结果页的
-场景标题会直接显示这三个参数，可据此比较收益、回撤、成交数和完成循环数：
-
-```bash
-.venv/bin/python -m grid_experiments run \
-  experiments/single_following_grid_key_parameter_matrix.json
-```
-
-实验完成后，使用 `grid_metrics` 一次计算通用 `core/v1` 和网格 `grid/v1`：
-
-```bash
-.venv/bin/python -m grid_metrics evaluate-experiment \
-  experiments/experiment_results/single-following-grid-matrix.sqlite3
-```
-
-它会分别保存 BTC / USDT 总权益、BTC 合约权益、收益、回撤、波动、仓位、保证金、
-强平等通用指标，以及完成循环数、未闭合 entry、按 role/generation 的成交数、每循环
-平均净收益和手续费。重复执行默认按输入指纹幂等跳过；需要用新公式覆盖同版本结果时
-必须显式增加 `--recompute`。计算某一个 Run 时使用：
-
-```bash
-.venv/bin/python -m grid_metrics evaluate-run <database> <run-id>
-```
-
-两个原 Viewer 演示脚本已经收口为实验 CLI 的薄封装，不再自行构造 MarketSource、
-策略、Runner、账本或 Summary：
-
-```bash
-.venv/bin/python scripts/run_single_following_grid_simulation.py
-.venv/bin/python scripts/run_layered_following_grid_simulation.py
-```
-
-脚本分别运行上面的单 Run 配置，并通过显式 `--export-viewer` 生成原路径下的
-Viewer JSON。研究参数不再通过脚本参数维护；需要调整 Seed、账户或策略参数时，
-复制并修改实验 JSON，再使用 `grid_experiments plan/run`。开发期 dirty 仓库可向
-脚本增加 `--allow-dirty`；如需隔离探索结果，还可显式指定 `--database`、
-`--market-root` 和 `--output`。
-
-`controls.continue_on_error` 决定当前批次遇错后是否继续。再次运行完全相同的 clean
-实验时，已成功 Run 会自动跳过；失败和异常中断分别需要显式处理：
-
-```bash
-.venv/bin/python -m grid_experiments run \
-  experiments/single_following_grid_matrix.json --rerun-failed
-.venv/bin/python -m grid_experiments run \
-  experiments/single_following_grid_matrix.json --resume-interrupted
-```
-
-Trace 归档和清理也通过同一薄 CLI 进入通用实验系统：
-
-```bash
-.venv/bin/python -m grid_experiments archive-run \
-  experiments/experiment_results/<experiment>.sqlite3 --run-id <run-id>
-.venv/bin/python -m grid_experiments purge-traces \
-  experiments/experiment_results/<experiment>.sqlite3
-.venv/bin/python -m grid_experiments purge-traces \
-  experiments/experiment_results/<experiment>.sqlite3 --confirm
-```
-
-第一次 `purge-traces` 只预览；`--confirm` 才会清理 `STANDARD` Trace。
-`ARCHIVED` Trace 不会被普通清理命令删除。
-
-2F 的通用只读结果页由同一个薄 CLI 启动：
-
-```bash
-.venv/bin/python -m grid_experiments serve-results \
-  experiments/experiment_results \
-  --viewer-root ../market_simulator/viewer \
-  --port 8088
-```
-
-访问 `http://127.0.0.1:8088/` 可以浏览实验、筛选 Run、并排查看数据库中已有的
-Summary 和指标，按指定指标排序，查看每个 Scenario 的 P05 / 中位数 / P95 / 最差值
-与强平率，并把带有 `STORED` Trace 的 Run 直接送入 K 线播放器。浏览过程只读，
-在内存中组合 SQLite Trace 和 Parquet K 线，不生成临时 JSON，也不在前端重算指标。
-
-需要文件时再显式导出：
-
-```bash
-.venv/bin/python -m grid_experiments compare \
-  experiments/experiment_results/<experiment>.sqlite3 \
-  --output comparison.csv
-.venv/bin/python -m grid_experiments export-run \
-  experiments/experiment_results/<experiment>.sqlite3 \
-  --run-id <run-id> --output run.json
-```
-
-正式运行默认要求 `market_simulator` 和 `grid_trading` 都是 clean。开发期确需运行
-未提交代码时可以显式增加 `--allow-dirty`，结果会标记为不可复现。
-
-该基线明确使用 `margin_model: "none"` 和 `funding_model: "none"`，目的是先证明
-新旧入口在 K 线、成交、账本和权益上完全等价。新的实验配置可以把账户切换为
-`flat-maintenance/v1` 并显式设置杠杆、维持保证金率和强平采样，不会隐式改变基线。
+运行网格策略基线请进入 `../strategies_system`，使用 `strategy_simulation` CLI。
 
 ## 锚点语义
 

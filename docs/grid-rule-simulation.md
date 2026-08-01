@@ -43,9 +43,9 @@ FundingModel 和产品适配器计算。当前已经提供不修改账本的 COI
 以前已经生效且目标价格被 OHLC 覆盖时，生成明确价格的 `TradeInstruction`。Runtime
 不再替网格判断是否触价。
 
-单组和分层 Strategy Adapter 使用相同的被动意图解析机制。Fill 或当日
+相邻 `strategies_system` 中的单组和分层 Strategy Adapter 使用相同的被动意图解析机制。Fill 或当日
 `on_market` 新产生的意图最早从下一根日线生效；ENTRY/EXIT 分别映射为普通指令和
-`reduce_only` 指令。三个适配器还通过只读 `visible_intents()` 提供报告快照。
+`reduce_only` 指令。适配器还通过只读 `visible_intents()` 提供报告快照。
 `InverseContractLedger` 继续只负责币本位反向合约记账；
 `FixedRateInverseContractFundingModel` 按 `张数 × contractSize ÷ mark × rate`
 生成 BTC 钱包变动；
@@ -69,12 +69,14 @@ seed 42 的单组与分层结果仍分别为 155 和 736 笔 Fill。标准样例
 Maker `0.0002`、Taker `0.0005` 的研究假设，并将费率写入 manifest。Viewer 可逐日
 显示等待、成交和撤销的网格意图以及逐笔、累计手续费。
 
-默认三年示例已经接入最小高层策略，调用顺序是：
+单组三年示例已经迁入 `strategies_system`，调用顺序是：
 
 ```text
 SimulationRunner
     → SingleFollowingGridSimulationAdapter
     → SingleFollowingGridStrategy
+    → GridRulePort
+    → GridRuleEnginePort
     → GridRuleEngine
 ```
 
@@ -82,13 +84,15 @@ SimulationRunner
 `GridRuleSimulationAdapter` 的静态规则行为由单元测试保留，不再维护另一套三年
 演示脚本。
 
-改进版多层策略的调用顺序保持同一边界：
+改进版多层策略使用相同边界：
 
 ```text
 SimulationRunner
     → LayeredFollowingGridSimulationAdapter
     → LayeredFollowingGridStrategy
-    → GridRuleEngine（每层、每一代一个实例）
+    → GridRulePort
+    → GridRuleEnginePort（每层、每一代一个实例）
+    → GridRuleEngine
 ```
 
 它从 65,000 美元开始，收盘价每向下跨过 5,000 美元部署一层。下层上沿触及上层
@@ -114,24 +118,24 @@ Funding(BTC)   = -仓位方向 × 张数 × contractSize / mark × fundingRate
 `FixedBpsSlippageModel`，这类触价成交仍保持网格指定价格；固定 bps 只作用于
 ACTIVE 指令。最终 Fill 同时记录参考价、有效价和滑点，COIN-M 手续费按有效价计算。
 
-三年 COIN-M 单组和分层示例已经成为正式实验配置：
+三年 COIN-M 单组和分层示例均由 `strategies_system` 维护：
 
 ```bash
-experiments/single_following_grid_baseline.json
-experiments/layered_following_grid_baseline.json
+../strategies_system/experiments/layered_following_grid_baseline.json
+../strategies_system/experiments/single_following_grid_baseline.json
 ```
 
 统一运行入口：
 
 ```bash
-.venv/bin/python -m grid_experiments plan \
+cd ../strategies_system
+PYTHONPATH=src python3 -m strategy_simulation plan \
   experiments/single_following_grid_baseline.json
-.venv/bin/python -m grid_experiments run \
+PYTHONPATH=src python3 -m strategy_simulation run \
   experiments/single_following_grid_baseline.json
-
-.venv/bin/python -m grid_experiments plan \
+PYTHONPATH=src python3 -m strategy_simulation plan \
   experiments/layered_following_grid_baseline.json
-.venv/bin/python -m grid_experiments run \
+PYTHONPATH=src python3 -m strategy_simulation run \
   experiments/layered_following_grid_baseline.json
 ```
 
@@ -139,19 +143,11 @@ experiments/layered_following_grid_baseline.json
 Parquet。策略参数、账户余额、费率和 Seed 统一从实验 JSON 读取，不再散落在 Python
 脚本参数中。
 
-需要生成原有 Viewer 示例文件时，仍可使用两个兼容命令：
-
-```bash
-.venv/bin/python scripts/run_single_following_grid_simulation.py
-.venv/bin/python scripts/run_layered_following_grid_simulation.py
-```
-
-这两个脚本现在只是 `grid_experiments run --export-viewer` 的薄封装，不再自己构造
-MarketSource、策略、SimulationRunner、账本或 Summary。默认分别导出到：
+Viewer 数据由 `strategies_system` 的通用 CLI 通过 `--export-viewer` 显式导出，
+不再维护 `grid_trading/scripts` 下的策略脚本。
 
 ```text
 ../market_simulator/viewer/data/single-following-grid-coinm-long-3y-seed-42.json
-../market_simulator/viewer/data/layered-following-grid-coinm-long-3y-seed-42.json
 ```
 
 单组配置使用 `1 BTC` 现货底仓、`0.1 BTC` 合约钱包和每格 `0.01 BTC`；分层配置
@@ -169,9 +165,6 @@ PYTHONPATH=../market_simulator/packages/market_protocol/src:\
 .venv/bin/python -m unittest \
   tests.test_grid_rule_engine \
   tests.test_grid_rule_simulation \
-  tests.test_layered_following_grid_strategy \
-  tests.test_layered_following_grid_simulation \
-  tests.test_single_following_grid_strategy \
   tests.test_inverse_contract_ledger \
   tests.test_inverse_contract_margin \
   tests.test_inverse_margin_execution \

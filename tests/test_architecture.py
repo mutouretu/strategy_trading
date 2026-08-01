@@ -7,12 +7,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SERVER_ROOT = PROJECT_ROOT / "grid_server"
-RESEARCH_PACKAGE_ROOTS = (
-    PROJECT_ROOT / "grid_rule",
-    PROJECT_ROOT / "grid_strategies",
-    PROJECT_ROOT / "grid_experiments",
-)
-STRATEGY_ROOT = PROJECT_ROOT / "grid_strategies"
+RULE_PACKAGE_ROOT = PROJECT_ROOT / "grid_rule"
 CANONICAL_PACKAGES = {
     "application",
     "domain",
@@ -69,40 +64,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                     violations.append(f"{path.name}:{node.lineno}")
         self.assertEqual(violations, [], "domain must not depend on outer layers")
 
-    def test_rule_and_strategy_packages_do_not_import_grid_server(self):
+    def test_rule_package_does_not_import_grid_server(self):
         violations: list[str] = []
-        for package_root in RESEARCH_PACKAGE_ROOTS:
-            for path in package_root.rglob("*.py"):
-                tree = ast.parse(
-                    path.read_text(encoding="utf-8"),
-                    filename=str(path),
-                )
-                for node in ast.walk(tree):
-                    modules: list[str] = []
-                    if isinstance(node, ast.Import):
-                        modules.extend(alias.name for alias in node.names)
-                    elif isinstance(node, ast.ImportFrom) and node.level == 0:
-                        modules.append(node.module or "")
-                    for module in modules:
-                        if module.split(".", 1)[0] == "grid_server":
-                            violations.append(
-                                f"{path.relative_to(PROJECT_ROOT)}:"
-                                f"{node.lineno} -> {module}"
-                            )
-        self.assertEqual(
-            violations,
-            [],
-            "research and experiment packages must not depend on grid_server",
-        )
-
-    def test_strategy_core_does_not_import_simulation_runtime(self):
-        forbidden = {
-            "market_protocol",
-            "market_simulator",
-            "simulation_runtime",
-        }
-        violations: list[str] = []
-        for path in STRATEGY_ROOT.glob("*.py"):
+        for path in RULE_PACKAGE_ROOT.rglob("*.py"):
             tree = ast.parse(
                 path.read_text(encoding="utf-8"),
                 filename=str(path),
@@ -114,7 +78,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                 elif isinstance(node, ast.ImportFrom) and node.level == 0:
                     modules.append(node.module or "")
                 for module in modules:
-                    if module.split(".", 1)[0] in forbidden:
+                    if module.split(".", 1)[0] == "grid_server":
                         violations.append(
                             f"{path.relative_to(PROJECT_ROOT)}:"
                             f"{node.lineno} -> {module}"
@@ -122,9 +86,8 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertEqual(
             violations,
             [],
-            "strategy core must not depend on simulation runtime",
+            "grid_rule must not depend on grid_server",
         )
-
 
 if __name__ == "__main__":
     unittest.main()
