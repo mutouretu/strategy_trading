@@ -4,7 +4,8 @@
 
 当前阶段采用 simulator-first：先稳定市场数据、成交、账本和运行器边界，再让各应用中的
 策略或规则引擎通过适配器接入。这里不会包含网格或其他具体交易规则，也不会
-依赖 Binance、SQLite、FastAPI 或 Streamlit。
+依赖 Binance、FastAPI 或 Streamlit。市场与运行时核心不依赖持久化；
+独立的 `experiment_system` 使用 Python SQLite 和 PyArrow 保存实验结果。
 
 ## 包边界
 
@@ -12,7 +13,8 @@
 packages/
 ├── market_protocol/   # MarketFrame 与 MarketSource 公共协议
 ├── market_simulator/   # 固定数据源与锚点约束随机日线
-└── simulation_runtime/ # 通用交易端口、显式成交、费用、账本、保证金端口和运行器
+├── simulation_runtime/ # 通用交易端口、显式成交、费用、账本、保证金端口和运行器
+└── experiment_system/  # 通用实验计划、单次执行与结果存储
 ```
 
 项目还包含 `viewer/`：它是策略无关的仿真回放页面，读取标准
@@ -26,6 +28,8 @@ market_protocol
       ↑
       ├── market_simulator
       └── simulation_runtime
+                ↑
+                └── experiment_system
 ```
 
 `simulation_runtime` 的唯一策略入口是 `SimulationTradePort`。适配器向当前
@@ -100,6 +104,93 @@ SimulationTradePort.instructions_for(current)
 留在后续批次。Viewer 只读取通用 Fill、权益与 `account_metrics`，不依赖网格或
 COIN-M 代码。
 
+## 实验系统 2A–2F
+
+`experiment_system` 当前实现配置规划、单次运行和确定性批量运行闭环：
+
+- 严格的 `experiment-spec/v1` JSON 配置；
+- 一个实验内的多个场景组；
+- 场景组内 market × strategy × execution × account 组合；
+- 显式参数轴与多 Seed 展开；
+- `max_runs` 数量保护；
+- Provider 显式注册、默认值解析和兼容性预检；
+- 规范 JSON、scenario_id、configuration_hash 和 run_id；
+- `validate_experiment()`、`plan_experiment()` 与紧凑 plan 文档；
+- `ExperimentManifest` 和 `PLANNED → RUNNING → SUCCEEDED/FAILED`
+  生命周期；
+- 每个实验一个 SQLite 结果库；
+- Summary 与 zlib 压缩的非市场 Trace BLOB；
+- 精确 Decimal OHLC 的内容寻址 Parquet 市场路径；
+- Git commit、tag、dirty worktree 内容指纹与可复现性标记；
+- 可由具体策略应用注入 Registry 的 `validate`、`plan`、`run` CLI 骨架；
+- `execute_experiment()` 按完整 plan 顺序执行全部 Run；
+- `execute_single_run()` 只是单 Run plan 的同一路径包装，不维护第二套执行逻辑。
+- `continue_on_error` 控制当前批次遇到失败后是否继续；
+- clean 实验可从原 SQLite 恢复，成功 Run 自动跳过，失败和中断 Run 必须显式处理；
+- `STANDARD` Trace 可预览后清理，`ARCHIVED` Trace 受普通清理保护。
+- 从 SQLite 只读查询实验、Run 和原始 Summary 标量，并支持筛选、排序和并排比较；
+- 本地只读结果页复用现有 K 线 Viewer，动态读取 SQLite Trace 与 Parquet，
+  正常浏览不生成临时 JSON；
+- CSV 和 Viewer JSON 只在用户显式执行导出时创建。
+
+不同场景组之间不会交叉组合。实验配置不能加载任意 Python import 路径；
+具体策略应用必须通过 `ProviderRegistry` 显式注册 Provider。
+
+正式执行默认拒绝 dirty 参与仓库；探索性运行必须显式使用
+`allow_dirty=True` 或 CLI 的 `--allow-dirty`，并在 Manifest、Summary 和
+RunRecord 中标记为不可复现。
+
+结果边界为：
+
+```text
+market_data/<market_path_id>.parquet
+experiment_results/<experiment_id>.sqlite3
+```
+
+SQLite 保存配置、状态、Summary 和 Trace，但不重复保存 K 线。查询 Summary
+不会读取或解压 Trace；成功状态、Summary、Trace 和市场引用在同一个事务中提交。
+同一实验中的全部 Run 共用一个 SQLite；相同市场路径通过内容寻址复用 Parquet。
+恢复时会校验完整 ExperimentSpec、Run plan 和代码指纹；配置不同但
+`experiment_id` 相同会拒绝覆盖。dirty 探索性实验不启用成功命中或断点恢复。
+
+批次恢复和 Trace 生命周期命令：
+
+```bash
+python -m experiment_system run experiment.json --rerun-failed
+python -m experiment_system run experiment.json --resume-interrupted
+python -m experiment_system archive-run experiment.sqlite3 \
+  --run-id <run-id> --reason "研究基线"
+python -m experiment_system purge-traces experiment.sqlite3
+python -m experiment_system purge-traces experiment.sqlite3 --confirm
+```
+
+`purge-traces` 默认只预览预计清理的 Run 和压缩 Payload 字节数；必须显式增加
+`--confirm` 才会在同一事务中删除 Trace BLOB 并把 `trace_state` 改为 `PURGED`。
+
+只读浏览一个结果目录：
+
+```bash
+python -m experiment_system serve-results experiment_results \
+  --viewer-root viewer --port 8088
+```
+
+访问 `http://127.0.0.1:8088/`。结果页可以查看 ExperimentSpec、代码版本、
+RunSpec、状态、参数、Trace/归档状态，并从数据库动态展开任意 Provider 的原始
+Summary 标量。页面不计算评价指标，也不提供创建、运行、重跑、归档或清理操作。
+
+显式导出比较表或某个 Run 的标准 Viewer JSON：
+
+```bash
+python -m experiment_system compare experiment.sqlite3 \
+  --output exports/comparison.csv
+python -m experiment_system export-run experiment.sqlite3 \
+  --run-id <run-id> --output exports/run.json
+```
+
+恰好只有一个 Run 的实验也可以在执行命令中显式增加
+`--export-viewer exports/run.json`。批量实验使用该参数会在任何 Run 开始前被拒绝，
+避免“应当导出哪一个 Run”产生隐式规则。
+
 ## 随机日线与可视化
 
 生成三年固定 seed 的等比挂单演示：
@@ -115,9 +206,10 @@ python3 scripts/generate_ladder_run.py
 viewer/data/btc-geometric-ladder-3y-seed-42.json
 ```
 
-接入后的改进版 COIN-M 多层跟随网格示例由
-`grid_trading/scripts/run_layered_following_grid_simulation.py`
-生成。Viewer 默认载入
+接入后的改进版 COIN-M 多层跟随网格示例由相邻 `grid_trading` 中的
+`experiments/layered_following_grid_baseline.json` 定义，并通过
+`scripts/run_layered_following_grid_simulation.py` 这个实验 CLI 薄封装显式导出。
+Viewer 默认载入
 `viewer/data/layered-following-grid-coinm-long-3y-seed-42.json`，并可切换查看 BTC
 总权益、按每日收盘价折算的 USDT 总权益、逐笔和累计手续费以及资金费净入账。
 原来的单组跟随网格结果仍可手动载入对照。
@@ -157,22 +249,24 @@ python3 scripts/generate_sample_run.py
 
 ## 开发运行
 
-可以将三个包安装到同一虚拟环境：
+可以将四个包安装到同一虚拟环境：
 
 ```bash
 python -m pip install -e packages/market_protocol
 python -m pip install -e packages/market_simulator
 python -m pip install -e packages/simulation_runtime
+python -m pip install -e packages/experiment_system
 ```
 
 也可以不安装，直接运行测试：
 
 ```bash
-PYTHONPATH=packages/market_protocol/src:packages/market_simulator/src:packages/simulation_runtime/src \
+PYTHONPATH=packages/market_protocol/src:packages/market_simulator/src:packages/simulation_runtime/src:packages/experiment_system/src \
 python -m unittest discover -s tests -v
 ```
 
 ## 后续接入顺序
 
 1. 资金费的历史回放和市场条件化生成留到策略优化精细化阶段。
-2. 在稳定执行边界上增加批量实验、评价指标和策略优化。
+2. 第二阶段实验系统 v1.0 已完成，下一阶段开始定义统一评价指标。
+3. 指标稳定后再进入市场环境扩展和策略优化。

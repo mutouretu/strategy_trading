@@ -46,8 +46,11 @@ cd ../grid_trading
 .venv/bin/python scripts/run_layered_following_grid_simulation.py
 ```
 
-单组跟随网格仍可通过
-`.venv/bin/python scripts/run_single_following_grid_simulation.py` 生成后手动载入。
+该脚本是 `experiments/layered_following_grid_baseline.json` 的薄封装：
+仿真事实先进入实验 SQLite 与 Parquet，再显式导出 Viewer JSON。单组跟随网格对应
+`experiments/single_following_grid_baseline.json`，仍可通过
+`.venv/bin/python scripts/run_single_following_grid_simulation.py` 导出后手动载入。
+正式基线要求两个仓库 clean；开发期可显式增加 `--allow-dirty`。
 
 COIN-M 强平展示样例位于
 `viewer/data/coinm-liquidation-adverse-extreme-v1.json`。它使用 5 倍杠杆、10 张

@@ -1,8 +1,9 @@
 (() => {
   "use strict";
 
-  const DEFAULT_RUN =
-    "./data/layered-following-grid-coinm-long-3y-seed-42.json";
+  const DEFAULT_RUN = new URLSearchParams(window.location.search)
+    .get("run_api")
+    || "./data/layered-following-grid-coinm-long-3y-seed-42.json";
   const VISIBLE_CANDLES = 80;
   const {normalizeRun} = window.SimulationRunModel;
   const layout = {
@@ -130,7 +131,7 @@
   async function loadDefault() {
     const response = await fetch(DEFAULT_RUN);
     if (!response.ok) {
-      throw new Error(`无法读取默认 run：HTTP ${response.status}`);
+      throw new Error(`无法读取 run：HTTP ${response.status}`);
     }
     applyRun(normalizeRun(await response.json()));
   }

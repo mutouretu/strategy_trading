@@ -48,6 +48,12 @@ input {
   gap: 16px;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .brand {
   font-size: 15px;
   font-weight: 600;
