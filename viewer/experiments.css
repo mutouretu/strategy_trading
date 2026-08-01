@@ -395,6 +395,67 @@
   gap: 16px;
 }
 
+.strategy-spec-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(330px, 0.9fr);
+  gap: 16px;
+}
+
+.formula-list,
+.constraint-list,
+.strategy-parameter-list {
+  padding: 14px 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.formula-item {
+  padding: 11px 12px;
+  border: 1px solid var(--tv-border);
+  border-radius: 7px;
+  background: var(--surface-soft);
+  color: #b8c8ff;
+  font-size: 11px;
+  white-space: normal;
+}
+
+.constraint-list {
+  padding-top: 0;
+}
+
+.constraint-item {
+  padding-left: 10px;
+  border-left: 2px solid #d8a23d;
+  color: #a8adb8;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.strategy-parameter-item {
+  padding: 9px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--tv-border);
+}
+
+.strategy-parameter-item div,
+.strategy-parameter-item strong,
+.strategy-parameter-item code {
+  display: block;
+}
+
+.strategy-parameter-item strong {
+  font-size: 11px;
+}
+
+.strategy-parameter-item code,
+.strategy-parameter-item > span {
+  color: var(--tv-muted);
+  font-size: 9px;
+}
+
 .strategy-flow {
   min-height: 170px;
   padding: 24px;
@@ -842,7 +903,8 @@
   }
 
   .market-layout,
-  .detail-columns {
+  .detail-columns,
+  .strategy-spec-grid {
     grid-template-columns: 1fr;
   }
 

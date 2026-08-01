@@ -263,6 +263,19 @@ class SimulationRunner:
                 used_instruction_keys,
             )
             if self.trace_port is not None:
+                # An active strategy may publish an intent while deciding at
+                # the current bar open and execute it on that same frame.  It
+                # must become visible before source validation, while passive
+                # intents published by earlier callbacks keep their existing
+                # lifecycle semantics.
+                active_intents = self._synchronize_intents(
+                    active_intents,
+                    tuple(self.trace_port.visible_intents()),
+                    current_sequence=current.sequence,
+                    filled_intent_keys=set(),
+                    intent_states=intent_states,
+                    intent_state_by_key=intent_state_by_key,
+                )
                 self._validate_instruction_sources(
                     instructions,
                     active_intents,

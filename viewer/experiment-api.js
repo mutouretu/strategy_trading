@@ -42,6 +42,9 @@
     strategyBody: byId("strategy-overview-body"),
     strategySelect: byId("strategy-detail-select"),
     strategyHero: byId("strategy-hero"),
+    strategyFormulae: byId("strategy-formulae"),
+    strategyConstraints: byId("strategy-constraints"),
+    strategyParameters: byId("strategy-parameters"),
     strategyFlow: byId("strategy-flow"),
     strategyNotes: byId("strategy-research-notes"),
     strategyConfigBody: byId("strategy-config-body"),
@@ -319,6 +322,48 @@
     );
     elements.strategyHero.replaceChildren(content, stats);
 
+    elements.strategyFormulae.replaceChildren();
+    const formulae = strategy.descriptor?.formulae || [];
+    (formulae.length ? formulae : ["该策略尚未登记数学公式。"])
+      .forEach((formula) =>
+        elements.strategyFormulae.append(
+          make("code", "formula-item", formula),
+        ),
+      );
+    elements.strategyConstraints.replaceChildren();
+    (strategy.descriptor?.constraints || []).forEach((constraint) =>
+      elements.strategyConstraints.append(
+        make("span", "constraint-item", constraint),
+      ),
+    );
+    elements.strategyParameters.replaceChildren();
+    const descriptorParameters = strategy.descriptor?.parameters || [];
+    if (!descriptorParameters.length) {
+      elements.strategyParameters.append(
+        make("div", "empty-cell", "该策略没有额外配置参数"),
+      );
+    } else {
+      descriptorParameters.forEach((parameter) => {
+        const row = make("div", "strategy-parameter-item");
+        const identity = make("div");
+        identity.append(
+          make("strong", "", parameter.name || parameter.key),
+          make("code", "", parameter.key),
+        );
+        row.append(
+          identity,
+          make(
+            "span",
+            "",
+            parameter.required
+              ? "必填"
+              : `默认 ${simpleValue(parameter.default)}`,
+          ),
+        );
+        elements.strategyParameters.append(row);
+      });
+    }
+
     const flow = strategy.descriptor?.flow || [
       {title: "市场数据", detail: "当前 K 线与历史状态"},
       {title: "策略判断", detail: "参数与内部状态"},
@@ -348,6 +393,14 @@
     );
 
     elements.strategyConfigBody.replaceChildren();
+    if (!strategy.configurations.length) {
+      emptyRow(
+        elements.strategyConfigBody,
+        3,
+        "尚未运行实验；策略已经注册，可以开始配置实验",
+      );
+      return;
+    }
     strategy.configurations.forEach((configuration) => {
       const row = document.createElement("tr");
       row.append(primaryCell(configuration.key, shortId(configuration.id, 20)));

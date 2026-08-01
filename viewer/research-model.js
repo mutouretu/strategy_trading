@@ -106,6 +106,20 @@
         .map((item) => [item.type, item]),
     );
 
+    strategyDescriptors.forEach((descriptor, strategyId) => {
+      strategyMap.set(strategyId, {
+        id: strategyId,
+        type: strategyId,
+        descriptor,
+        keys: new Set(),
+        experiments: new Set(),
+        markets: new Set(),
+        configurations: new Map(),
+        runs: [],
+        descriptions: new Set(),
+      });
+    });
+
     records.forEach((record) => {
       record.runs.forEach((run) => {
         const strategy = run.resolved_components.strategy;

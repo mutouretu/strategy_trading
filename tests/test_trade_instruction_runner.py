@@ -107,6 +107,40 @@ class TracedScriptedTradePort(ScriptedTradePort):
         )
 
 
+class SameFrameActiveIntentPort(ScriptedTradePort):
+    def __init__(self) -> None:
+        super().__init__({})
+        self.intent: IntentSnapshot | None = None
+
+    def instructions_for(
+        self,
+        frame: MarketFrame,
+    ) -> tuple[TradeInstruction, ...]:
+        self.events.append(("instructions", frame.sequence))
+        self.intent = IntentSnapshot(
+            intent_key="active-at-open",
+            instrument=frame.instrument,
+            side=OrderSide.BUY,
+            quantity=Decimal("1"),
+            intent_mode=TradeIntentMode.ACTIVE,
+        )
+        return (
+            instruction(
+                "active-at-open:fill",
+                frame.sequence,
+                source_intent_key=self.intent.intent_key,
+                price=str(frame.open),
+            ),
+        )
+
+    def visible_intents(self) -> tuple[IntentSnapshot, ...]:
+        return () if self.intent is None else (self.intent,)
+
+    def on_fills(self, fills: Sequence[SimFill]) -> None:
+        super().on_fills(fills)
+        self.intent = None
+
+
 class TradeInstructionTests(unittest.TestCase):
     def test_model_validates_instruction_specific_fields(self) -> None:
         with self.assertRaisesRegex(ValueError, "instruction_key"):
@@ -131,6 +165,23 @@ class TradeInstructionTests(unittest.TestCase):
 
 
 class TradeInstructionRunnerTests(unittest.TestCase):
+    def test_active_intent_can_be_published_and_filled_same_frame(
+        self,
+    ) -> None:
+        port = SameFrameActiveIntentPort()
+
+        result = SimulationRunner(
+            fixed_source(frame_count=2),
+            trade_port=port,
+        ).run()
+
+        self.assertEqual(len(result.fills), 1)
+        self.assertEqual(result.fills[0].price, Decimal("100"))
+        self.assertEqual(len(result.intents), 1)
+        self.assertEqual(result.intents[0].status, IntentStatus.FILLED)
+        self.assertEqual(result.intents[0].active_from_sequence, 1)
+        self.assertEqual(result.intents[0].active_to_sequence, 1)
+
     def test_runner_requires_a_trade_port(self) -> None:
         with self.assertRaisesRegex(TypeError, "trade_port"):
             SimulationRunner(fixed_source())  # type: ignore[call-arg]

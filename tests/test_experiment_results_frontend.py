@@ -70,6 +70,9 @@ class ExperimentResultsFrontendTests(unittest.TestCase):
         self.assertIn('id="detail-scenario-select"', html)
         self.assertIn('id="detail-seed-select"', html)
         self.assertIn('id="playback-frame"', html)
+        self.assertIn('id="strategy-formulae"', html)
+        self.assertIn('id="strategy-constraints"', html)
+        self.assertIn('id="strategy-parameters"', html)
         self.assertIn("页面不重新计算指标", html)
         for metric_key in (
             "return.total_rate",
@@ -94,6 +97,14 @@ class ExperimentResultsFrontendTests(unittest.TestCase):
         self.assertIn("loadSelectedRun()", script)
         self.assertIn("scenarioLiquidationRate(scenario)", script)
         self.assertIn('label = "强平状态"', script)
+        self.assertIn("strategy.descriptor?.formulae", script)
+        self.assertIn("strategy.descriptor?.parameters", script)
+
+        model = (self.viewer / "research-model.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("strategyDescriptors.forEach", model)
+        self.assertIn("runs: []", model)
 
 
 if __name__ == "__main__":

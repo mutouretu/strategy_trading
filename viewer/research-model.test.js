@@ -87,6 +87,19 @@ assert.equal(
   2,
 );
 
+const descriptorOnly = buildCatalog([], [
+  {
+    kind: "strategy",
+    type: "registered-only/v1",
+    display_name: "Registered Only",
+    formulae: ["x = 1"],
+  },
+]);
+assert.equal(descriptorOnly.strategies.length, 1);
+assert.equal(descriptorOnly.strategies[0].runs.length, 0);
+assert.equal(descriptorOnly.strategies[0].configurations.length, 0);
+assert.equal(descriptorOnly.strategies[0].descriptor.formulae[0], "x = 1");
+
 const daily = [
   {date: "2026-01-30", open: 100, high: 110, low: 90, close: 105},
   {date: "2026-01-31", open: 105, high: 115, low: 95, close: 110},
