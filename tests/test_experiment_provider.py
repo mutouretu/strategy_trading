@@ -29,8 +29,11 @@ class StrategyExperimentProviderTests(unittest.TestCase):
         source = inspect.getsource(StrategiesSimulationProvider._build_components)
         self.assertNotIn("strategy_type ==", source)
         self.assertNotIn("isinstance(", source)
+        self.assertNotIn("grid_experiments", inspect.getsource(
+            inspect.getmodule(StrategiesSimulationProvider)
+        ))
         descriptors = build_provider_registry().component_descriptors
-        self.assertEqual(len(descriptors), 3)
+        self.assertEqual(len(descriptors), 4)
         self.assertTrue(all(item.get("formulae") for item in descriptors))
 
 

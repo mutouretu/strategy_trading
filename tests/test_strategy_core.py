@@ -124,6 +124,28 @@ class StrategyCoreTests(unittest.TestCase):
                         violations.append(f"{path.name}:{name}")
         self.assertEqual(violations, [])
 
+    def test_grid_strategies_do_not_import_the_concrete_rule_engine(self) -> None:
+        root = (
+            Path(__file__).parents[1]
+            / "src"
+            / "trading_strategies"
+            / "grid_following"
+        )
+        forbidden_names = {"GridRuleEngine", "build_grid_cells"}
+        violations = []
+        for path in root.glob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ImportFrom):
+                    continue
+                imported = {alias.name for alias in node.names}
+                matched = imported & forbidden_names
+                if matched:
+                    violations.append(
+                        f"{path.name}:{','.join(sorted(matched))}"
+                    )
+        self.assertEqual(violations, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,12 +6,10 @@ from decimal import Decimal
 import strategy_simulation  # noqa: F401 - activates local checkout imports
 
 from experiment_system import ComponentSpec
-from grid_experiments.account_factories import (
+from strategy_simulation.components import (
     build_account_runtime,
-    resolve_account_component,
-)
-from grid_experiments.execution_factories import (
     build_execution_runtime,
+    resolve_account_component,
     resolve_execution_component,
 )
 from market_simulator import FixedBarMarketSource
@@ -119,6 +117,7 @@ class StrategySimulationTests(unittest.TestCase):
             set(registry.strategy_types),
             {
                 "hold-btc/v1",
+                "layered-following-grid/v1",
                 "target-liquidation-ladder-long/v1",
                 "single-following-grid/v1",
             },

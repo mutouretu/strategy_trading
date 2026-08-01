@@ -1,10 +1,10 @@
 {
   "schema_version": "experiment-spec/v1",
-  "experiment_id": "strategy-baselines-v1",
-  "description": "相同三年行情、账户、执行与双 Seed 下的 BTC 持有、目标强平价阶梯止盈和单组跟随网格对照",
+  "experiment_id": "layered-following-grid-baseline",
+  "description": "三年 Anchored GBM 上的多层 COIN-M 跟随网格基线",
   "scenario_groups": [
     {
-      "key": "btc-strategy-baselines",
+      "key": "coinm-layered-following-grid",
       "run_provider": "strategies-simulation/v1",
       "markets": [
         {
@@ -33,54 +33,33 @@
       ],
       "strategies": [
         {
-          "key": "hold-btc",
-          "type": "hold-btc/v1",
+          "key": "layered-following-base",
+          "type": "layered-following-grid/v1",
           "parameters": {
-            "strategy_id": "hold-btc-baseline",
-            "instrument": "BTCUSD_PERP"
-          }
-        },
-        {
-          "key": "target-liquidation-ladder",
-          "type": "target-liquidation-ladder-long/v1",
-          "parameters": {
-            "strategy_id": "btc-target-liquidation-ladder",
-            "instrument": "BTCUSD_PERP",
-            "target_liquidation_price": "20000",
-            "first_take_profit_ratio": "1.10",
-            "take_profit_end_price": "150000",
-            "take_profit_count": 10,
-            "tick_size": "0.1",
-            "quantity_step": "1",
-            "sizing_safety_buffer_ratio": "0"
-          }
-        },
-        {
-          "key": "single-following-grid",
-          "type": "single-following-grid/v1",
-          "parameters": {
-            "strategy_id": "single-following-grid-v1",
+            "strategy_id": "layered-following-grid-coinm-long-3y",
             "rule": {
-              "grid_id": "single-following-grid-rule",
+              "grid_id": "layered-following-grid-template",
               "instrument": "BTCUSD_PERP",
               "mode": "long",
               "anchor_price": "65000",
-              "grid_ratio": "0.04",
-              "grid_count": 5,
+              "grid_ratio": "0.02",
+              "grid_count": 3,
               "order_notional": "0",
               "tick_size": "0.1",
               "quantity_step": "1",
               "move_grid": true,
               "market_type": "coinm",
-              "order_coin_quantity": "0.01",
+              "order_coin_quantity": "0.003",
               "contract_size": "100"
-            }
+            },
+            "deployment_step": "5000",
+            "max_layers": null
           }
         }
       ],
       "executions": [
         {
-          "key": "daily-execution",
+          "key": "daily-passive",
           "type": "daily-bar-execution/v1",
           "parameters": {
             "maker_fee_rate": "0.0002",
@@ -92,35 +71,32 @@
       ],
       "accounts": [
         {
-          "key": "coinm-cross-1-1-btc",
+          "key": "coinm-long",
           "type": "coinm-inverse/v1",
           "parameters": {
             "instrument": "BTCUSD_PERP",
             "contract_size": "100",
-            "spot_btc": "0",
-            "futures_wallet_btc": "1.1",
+            "spot_btc": "1",
+            "futures_wallet_btc": "0.2",
             "base_asset": "BTC",
             "quote_asset": "USDT",
             "notional_asset": "USD",
-            "margin_model": "flat-maintenance/v1",
-            "leverage": "5",
-            "maintenance_margin_rate": "0.005",
-            "mark_price_sampling": "ADVERSE_EXTREME"
+            "margin_model": "none"
           }
         }
       ]
     }
   ],
-  "seeds": [42, 43],
+  "seeds": [42],
   "output": {
     "root": "experiment_results",
     "default_retention_class": "standard"
   },
   "controls": {
-    "max_runs": 6,
+    "max_runs": 1,
     "continue_on_error": false
   },
   "metadata": {
-    "purpose": "strategy-system-v1-baseline-comparison"
+    "purpose": "strategy-system-layered-following-grid-baseline"
   }
 }

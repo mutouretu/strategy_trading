@@ -1,17 +1,18 @@
-from grid_metrics import GridMetricCalculator
 from metric_system import CoreMetricCalculator, MetricRegistry
 
 from .calculator import BtcAccumulationMetricCalculator
-from .contributor import StrategiesCoinMMetricInputContributor
+from .coinm_contributor import StrategiesCoinMMetricInputContributor
+from .grid import GridMetricCalculator
 
 
 class StrategySystemGridMetricCalculator(GridMetricCalculator):
-    """Apply grid metrics only to the registered grid bridge."""
+    """Apply grid metrics only to registered grid strategies."""
 
     def calculate(self, metric_input):
-        if metric_input.provider_summary.get("strategy_type") != (
-            "single-following-grid/v1"
-        ):
+        if metric_input.provider_summary.get("strategy_type") not in {
+            "single-following-grid/v1",
+            "layered-following-grid/v1",
+        }:
             return ()
         return super().calculate(metric_input)
 

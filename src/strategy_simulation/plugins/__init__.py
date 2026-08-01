@@ -1,6 +1,11 @@
 from .hold_btc import HOLD_BTC_V1, HoldBtcSimulationPlugin
-from .single_following_grid_bridge import (
-    SingleFollowingGridBridgePlugin,
+from .layered_following_grid import (
+    LAYERED_FOLLOWING_GRID_V1,
+    LayeredFollowingGridSimulationPlugin,
+)
+from .single_following_grid import (
+    SINGLE_FOLLOWING_GRID_V1,
+    SingleFollowingGridSimulationPlugin,
 )
 from .target_liquidation_ladder import (
     TARGET_LIQUIDATION_LADDER_LONG_V1,
@@ -9,8 +14,11 @@ from .target_liquidation_ladder import (
 
 __all__ = [
     "HOLD_BTC_V1",
+    "LAYERED_FOLLOWING_GRID_V1",
+    "SINGLE_FOLLOWING_GRID_V1",
     "TARGET_LIQUIDATION_LADDER_LONG_V1",
     "HoldBtcSimulationPlugin",
-    "SingleFollowingGridBridgePlugin",
+    "LayeredFollowingGridSimulationPlugin",
+    "SingleFollowingGridSimulationPlugin",
     "TargetLiquidationLadderSimulationPlugin",
 ]

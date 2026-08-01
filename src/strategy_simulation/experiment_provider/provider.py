@@ -5,26 +5,24 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from experiment_system import ProviderRegistry, RunSpec, ScenarioConfiguration
-from grid_experiments.account_factories import (
-    CoinMAccountRuntime,
-    build_account_runtime,
-    resolve_account_component,
-)
-from grid_experiments.execution_factories import (
-    DailyExecutionRuntime,
-    build_execution_runtime,
-    resolve_execution_component,
-)
-from grid_experiments.market_factories import (
-    build_market_source,
-    resolve_market_component,
-)
 from market_simulator import AnchoredGBMMarketSource
 from simulation_runtime import SimulationResult, SimulationRunner
 
+from ..components import (
+    CoinMAccountRuntime,
+    DailyExecutionRuntime,
+    build_account_runtime,
+    build_execution_runtime,
+    build_market_source,
+    resolve_account_component,
+    resolve_execution_component,
+    resolve_market_component,
+)
+
 from ..plugins import (
     HoldBtcSimulationPlugin,
-    SingleFollowingGridBridgePlugin,
+    LayeredFollowingGridSimulationPlugin,
+    SingleFollowingGridSimulationPlugin,
     TargetLiquidationLadderSimulationPlugin,
 )
 from ..registry import (
@@ -144,7 +142,8 @@ def build_strategy_registry() -> SimulationStrategyRegistry:
     registry = SimulationStrategyRegistry()
     registry.register(HoldBtcSimulationPlugin())
     registry.register(TargetLiquidationLadderSimulationPlugin())
-    registry.register(SingleFollowingGridBridgePlugin())
+    registry.register(SingleFollowingGridSimulationPlugin())
+    registry.register(LayeredFollowingGridSimulationPlugin())
     return registry
 
 

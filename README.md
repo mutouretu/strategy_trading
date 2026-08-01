@@ -3,13 +3,14 @@
 策略体系工程同时包含两条明确隔离的代码边界：
 
 - `trading_strategies`：纯策略核心，不依赖 simulator、实验系统或实盘 Server；
-- `strategy_simulation`：Simulation Adapter、显式 Plugin Registry、实验 Provider 和策略指标。
+- `strategy_simulation`：Simulation Adapter、实验组件、显式 Plugin Registry、实验 Provider 和策略指标。
 
 当前注册的仿真策略：
 
 - `hold-btc/v1`；
 - `target-liquidation-ladder-long/v1`；
-- `single-following-grid/v1`（桥接并复用 `grid_trading` 的已有实现）。
+- `single-following-grid/v1`；
+- `layered-following-grid/v1`。
 
 ## 本地布局
 
@@ -23,7 +24,11 @@ strategy_trading/
 ```
 
 开发模式下，`strategy_simulation` 会从上述相邻目录接入公共包和已验证的
-COIN-M 组件；`trading_strategies` 本身没有该依赖。
+COIN-M 数值实现；策略实验使用的市场、账户和执行组件定义位于本仓库的
+`strategy_simulation.components`。`trading_strategies.grid_following` 只依赖其中的 `grid_rule`
+DTO 和策略侧 `GridRulePort`，不创建具体 `GridRuleEngine`，也不依赖
+`grid_server`、simulator 或实验系统。`GridRuleEnginePort` 的具体包装位于
+`strategy_simulation.adapters`。
 
 ## 验证与实验
 
@@ -36,6 +41,16 @@ PYTHONPATH=src python3 -m strategy_simulation \
 PYTHONPATH=src python3 -m strategy_simulation \
   run experiments/strategy_baselines_v1.json \
   --database experiments/experiment_results/strategy-baselines-v1.sqlite3 \
+  --market-root experiments/market_data
+
+PYTHONPATH=src python3 -m strategy_simulation \
+  run experiments/single_following_grid_baseline.json \
+  --database experiments/experiment_results/single-following-grid.sqlite3 \
+  --market-root experiments/market_data
+
+PYTHONPATH=src python3 -m strategy_simulation \
+  run experiments/layered_following_grid_baseline.json \
+  --database experiments/experiment_results/layered-following-grid.sqlite3 \
   --market-root experiments/market_data
 ```
 
@@ -72,6 +87,6 @@ PYTHONPATH=src python3 -m strategy_simulation \
 
 - 不修改实盘 `server`；
 - 不复制 COIN-M 盈亏、保证金或强平公式；
-- 不迁移现有网格策略实现；
+- 不迁移尚未选定的其他网格策略实现；
 - 不实现参数搜索、训练或自动优化；
 - 不把具体策略写进 `simulation_runtime`。
