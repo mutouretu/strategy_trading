@@ -30,102 +30,10 @@ from grid_rule.adapters import (  # noqa: E402
     InverseContractLedger,
 )
 from market_simulator import FixedBarMarketSource  # noqa: E402
-from scripts.run_single_following_grid_simulation import (  # noqa: E402
-    build_run,
-)
 from simulation_runtime import IntentStatus, SimulationRunner  # noqa: E402
 
 
 class GridRuleSimulationTests(unittest.TestCase):
-    def test_three_year_grid_rule_run_is_reproducible(self) -> None:
-        document = build_run()
-
-        self.assertEqual(
-            document["manifest"]["simulation_adapter"],
-            "single_following_grid_simulation_adapter",
-        )
-        self.assertEqual(
-            document["manifest"]["strategy_id"],
-            "single-following-grid-coinm-long-3y",
-        )
-        self.assertEqual(
-            document["manifest"]["maker_fee_rate"],
-            "0.0002",
-        )
-        self.assertEqual(
-            document["manifest"]["taker_fee_rate"],
-            "0.0005",
-        )
-        self.assertEqual(len(document["market"]), 1097)
-        self.assertEqual(
-            min(Decimal(bar["low"]) for bar in document["market"]),
-            Decimal("40000"),
-        )
-        self.assertEqual(
-            max(Decimal(bar["high"]) for bar in document["market"]),
-            Decimal("200000"),
-        )
-        self.assertEqual(document["summary"]["completed_cycles"], 75)
-        self.assertEqual(document["summary"]["fill_count"], 155)
-        self.assertEqual(document["summary"]["cells_added"], 29)
-        self.assertEqual(document["summary"]["cells_reclaimed"], 29)
-        self.assertEqual(
-            document["summary"]["final_positions"],
-            {"BTCUSD_PERP": "90"},
-        )
-        self.assertEqual(document["summary"]["equity_asset"], "BTC")
-        self.assertEqual(
-            document["summary"]["final_account_metrics"][
-                "total_equity_btc"
-            ],
-            "1.122361740844490370041605073",
-        )
-        self.assertEqual(
-            document["summary"]["final_account_metrics"][
-                "total_equity_usdt"
-            ],
-            "179577.8785351184592066568117",
-        )
-        self.assertEqual(
-            document["summary"]["total_fees"],
-            "0.0003060808934276443024893379629",
-        )
-        self.assertEqual(
-            sum(
-                (
-                    Decimal(fill["fee_amount"])
-                    for fill in document["fills"]
-                ),
-                Decimal("0"),
-            ),
-            Decimal(document["summary"]["total_fees"]),
-        )
-        self.assertEqual(
-            {
-                fill["liquidity_role"]
-                for fill in document["fills"]
-            },
-            {"MAKER"},
-        )
-        self.assertTrue(
-            document["summary"]["futures_equity_nonpositive"]
-        )
-        self.assertEqual(
-            document["summary"][
-                "first_nonpositive_futures_equity_date"
-            ],
-            "2028-04-24",
-        )
-
-    def test_static_comparison_remains_a_direct_rule_baseline(self) -> None:
-        document = build_run(move_grid=False)
-
-        self.assertEqual(
-            document["manifest"]["simulation_adapter"],
-            "grid_rule_simulation_adapter",
-        )
-        self.assertIsNone(document["manifest"]["strategy_id"])
-
     def test_adapter_runs_one_long_grid_cycle(self) -> None:
         adapter = GridRuleSimulationAdapter(
             GridRuleConfig(

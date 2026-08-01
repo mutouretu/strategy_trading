@@ -78,8 +78,9 @@ SimulationRunner
     → GridRuleEngine
 ```
 
-该策略只在启动时部署一组跟随网格，并始终维护这一组网格。`--static-grid` 不走策略层，
-保留为直接调用 `GridRuleSimulationAdapter` 的规则基线。
+该策略只在启动时部署一组跟随网格，并始终维护这一组网格。直接调用
+`GridRuleSimulationAdapter` 的静态规则行为由单元测试保留，不再维护另一套三年
+演示脚本。
 
 改进版多层策略的调用顺序保持同一边界：
 
@@ -113,63 +114,51 @@ Funding(BTC)   = -仓位方向 × 张数 × contractSize / mark × fundingRate
 `FixedBpsSlippageModel`，这类触价成交仍保持网格指定价格；固定 bps 只作用于
 ACTIVE 指令。最终 Fill 同时记录参考价、有效价和滑点，COIN-M 手续费按有效价计算。
 
-运行三年 COIN-M 示例：
+三年 COIN-M 单组和分层示例已经成为正式实验配置：
+
+```bash
+experiments/single_following_grid_baseline.json
+experiments/layered_following_grid_baseline.json
+```
+
+统一运行入口：
+
+```bash
+.venv/bin/python -m grid_experiments plan \
+  experiments/single_following_grid_baseline.json
+.venv/bin/python -m grid_experiments run \
+  experiments/single_following_grid_baseline.json
+
+.venv/bin/python -m grid_experiments plan \
+  experiments/layered_following_grid_baseline.json
+.venv/bin/python -m grid_experiments run \
+  experiments/layered_following_grid_baseline.json
+```
+
+配置、状态、Summary 和压缩 Trace 保存到每实验一个 SQLite；K 线按内容寻址保存为
+Parquet。策略参数、账户余额、费率和 Seed 统一从实验 JSON 读取，不再散落在 Python
+脚本参数中。
+
+需要生成原有 Viewer 示例文件时，仍可使用两个兼容命令：
 
 ```bash
 .venv/bin/python scripts/run_single_following_grid_simulation.py
-```
-
-默认运行跟随网格，结果写入相邻 `market_simulator` 工程的：
-
-```text
-viewer/data/single-following-grid-coinm-long-3y-seed-42.json
-```
-
-示例初始账户为 `1 BTC` 长期现货底仓和 `0.1 BTC` 合约钱包，每格配置
-`0.01 BTC`、每张合约面值 `100 USD`，并显式假设 Maker 费率 `0.0002`、Taker
-费率 `0.0005`。这些参数只用于当前可复现实验，不代表账户实际费率，均可在脚本中调整。
-
-```bash
-.venv/bin/python scripts/run_single_following_grid_simulation.py \
-  --spot-btc 1 \
-  --futures-wallet-btc 0.2 \
-  --order-coin-qty 0.005 \
-  --maker-fee-rate 0.0002 \
-  --taker-fee-rate 0.0005
-```
-
-使用之前的 USD-M 线性账本：
-
-```bash
-.venv/bin/python scripts/run_single_following_grid_simulation.py --linear
-```
-
-静态网格仍可通过 `--static-grid` 生成对照；该参数可和 `--linear` 组合。
-
-```bash
-.venv/bin/python scripts/run_single_following_grid_simulation.py --static-grid
-```
-
-Viewer 默认载入 COIN-M 跟随网格结果。账户区分开显示 BTC 与 USDT 总权益、净已实现
-盈亏和累计手续费，权益曲线可在 BTC 和 USDT 计价之间切换。run 同时记录合约子账户
-最低权益；如果该权益不大于零，Viewer 会显示风险提示。由于尚未将逐 Bar 保证金快照
-和强平事件接入当前示例及 run JSON，这个提示只说明账户已经不可能继续按当前仿真
-成交。Runtime 内部已经可以按 close 或盘中最不利价格终止，但 Viewer 尚未显示该
-终止状态。
-
-运行改进版多层跟随网格：
-
-```bash
 .venv/bin/python scripts/run_layered_following_grid_simulation.py
 ```
 
-结果写入：
+这两个脚本现在只是 `grid_experiments run --export-viewer` 的薄封装，不再自己构造
+MarketSource、策略、SimulationRunner、账本或 Summary。默认分别导出到：
 
 ```text
-viewer/data/layered-following-grid-coinm-long-3y-seed-42.json
+../market_simulator/viewer/data/single-following-grid-coinm-long-3y-seed-42.json
+../market_simulator/viewer/data/layered-following-grid-coinm-long-3y-seed-42.json
 ```
 
-Viewer 默认载入这份改进版结果。原来的单组跟随网格脚本和结果仍保留作对照。
+单组配置使用 `1 BTC` 现货底仓、`0.1 BTC` 合约钱包和每格 `0.01 BTC`；分层配置
+使用 `1 BTC` 现货底仓、`0.2 BTC` 合约钱包和每格 `0.003 BTC`。两者均使用
+`100 USD` 合约面值、Maker `0.0002` 与 Taker `0.0005` 的研究假设。需要修改时应
+复制实验 JSON，并先运行 `plan` 检查展开结果。Viewer 默认载入分层结果；单组结果
+保留作对照。
 
 测试：
 

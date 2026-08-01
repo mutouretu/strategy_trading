@@ -10,6 +10,7 @@ SERVER_ROOT = PROJECT_ROOT / "grid_server"
 RESEARCH_PACKAGE_ROOTS = (
     PROJECT_ROOT / "grid_rule",
     PROJECT_ROOT / "grid_strategies",
+    PROJECT_ROOT / "grid_experiments",
 )
 STRATEGY_ROOT = PROJECT_ROOT / "grid_strategies"
 CANONICAL_PACKAGES = {
@@ -91,7 +92,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertEqual(
             violations,
             [],
-            "rule and strategy packages must not depend on grid_server",
+            "research and experiment packages must not depend on grid_server",
         )
 
     def test_strategy_core_does_not_import_simulation_runtime(self):
