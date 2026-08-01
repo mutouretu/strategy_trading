@@ -1,8 +1,9 @@
 (() => {
   "use strict";
 
-  const DEFAULT_RUN = new URLSearchParams(window.location.search)
-    .get("run_api")
+  const query = new URLSearchParams(window.location.search);
+  document.body.classList.toggle("embedded-player", query.get("embedded") === "1");
+  const DEFAULT_RUN = query.get("run_api")
     || "./data/layered-following-grid-coinm-long-3y-seed-42.json";
   const VISIBLE_CANDLES = 80;
   const {normalizeRun} = window.SimulationRunModel;

@@ -3,171 +3,255 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Simulation Experiments</title>
+    <title>Strategy Research Lab</title>
     <meta
       name="description"
-      content="Read-only simulation experiment results and raw Summary comparison."
+      content="Read-only strategy, market environment and simulation experiment research workspace."
     >
     <link rel="stylesheet" href="./styles.css">
     <link rel="stylesheet" href="./experiments.css">
   </head>
-  <body>
-    <header class="topbar">
-      <div>
-        <div class="brand">Simulation Experiments</div>
-        <div class="page-subtitle">只读结果浏览与原始事实并排比较</div>
+  <body class="research-app">
+    <aside class="app-sidebar">
+      <div class="sidebar-brand">
+        <span class="brand-mark">SR</span>
+        <div>
+          <strong>Strategy Research</strong>
+          <span>Simulation Lab</span>
+        </div>
       </div>
-      <a class="text-link" href="./index.html">K 线播放器</a>
-    </header>
 
-    <main class="experiments-layout">
-      <aside class="experiment-sidebar">
-        <div class="sidebar-heading">
-          <div>
-            <h1>实验</h1>
-            <span id="experiment-count">载入中…</span>
-          </div>
-          <button class="button" id="refresh-experiments" type="button">
-            刷新
+      <nav class="primary-nav" aria-label="研究系统导航">
+        <section class="nav-group">
+          <div class="nav-group-label">策略</div>
+          <button class="nav-item active" data-page="strategy-overview" type="button">
+            <span class="nav-icon">▦</span>策略总览
           </button>
-        </div>
-        <div id="experiment-list" class="experiment-list"></div>
-      </aside>
+          <button class="nav-item" data-page="strategy-detail" type="button">
+            <span class="nav-icon">ƒ</span>策略详情
+          </button>
+        </section>
 
-      <section class="experiment-workspace">
-        <div id="empty-state" class="empty-state">
-          <strong>选择一个实验</strong>
-          <span>查看配置、Run 状态和已保存的原始 Summary。</span>
-        </div>
+        <section class="nav-group">
+          <div class="nav-group-label">市场环境</div>
+          <button class="nav-item" data-page="market-overview" type="button">
+            <span class="nav-icon">⌁</span>行情列表
+          </button>
+        </section>
 
-        <div id="experiment-view" hidden>
-          <section class="experiment-header">
+        <section class="nav-group">
+          <div class="nav-group-label">实验</div>
+          <button class="nav-item" data-page="experiment-overview" type="button">
+            <span class="nav-icon">▤</span>实验总览
+          </button>
+          <button class="nav-item" data-page="experiment-detail" type="button">
+            <span class="nav-icon">◎</span>实验详情
+          </button>
+          <button class="nav-item" data-page="playback" type="button">
+            <span class="nav-icon">▶</span>K 线播放
+          </button>
+        </section>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div id="catalog-status">正在载入研究目录…</div>
+        <button class="button sidebar-refresh" id="refresh-catalog" type="button">
+          刷新数据
+        </button>
+      </div>
+    </aside>
+
+    <div class="app-content">
+      <header class="workspace-topbar">
+        <div>
+          <div class="eyebrow" id="page-eyebrow">STRATEGIES</div>
+          <h1 id="page-title">策略总览</h1>
+        </div>
+        <div class="topbar-meta">
+          <span class="read-only-badge">只读研究环境</span>
+          <span id="data-updated-at">—</span>
+        </div>
+      </header>
+
+      <main class="workspace-main">
+        <section class="workspace-page active" data-page-panel="strategy-overview">
+          <div class="page-intro">
             <div>
-              <div class="eyebrow">EXPERIMENT</div>
-              <h2 id="experiment-title">—</h2>
-              <p id="experiment-description">—</p>
+              <h2>策略目录</h2>
+              <p>按策略实现分组，配置、实验和市场环境作为策略的研究记录。</p>
             </div>
-            <div class="header-actions">
-              <span id="experiment-status" class="status-pill">—</span>
-              <a id="download-comparison" class="button" href="#">
-                导出 comparison.csv
-              </a>
+            <div id="strategy-overview-facts" class="mini-facts"></div>
+          </div>
+          <div class="data-panel">
+            <div class="table-wrap">
+              <table class="research-table">
+                <thead>
+                  <tr>
+                    <th>策略</th>
+                    <th>配置数</th>
+                    <th>实验数</th>
+                    <th>市场环境</th>
+                    <th>运行结果</th>
+                    <th>最近研究</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="strategy-overview-body"></tbody>
+              </table>
             </div>
-          </section>
+          </div>
+        </section>
 
-          <section id="experiment-facts" class="fact-strip"></section>
-
-          <details class="document-panel">
-            <summary>查看 ExperimentSpec 与代码版本</summary>
-            <div class="document-grid">
-              <div>
-                <h3>ExperimentSpec</h3>
-                <pre id="experiment-spec"></pre>
+        <section class="workspace-page" data-page-panel="strategy-detail">
+          <div class="page-toolbar">
+            <label>
+              当前策略
+              <select id="strategy-detail-select"></select>
+            </label>
+          </div>
+          <section id="strategy-hero" class="strategy-hero"></section>
+          <div class="detail-columns">
+            <section class="data-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>执行流程</h2>
+                  <p>这里只描述策略与仿真框架的调用关系，不展示实现代码。</p>
+                </div>
               </div>
+              <div id="strategy-flow" class="strategy-flow" aria-label="策略执行流程">
+                <div><span>01</span><strong>市场数据</strong><small>当前 K 线与历史状态</small></div>
+                <i>→</i>
+                <div><span>02</span><strong>策略判断</strong><small>参数与内部状态</small></div>
+                <i>→</i>
+                <div><span>03</span><strong>交易意图</strong><small>方向、数量与触发条件</small></div>
+                <i>→</i>
+                <div><span>04</span><strong>执行与账户</strong><small>成交、记账与指标</small></div>
+              </div>
+            </section>
+            <section class="data-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>研究说明</h2>
+                  <p>来自使用该策略的实验描述。</p>
+                </div>
+              </div>
+              <div id="strategy-research-notes" class="note-list"></div>
+            </section>
+          </div>
+          <section class="data-panel">
+            <div class="panel-heading">
               <div>
-                <h3>Code Revisions</h3>
-                <pre id="code-revisions"></pre>
+                <h2>已研究配置</h2>
+                <p>同一策略实现下，不同参数组合形成独立配置。</p>
               </div>
             </div>
-          </details>
-
-          <section class="run-panel">
-            <div class="panel-heading result-heading">
-              <div>
-                <h2>Run 结果</h2>
-                <p id="run-result-count">—</p>
-              </div>
-            </div>
-
-            <form id="run-filters" class="filter-bar">
-              <label>
-                搜索
-                <input id="filter-search" type="search" placeholder="Run、Scenario、组件或参数">
-              </label>
-              <label>
-                状态
-                <select id="filter-status">
-                  <option value="">全部</option>
-                  <option value="SUCCEEDED">SUCCEEDED</option>
-                  <option value="FAILED">FAILED</option>
-                  <option value="RUNNING">RUNNING</option>
-                  <option value="PLANNED">PLANNED</option>
-                </select>
-              </label>
-              <label>
-                Seed
-                <input id="filter-seed" type="number" step="1" placeholder="全部">
-              </label>
-              <label>
-                排序
-                <select id="filter-sort">
-                  <option value="run_order">Plan 顺序</option>
-                  <option value="seed">Seed</option>
-                  <option value="status">状态</option>
-                  <option value="duration_seconds">耗时</option>
-                  <option value="finished_at">完成时间</option>
-                </select>
-              </label>
-              <label>
-                顺序
-                <select id="filter-order">
-                  <option value="asc">升序</option>
-                  <option value="desc">降序</option>
-                </select>
-              </label>
-              <button class="button button-primary" type="submit">
-                应用
-              </button>
-            </form>
-
-            <div class="summary-field-panel">
-              <div>
-                <strong>Summary 标量列</strong>
-                <span>字段来自数据库，页面不计算指标。</span>
-              </div>
-              <select
-                id="summary-fields"
-                multiple
-                size="5"
-                aria-label="选择 Summary 标量列"
-              ></select>
-            </div>
-
-            <div class="table-wrap run-table-wrap">
-              <table class="run-table">
-                <thead id="runs-head"></thead>
-                <tbody id="runs-body"></tbody>
+            <div class="table-wrap">
+              <table class="research-table">
+                <thead>
+                  <tr><th>配置名称</th><th>参数</th><th>Run 数</th></tr>
+                </thead>
+                <tbody id="strategy-config-body"></tbody>
               </table>
             </div>
           </section>
-        </div>
-      </section>
-    </main>
+        </section>
 
-    <dialog id="run-dialog" class="run-dialog">
-      <div class="dialog-heading">
-        <div>
-          <div class="eyebrow">RUN DETAIL</div>
-          <h2 id="dialog-run-id">—</h2>
-        </div>
-        <button class="button" id="close-run-dialog" type="button">
-          关闭
-        </button>
-      </div>
-      <div id="dialog-actions" class="dialog-actions"></div>
-      <div class="document-grid">
-        <div>
-          <h3>RunSpec</h3>
-          <pre id="dialog-run-spec"></pre>
-        </div>
-        <div>
-          <h3>Summary / Error</h3>
-          <pre id="dialog-run-summary"></pre>
-        </div>
-      </div>
-    </dialog>
+        <section class="workspace-page" data-page-panel="market-overview">
+          <div class="page-intro">
+            <div>
+              <h2>市场环境</h2>
+              <p>市场配置定义大势与生成模型，Seed 对应一条确定的价格路径。</p>
+            </div>
+            <div class="interval-switch" id="market-interval-switch">
+              <button data-interval="1w" class="active" type="button">周线</button>
+              <button data-interval="1m" type="button">月线</button>
+            </div>
+          </div>
+          <div class="market-layout">
+            <section class="data-panel market-list-panel">
+              <div id="market-list" class="selection-list"></div>
+            </section>
+            <section class="data-panel market-chart-panel">
+              <div class="panel-heading market-heading">
+                <div>
+                  <h2 id="market-chart-title">选择一个市场环境</h2>
+                  <p id="market-chart-description">—</p>
+                </div>
+                <label>
+                  价格路径
+                  <select id="market-path-select"></select>
+                </label>
+              </div>
+              <div id="market-parameter-chips" class="parameter-chips"></div>
+              <div class="overview-chart-wrap">
+                <svg id="market-chart" viewBox="0 0 1200 520" role="img" aria-label="市场环境整体 K 线"></svg>
+                <div id="market-chart-empty" class="chart-empty">选择价格路径后载入 K 线</div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="workspace-page" data-page-panel="experiment-overview">
+          <div class="page-intro">
+            <div>
+              <h2>实验总览</h2>
+              <p>先按策略分组；展开实验后查看配置与市场环境的笛卡尔积。</p>
+            </div>
+            <a id="download-current-comparison" class="button" href="#" hidden>导出当前实验</a>
+          </div>
+          <div id="experiment-groups" class="experiment-groups"></div>
+        </section>
+
+        <section class="workspace-page" data-page-panel="experiment-detail">
+          <div class="run-selector-grid">
+            <label>实验<select id="detail-experiment-select"></select></label>
+            <label>配置 / 市场<select id="detail-scenario-select"></select></label>
+            <label>Seed<select id="detail-seed-select"></select></label>
+          </div>
+          <section id="run-detail-hero" class="run-detail-hero"></section>
+          <section class="data-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>关键指标</h2>
+                <p>优先展示收益、回撤、强平距离和成交事实；页面不重新计算指标。</p>
+              </div>
+              <button id="open-playback-from-detail" class="button button-primary" type="button">
+                查看 K 线播放
+              </button>
+            </div>
+            <div id="run-key-metrics" class="metric-card-grid"></div>
+          </section>
+          <div class="detail-columns">
+            <section class="data-panel">
+              <div class="panel-heading"><div><h2>本次配置</h2><p>策略、市场、执行与账户。</p></div></div>
+              <div id="run-configuration" class="configuration-sections"></div>
+            </section>
+            <section class="data-panel">
+              <div class="panel-heading"><div><h2>全部指标</h2><p>按 MetricSet 分组。</p></div></div>
+              <div id="all-metrics" class="all-metrics"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="workspace-page" data-page-panel="playback">
+          <div class="page-intro playback-intro">
+            <div>
+              <h2>K 线播放</h2>
+              <p id="playback-context">从实验详情选择一个带 Trace 的 Run。</p>
+            </div>
+            <button id="open-player-window" class="button" type="button">在新窗口打开</button>
+          </div>
+          <div id="playback-empty" class="large-empty">
+            <strong>还没有选择可播放的 Run</strong>
+            <span>进入实验详情，选择配置与 Seed 后点击“查看 K 线播放”。</span>
+          </div>
+          <iframe id="playback-frame" class="playback-frame" title="仿真 K 线播放" hidden></iframe>
+        </section>
+      </main>
+    </div>
 
     <div id="page-message" class="page-message" role="status"></div>
+    <script src="./research-model.js"></script>
     <script src="./experiment-api.js"></script>
   </body>
 </html>

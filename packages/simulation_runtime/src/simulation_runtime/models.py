@@ -303,6 +303,9 @@ class SimulationResult:
     final_positions: Mapping[str, Decimal] = field(default_factory=dict)
     final_average_costs: Mapping[str, Decimal] = field(default_factory=dict)
     equity_asset: str = "USDT"
+    initial_account_metrics: Mapping[str, Decimal] = field(
+        default_factory=dict
+    )
     final_account_metrics: Mapping[str, Decimal] = field(default_factory=dict)
     completed: bool = True
     liquidated: bool = False
@@ -473,6 +476,11 @@ class SimulationResult:
             self,
             "final_average_costs",
             MappingProxyType(dict(self.final_average_costs)),
+        )
+        object.__setattr__(
+            self,
+            "initial_account_metrics",
+            MappingProxyType(dict(self.initial_account_metrics)),
         )
         object.__setattr__(
             self,

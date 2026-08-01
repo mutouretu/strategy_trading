@@ -17,6 +17,11 @@ from experiment_system import (
     parse_experiment_spec,
     plan_experiment,
 )
+from metric_system import (
+    CoreMetricCalculator,
+    MetricEvaluationService,
+    MetricRegistry,
+)
 
 from experiment_test_support import (
     executable_registry,
@@ -47,6 +52,12 @@ class ExperimentReadApiTests(unittest.TestCase):
             repository=SQLiteExperimentRepository(self.database),
             market_store=ParquetMarketStore(self.root / "market_data"),
         )
+        metric_registry = MetricRegistry()
+        metric_registry.register_calculator(CoreMetricCalculator())
+        MetricEvaluationService(
+            self.database,
+            registry=metric_registry,
+        ).evaluate_experiment(metric_set_id="core", version="v1")
         viewer_root = Path(__file__).resolve().parents[1] / "viewer"
         self.server = create_read_server(
             self.root / "results",
@@ -86,10 +97,24 @@ class ExperimentReadApiTests(unittest.TestCase):
             "read-api-probe",
         )
 
+        _, _, body = self._get("/api/components")
+        components = json.loads(body)
+        self.assertEqual(components, {"items": [], "total": 0})
+
         _, _, body = self._get("/api/experiments/read-api-probe")
         detail = json.loads(body)
         self.assertEqual(detail["planned_run_count"], 2)
         self.assertEqual(detail["status_counts"], {"SUCCEEDED": 2})
+
+        _, _, body = self._get(
+            "/api/experiments/read-api-probe/metrics"
+        )
+        metrics = json.loads(body)
+        self.assertEqual(
+            [item["metric_set_id"] for item in metrics["metric_sets"]],
+            ["core"],
+        )
+        self.assertEqual(len(metrics["aggregates"]), 1)
 
         _, _, body = self._get(
             "/api/experiments/read-api-probe/runs"
@@ -131,7 +156,7 @@ class ExperimentReadApiTests(unittest.TestCase):
 
         _, content_type, body = self._get("/experiments.html")
         self.assertEqual(content_type, "text/html")
-        self.assertIn(b"Simulation Experiments", body)
+        self.assertIn(b"Strategy Research Lab", body)
 
         with self.assertRaises(HTTPError) as context:
             self._get(

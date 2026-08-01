@@ -248,6 +248,9 @@ def simulation_result_to_document(
         "realized_pnl": _decimal(result.realized_pnl),
         "final_equity": _decimal(result.final_equity),
         "equity_asset": result.equity_asset,
+        "initial_account_metrics": _decimal_map(
+            result.initial_account_metrics
+        ),
         "final_account_metrics": _decimal_map(
             result.final_account_metrics
         ),

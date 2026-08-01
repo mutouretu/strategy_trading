@@ -141,6 +141,7 @@ class SimulationRunner:
             if self.ledger_factory is not None
             else LinearLedger(self.initial_equity)
         )
+        initial_account_metrics = ledger.account_metrics(marks)
         used_instruction_keys: set[str] = set()
         all_instructions: list[TradeInstruction] = []
         active_intents: dict[str, IntentSnapshot] = {}
@@ -502,6 +503,7 @@ class SimulationRunner:
             final_positions=positions,
             final_average_costs=ledger.average_costs,
             equity_asset=ledger.equity_asset,
+            initial_account_metrics=initial_account_metrics,
             final_account_metrics=ledger.account_metrics(marks),
             completed=liquidation_event is None,
             liquidated=liquidation_event is not None,

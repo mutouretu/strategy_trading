@@ -45,10 +45,12 @@ def _comparison_row(run: dict[str, object]) -> dict[str, object]:
     components = run["components"]
     parameters = run["parameter_values"]
     scalars = run["summary_scalars"]
+    metric_scalars = run.get("metric_scalars", {})
     error = run["error"] or {}
     assert isinstance(components, dict)
     assert isinstance(parameters, dict)
     assert isinstance(scalars, dict)
+    assert isinstance(metric_scalars, dict)
     assert isinstance(error, dict)
     row: dict[str, object] = {
         "run_id": run["run_id"],
@@ -79,6 +81,12 @@ def _comparison_row(run: dict[str, object]) -> dict[str, object]:
         {
             f"summary:{path}": value
             for path, value in scalars.items()
+        }
+    )
+    row.update(
+        {
+            f"metric:{path}": value
+            for path, value in metric_scalars.items()
         }
     )
     return row

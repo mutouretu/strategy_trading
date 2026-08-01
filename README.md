@@ -14,7 +14,8 @@ packages/
 ├── market_protocol/   # MarketFrame 与 MarketSource 公共协议
 ├── market_simulator/   # 固定数据源与锚点约束随机日线
 ├── simulation_runtime/ # 通用交易端口、显式成交、费用、账本、保证金端口和运行器
-└── experiment_system/  # 通用实验计划、单次执行与结果存储
+├── experiment_system/  # 通用实验计划、单次执行、结果与中性指标存储
+└── metric_system/      # 策略无关的收益、风险、仓位、资金和多 Run 聚合指标
 ```
 
 项目还包含 `viewer/`：它是策略无关的仿真回放页面，读取标准
@@ -30,6 +31,8 @@ market_protocol
       └── simulation_runtime
                 ↑
                 └── experiment_system
+                            ↑
+                            └── metric_system
 ```
 
 `simulation_runtime` 的唯一策略入口是 `SimulationTradePort`。适配器向当前
@@ -104,7 +107,7 @@ SimulationTradePort.instructions_for(current)
 留在后续批次。Viewer 只读取通用 Fill、权益与 `account_metrics`，不依赖网格或
 COIN-M 代码。
 
-## 实验系统 2A–2F
+## 实验系统 v1.0
 
 `experiment_system` 当前实现配置规划、单次运行和确定性批量运行闭环：
 
@@ -176,7 +179,8 @@ python -m experiment_system serve-results experiment_results \
 
 访问 `http://127.0.0.1:8088/`。结果页可以查看 ExperimentSpec、代码版本、
 RunSpec、状态、参数、Trace/归档状态，并从数据库动态展开任意 Provider 的原始
-Summary 标量。页面不计算评价指标，也不提供创建、运行、重跑、归档或清理操作。
+Summary 标量和已经持久化的指标。页面自身不实现指标公式，也不提供创建、运行、
+重跑、归档或清理操作。
 
 显式导出比较表或某个 Run 的标准 Viewer JSON：
 
@@ -190,6 +194,31 @@ python -m experiment_system export-run experiment.sqlite3 \
 恰好只有一个 Run 的实验也可以在执行命令中显式增加
 `--export-viewer exports/run.json`。批量实验使用该参数会在任何 Run 开始前被拒绝，
 避免“应当导出哪一个 Run”产生隐式规则。
+
+## 评价指标系统 v1.0
+
+`metric_system` 从已保存的 Summary / Trace 构建只读 `MetricInput`，计算并保存：
+
+- BTC、USDT 等不同计价资产相互独立的收益、回撤、水下时间、波动、Sharpe、
+  Sortino 和尾部收益；
+- 强平、破产、终止、仓位路径、成交结构、手续费、资金费、保证金与有效杠杆；
+- 同一 Scenario 多 Seed 的均值、中位数、标准差、P05/P25/P75/P95、最差值和事件率；
+- MetricSet 定义、输入指纹、计算版本、缺失原因和 Trace 清理后的可重算状态。
+
+通用框架不包含具体策略术语。应用通过注册输入贡献者和附加 MetricSet 扩展指标；
+例如相邻 `grid_trading` 的 `grid_metrics` 注册网格循环和 cell 指标。
+
+仅计算通用指标：
+
+```bash
+python -m metric_system evaluate-experiment experiment.sqlite3
+python -m metric_system evaluate-run experiment.sqlite3 <run-id>
+python -m metric_system aggregate experiment.sqlite3
+```
+
+命令默认幂等；只有显式 `--recompute` 才重算同版本结果。Trace 已清理但从未计算过的
+Trace 级指标会保存为 `UNAVAILABLE/TRACE_PURGED`，不会用零值代替。已经计算的指标
+继续保留，并标记为不可重算。
 
 ## 随机日线与可视化
 
@@ -249,24 +278,25 @@ python3 scripts/generate_sample_run.py
 
 ## 开发运行
 
-可以将四个包安装到同一虚拟环境：
+可以将五个包安装到同一虚拟环境：
 
 ```bash
 python -m pip install -e packages/market_protocol
 python -m pip install -e packages/market_simulator
 python -m pip install -e packages/simulation_runtime
 python -m pip install -e packages/experiment_system
+python -m pip install -e packages/metric_system
 ```
 
 也可以不安装，直接运行测试：
 
 ```bash
-PYTHONPATH=packages/market_protocol/src:packages/market_simulator/src:packages/simulation_runtime/src:packages/experiment_system/src \
+PYTHONPATH=packages/market_protocol/src:packages/market_simulator/src:packages/simulation_runtime/src:packages/experiment_system/src:packages/metric_system/src \
 python -m unittest discover -s tests -v
 ```
 
 ## 后续接入顺序
 
 1. 资金费的历史回放和市场条件化生成留到策略优化精细化阶段。
-2. 第二阶段实验系统 v1.0 已完成，下一阶段开始定义统一评价指标。
-3. 指标稳定后再进入市场环境扩展和策略优化。
+2. 第二阶段实验系统 v1.0 和第三阶段评价指标 v1.0 已完成。
+3. 下一阶段进入市场环境扩展，再与策略体系交叉研究。

@@ -93,10 +93,12 @@ class ExperimentReadHandler(SimpleHTTPRequestHandler):
         self,
         *args,
         catalog: ExperimentCatalog,
+        component_descriptors: tuple[dict[str, object], ...],
         directory: str,
         **kwargs,
     ) -> None:
         self.catalog = catalog
+        self.component_descriptors = component_descriptors
         super().__init__(*args, directory=directory, **kwargs)
 
     def _send_bytes(
@@ -189,12 +191,36 @@ class ExperimentReadHandler(SimpleHTTPRequestHandler):
                 },
             )
             return
+        if parts == ("api", "components"):
+            self._send_json(
+                200,
+                {
+                    "items": self.component_descriptors,
+                    "total": len(self.component_descriptors),
+                },
+            )
+            return
         if len(parts) < 3 or parts[:2] != ("api", "experiments"):
             raise ExperimentRepositoryError("API route not found")
         experiment_id = parts[2]
         reader = self.catalog.reader(experiment_id)
         if len(parts) == 3:
-            self._send_json(200, reader.experiment_detail())
+            self._send_json(
+                200,
+                {
+                    **reader.experiment_detail(),
+                    "metric_sets": reader.metric_sets(),
+                },
+            )
+            return
+        if parts[3] == "metrics" and len(parts) == 4:
+            self._send_json(
+                200,
+                {
+                    "metric_sets": reader.metric_sets(),
+                    "aggregates": reader.aggregate_metric_evaluations(),
+                },
+            )
             return
         if parts[3] == "comparison.csv" and len(parts) == 4:
             run_query = _run_query(query)
@@ -281,6 +307,7 @@ def create_read_server(
     result_root: str | Path,
     *,
     viewer_root: str | Path | None = None,
+    component_descriptors: tuple[dict[str, object], ...] = (),
     host: str = "127.0.0.1",
     port: int = 8088,
 ) -> ThreadingHTTPServer:
@@ -293,6 +320,7 @@ def create_read_server(
     handler = partial(
         ExperimentReadHandler,
         catalog=catalog,
+        component_descriptors=component_descriptors,
         directory=str(root),
     )
     return ThreadingHTTPServer((host, port), handler)
@@ -302,12 +330,14 @@ def serve_results(
     result_root: str | Path,
     *,
     viewer_root: str | Path | None = None,
+    component_descriptors: tuple[dict[str, object], ...] = (),
     host: str = "127.0.0.1",
     port: int = 8088,
 ) -> None:
     server = create_read_server(
         result_root,
         viewer_root=viewer_root,
+        component_descriptors=component_descriptors,
         host=host,
         port=port,
     )

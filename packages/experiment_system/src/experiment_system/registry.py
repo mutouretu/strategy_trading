@@ -79,3 +79,44 @@ class ProviderRegistry:
     @property
     def provider_ids(self) -> tuple[str, ...]:
         return tuple(self._providers)
+
+    @property
+    def component_descriptors(self) -> tuple[dict[str, JsonValue], ...]:
+        """Collect optional presentation metadata owned by host providers."""
+
+        collected: dict[tuple[str, str], dict[str, JsonValue]] = {}
+        for provider_id, provider in self._providers.items():
+            factory = getattr(provider, "component_descriptors", None)
+            if factory is None:
+                continue
+            if not callable(factory):
+                raise ExperimentValidationError(
+                    f"provider {provider_id!r} component_descriptors must "
+                    "be callable"
+                )
+            for index, raw in enumerate(factory()):
+                if not isinstance(raw, Mapping):
+                    raise ExperimentValidationError(
+                        f"provider {provider_id!r} descriptor {index} must "
+                        "be an object"
+                    )
+                descriptor = dict(raw)
+                kind = descriptor.get("kind")
+                component_type = descriptor.get("type")
+                display_name = descriptor.get("display_name")
+                if not all(
+                    isinstance(value, str) and value.strip()
+                    for value in (kind, component_type, display_name)
+                ):
+                    raise ExperimentValidationError(
+                        f"provider {provider_id!r} descriptor {index} "
+                        "requires kind, type and display_name"
+                    )
+                key = (kind, component_type)
+                if key in collected:
+                    raise ExperimentValidationError(
+                        f"duplicate component descriptor "
+                        f"{kind}:{component_type}"
+                    )
+                collected[key] = descriptor
+        return tuple(collected.values())

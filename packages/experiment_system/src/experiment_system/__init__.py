@@ -68,6 +68,7 @@ from .market_data import (
     ParquetMarketStore,
     market_content_hash,
 )
+from .metric_storage import ExperimentMetricStore
 from .payloads import (
     TRACE_COMPRESSION,
     TRACE_PAYLOAD_TYPE,
@@ -108,6 +109,7 @@ __all__ = [
     "ExperimentControls",
     "ExperimentError",
     "ExperimentManifest",
+    "ExperimentMetricStore",
     "ExperimentCatalog",
     "ExperimentOutcome",
     "ExperimentPlan",

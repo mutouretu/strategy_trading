@@ -125,6 +125,9 @@ class SQLiteExperimentRepositoryTests(unittest.TestCase):
                 list(range(1, SQLITE_SCHEMA_VERSION + 1)),
             )
             self.assertNotIn("market_frames", tables)
+            self.assertIn("metric_sets", tables)
+            self.assertIn("run_metric_values", tables)
+            self.assertIn("aggregate_metric_values", tables)
             self.assertEqual(payload[0], "zlib")
             self.assertIsInstance(payload[1], bytes)
             self.assertGreater(payload[2], 0)
@@ -269,7 +272,7 @@ class SQLiteExperimentRepositoryTests(unittest.TestCase):
             self.assertEqual(version, SQLITE_SCHEMA_VERSION)
             self.assertIn("archived_at", columns)
             self.assertIn("archive_reason", columns)
-            self.assertEqual(migrations, [1, 2])
+            self.assertEqual(migrations, [1, 2, 3])
 
 
 if __name__ == "__main__":

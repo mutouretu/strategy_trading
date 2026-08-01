@@ -86,6 +86,20 @@ main {
   padding: 16px;
 }
 
+body.embedded-player .topbar {
+  display: none;
+}
+
+body.embedded-player main {
+  padding: 0;
+}
+
+body.embedded-player .chart-shell {
+  max-width: none;
+  border: 0;
+  border-radius: 0;
+}
+
 .chart-shell {
   max-width: 1440px;
   margin: 0 auto;

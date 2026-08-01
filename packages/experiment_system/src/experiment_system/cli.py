@@ -257,6 +257,7 @@ def main(
             serve_results(
                 arguments.result_root,
                 viewer_root=arguments.viewer_root,
+                component_descriptors=providers.component_descriptors,
                 host=arguments.host,
                 port=arguments.port,
             )

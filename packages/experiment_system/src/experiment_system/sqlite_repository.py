@@ -39,7 +39,7 @@ from .models import (
 from .payloads import EncodedPayload, decode_trace, encode_trace
 
 
-SQLITE_SCHEMA_VERSION = 2
+SQLITE_SCHEMA_VERSION = 3
 
 
 _SCHEMA_SQL = """
@@ -116,6 +116,106 @@ CREATE TABLE IF NOT EXISTS run_payloads (
     uncompressed_size INTEGER NOT NULL CHECK (uncompressed_size >= 0),
     payload_sha256 TEXT NOT NULL,
     PRIMARY KEY (run_id, payload_type)
+);
+"""
+
+
+_METRIC_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS metric_sets (
+    metric_set_id TEXT NOT NULL,
+    metric_set_version TEXT NOT NULL,
+    definition_hash TEXT NOT NULL,
+    definition_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (metric_set_id, metric_set_version)
+);
+
+CREATE TABLE IF NOT EXISTS run_metric_evaluations (
+    run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+    metric_set_id TEXT NOT NULL,
+    metric_set_version TEXT NOT NULL,
+    definition_hash TEXT NOT NULL,
+    input_fingerprint TEXT NOT NULL,
+    input_level TEXT NOT NULL CHECK (
+        input_level IN ('SUMMARY', 'TRACE', 'MARKET')
+    ),
+    recomputable INTEGER NOT NULL CHECK (recomputable IN (0, 1)),
+    status TEXT NOT NULL CHECK (status IN ('SUCCEEDED', 'INVALID')),
+    input_hashes_json TEXT NOT NULL,
+    evaluator_revisions_json TEXT NOT NULL,
+    issues_json TEXT NOT NULL,
+    evaluated_at TEXT NOT NULL,
+    PRIMARY KEY (run_id, metric_set_id, metric_set_version),
+    FOREIGN KEY (metric_set_id, metric_set_version)
+        REFERENCES metric_sets(metric_set_id, metric_set_version)
+);
+
+CREATE TABLE IF NOT EXISTS run_metric_values (
+    run_id TEXT NOT NULL,
+    metric_set_id TEXT NOT NULL,
+    metric_set_version TEXT NOT NULL,
+    metric_key TEXT NOT NULL,
+    dimensions_json TEXT NOT NULL,
+    value_type TEXT NOT NULL,
+    unit TEXT NOT NULL,
+    source_level TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (
+        status IN ('AVAILABLE', 'UNAVAILABLE', 'INVALID')
+    ),
+    value_json TEXT,
+    reason_code TEXT,
+    PRIMARY KEY (
+        run_id,
+        metric_set_id,
+        metric_set_version,
+        metric_key,
+        dimensions_json
+    ),
+    FOREIGN KEY (run_id, metric_set_id, metric_set_version)
+        REFERENCES run_metric_evaluations(
+            run_id,
+            metric_set_id,
+            metric_set_version
+        ) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_run_metric_values_key
+ON run_metric_values(metric_set_id, metric_set_version, metric_key);
+
+CREATE TABLE IF NOT EXISTS aggregate_metric_evaluations (
+    aggregation_id TEXT PRIMARY KEY,
+    experiment_id TEXT NOT NULL REFERENCES experiments(experiment_id),
+    group_key TEXT NOT NULL,
+    scenario_id TEXT,
+    metric_set_id TEXT NOT NULL,
+    metric_set_version TEXT NOT NULL,
+    definition_hash TEXT NOT NULL,
+    member_fingerprint TEXT NOT NULL,
+    aggregation_spec_json TEXT NOT NULL,
+    counts_json TEXT NOT NULL,
+    issues_json TEXT NOT NULL,
+    evaluated_at TEXT NOT NULL,
+    FOREIGN KEY (metric_set_id, metric_set_version)
+        REFERENCES metric_sets(metric_set_id, metric_set_version)
+);
+
+CREATE TABLE IF NOT EXISTS aggregate_metric_values (
+    aggregation_id TEXT NOT NULL REFERENCES aggregate_metric_evaluations(
+        aggregation_id
+    ) ON DELETE CASCADE,
+    metric_key TEXT NOT NULL,
+    dimensions_json TEXT NOT NULL,
+    value_type TEXT NOT NULL,
+    unit TEXT NOT NULL,
+    statistics_json TEXT NOT NULL,
+    PRIMARY KEY (aggregation_id, metric_key, dimensions_json)
+);
+
+CREATE INDEX IF NOT EXISTS idx_aggregate_metric_group
+ON aggregate_metric_evaluations(
+    metric_set_id,
+    metric_set_version,
+    group_key
 );
 """
 
@@ -252,6 +352,20 @@ class SQLiteExperimentRepository:
                         (2, datetime.now().astimezone().isoformat()),
                     )
                     connection.execute("PRAGMA user_version = 2")
+                current = 2
+            if current < 3:
+                with connection:
+                    connection.executescript(_METRIC_SCHEMA_SQL)
+                    connection.execute(
+                        """
+                        INSERT INTO schema_migrations(
+                            version,
+                            applied_at
+                        ) VALUES (?, ?)
+                        """,
+                        (3, datetime.now().astimezone().isoformat()),
+                    )
+                    connection.execute("PRAGMA user_version = 3")
         finally:
             connection.close()
 
@@ -970,4 +1084,13 @@ class SQLiteExperimentRepository:
                     raise ExperimentRepositoryConflictError(
                         f"Trace purge state changed for Run {run_id!r}"
                     )
+                connection.execute(
+                    """
+                    UPDATE run_metric_evaluations
+                    SET recomputable = 0
+                    WHERE run_id = ?
+                      AND input_level IN ('TRACE', 'MARKET')
+                    """,
+                    (run_id,),
+                )
         return report

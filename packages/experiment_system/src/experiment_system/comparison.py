@@ -6,6 +6,7 @@ import json
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -96,7 +97,11 @@ class RunQuery:
     limit: int | None = None
 
     def __post_init__(self) -> None:
-        if self.sort_by not in _SORT_FIELDS:
+        if (
+            self.sort_by not in _SORT_FIELDS
+            and not self.sort_by.startswith("metric:")
+            and not self.sort_by.startswith("summary:")
+        ):
             raise ExperimentValidationError(
                 f"unsupported Run sort field {self.sort_by!r}"
             )
@@ -216,6 +221,67 @@ class ExperimentReader:
             for row in connection.execute("PRAGMA table_info(runs)")
         }
 
+    @staticmethod
+    def _table_exists(
+        connection: sqlite3.Connection,
+        table: str,
+    ) -> bool:
+        return connection.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE type = 'table' AND name = ?
+            """,
+            (table,),
+        ).fetchone() is not None
+
+    @staticmethod
+    def _metric_label(row: sqlite3.Row) -> str:
+        dimensions = _json_object(
+            row["dimensions_json"],
+            name="metric dimensions",
+        )
+        assert dimensions is not None
+        suffix = ""
+        if dimensions:
+            suffix = "{" + ",".join(
+                f"{key}={dimensions[key]}" for key in sorted(dimensions)
+            ) + "}"
+        return (
+            f"{row['metric_set_id']}/{row['metric_set_version']}:"
+            f"{row['metric_key']}{suffix}"
+        )
+
+    @classmethod
+    def _metric_scalars_by_run(
+        cls,
+        connection: sqlite3.Connection,
+    ) -> dict[str, dict[str, JsonValue]]:
+        if not cls._table_exists(connection, "run_metric_values"):
+            return {}
+        rows = connection.execute(
+            """
+            SELECT run_id, metric_set_id, metric_set_version,
+                   metric_key, dimensions_json, value_json
+            FROM run_metric_values
+            WHERE status = 'AVAILABLE'
+            ORDER BY run_id, metric_set_id, metric_set_version,
+                     metric_key, dimensions_json
+            """
+        ).fetchall()
+        result: dict[str, dict[str, JsonValue]] = {}
+        for row in rows:
+            value = json.loads(row["value_json"])
+            if not (
+                value is None
+                or isinstance(value, (str, int, bool))
+                and not isinstance(value, float)
+            ):
+                continue
+            result.setdefault(row["run_id"], {})[
+                cls._metric_label(row)
+            ] = value
+        return result
+
     def _all_run_rows(self) -> list[dict[str, object]]:
         with self._connect() as connection:
             self._experiment_row(connection)
@@ -243,7 +309,14 @@ class ExperimentReader:
                 ORDER BY rowid
                 """
             ).fetchall()
-        return [self._run_document(row) for row in rows]
+            metric_scalars = self._metric_scalars_by_run(connection)
+        documents = [self._run_document(row) for row in rows]
+        for document in documents:
+            document["metric_scalars"] = metric_scalars.get(
+                str(document["run_id"]),
+                {},
+            )
+        return documents
 
     @staticmethod
     def _run_document(row: sqlite3.Row) -> dict[str, object]:
@@ -351,15 +424,37 @@ class ExperimentReader:
             ]
 
         def sort_key(row: dict[str, object]) -> tuple[bool, object]:
-            value = row[criteria.sort_by]
+            if criteria.sort_by.startswith("metric:"):
+                value = row.get("metric_scalars", {}).get(
+                    criteria.sort_by.removeprefix("metric:")
+                )
+            elif criteria.sort_by.startswith("summary:"):
+                value = row.get("summary_scalars", {}).get(
+                    criteria.sort_by.removeprefix("summary:")
+                )
+            else:
+                value = row[criteria.sort_by]
             if criteria.sort_by in {"seed", "duration_seconds"}:
                 return (value is None, value if value is not None else 0)
+            if criteria.sort_by.startswith(("metric:", "summary:")):
+                try:
+                    return (
+                        value is None,
+                        Decimal(str(value)) if value is not None else Decimal(0),
+                    )
+                except (InvalidOperation, ValueError):
+                    return (value is None, str(value or ""))
             return (value is None, str(value or ""))
 
         rows.sort(
             key=sort_key,
             reverse=criteria.descending,
         )
+        if criteria.descending:
+            # Missing dynamic values stay last in both sort directions.
+            # Python's reverse=True would otherwise put the True sentinel
+            # before every available metric.
+            rows.sort(key=lambda row: sort_key(row)[0])
         total = len(rows)
         end = (
             None
@@ -410,7 +505,159 @@ class ExperimentReader:
                 name=f"Run {run_id} summary_json",
                 required=False,
             ),
+            "metrics": self.run_metric_evaluations(run_id),
         }
+
+    def metric_sets(self) -> tuple[dict[str, object], ...]:
+        with self._connect() as connection:
+            if not self._table_exists(connection, "metric_sets"):
+                return ()
+            rows = connection.execute(
+                """
+                SELECT metric_set_id, metric_set_version,
+                       definition_hash, definition_json, created_at
+                FROM metric_sets
+                ORDER BY metric_set_id, metric_set_version
+                """
+            ).fetchall()
+        return tuple(
+            {
+                **json.loads(row["definition_json"]),
+                "definition_hash": row["definition_hash"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        )
+
+    def run_metric_evaluations(
+        self,
+        run_id: str,
+    ) -> tuple[dict[str, object], ...]:
+        with self._connect() as connection:
+            if not self._table_exists(
+                connection,
+                "run_metric_evaluations",
+            ):
+                return ()
+            evaluations = connection.execute(
+                """
+                SELECT * FROM run_metric_evaluations
+                WHERE run_id = ?
+                ORDER BY metric_set_id, metric_set_version
+                """,
+                (run_id,),
+            ).fetchall()
+            documents = []
+            for evaluation in evaluations:
+                values = connection.execute(
+                    """
+                    SELECT metric_key, dimensions_json, value_type,
+                           unit, source_level, status, value_json,
+                           reason_code
+                    FROM run_metric_values
+                    WHERE run_id = ?
+                      AND metric_set_id = ?
+                      AND metric_set_version = ?
+                    ORDER BY metric_key, dimensions_json
+                    """,
+                    (
+                        run_id,
+                        evaluation["metric_set_id"],
+                        evaluation["metric_set_version"],
+                    ),
+                ).fetchall()
+                documents.append(
+                    {
+                        "metric_set_id": evaluation["metric_set_id"],
+                        "metric_set_version": evaluation[
+                            "metric_set_version"
+                        ],
+                        "definition_hash": evaluation["definition_hash"],
+                        "input_fingerprint": evaluation[
+                            "input_fingerprint"
+                        ],
+                        "input_level": evaluation["input_level"],
+                        "recomputable": bool(evaluation["recomputable"]),
+                        "status": evaluation["status"],
+                        "issues": json.loads(evaluation["issues_json"]),
+                        "evaluated_at": evaluation["evaluated_at"],
+                        "values": [
+                            {
+                                "metric_key": value["metric_key"],
+                                "dimensions": json.loads(
+                                    value["dimensions_json"]
+                                ),
+                                "value_type": value["value_type"],
+                                "unit": value["unit"],
+                                "source_level": value["source_level"],
+                                "status": value["status"],
+                                "value": (
+                                    None
+                                    if value["value_json"] is None
+                                    else json.loads(value["value_json"])
+                                ),
+                                "reason_code": value["reason_code"],
+                            }
+                            for value in values
+                        ],
+                    }
+                )
+        return tuple(documents)
+
+    def aggregate_metric_evaluations(
+        self,
+    ) -> tuple[dict[str, object], ...]:
+        with self._connect() as connection:
+            if not self._table_exists(
+                connection,
+                "aggregate_metric_evaluations",
+            ):
+                return ()
+            rows = connection.execute(
+                """
+                SELECT * FROM aggregate_metric_evaluations
+                ORDER BY metric_set_id, metric_set_version, group_key
+                """
+            ).fetchall()
+            documents = []
+            for row in rows:
+                values = connection.execute(
+                    """
+                    SELECT * FROM aggregate_metric_values
+                    WHERE aggregation_id = ?
+                    ORDER BY metric_key, dimensions_json
+                    """,
+                    (row["aggregation_id"],),
+                ).fetchall()
+                documents.append(
+                    {
+                        "aggregation_id": row["aggregation_id"],
+                        "group_key": row["group_key"],
+                        "scenario_id": row["scenario_id"],
+                        "metric_set_id": row["metric_set_id"],
+                        "metric_set_version": row["metric_set_version"],
+                        "definition_hash": row["definition_hash"],
+                        "member_fingerprint": row["member_fingerprint"],
+                        "counts": json.loads(row["counts_json"]),
+                        "issues": json.loads(row["issues_json"]),
+                        "evaluated_at": row["evaluated_at"],
+                        "values": [
+                            {
+                                "metric_key": value["metric_key"],
+                                "dimensions": json.loads(
+                                    value["dimensions_json"]
+                                ),
+                                "value_type": value["value_type"],
+                                "unit": value["unit"],
+                                "statistics": json.loads(
+                                    value["statistics_json"]
+                                ),
+                            }
+                            for value in values
+                        ],
+                    }
+                )
+        return tuple(documents)
 
     def load_trace(self, run_id: str) -> dict[str, object]:
         with self._connect() as connection:

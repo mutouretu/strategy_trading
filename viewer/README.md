@@ -81,3 +81,26 @@ run 数据或成交结果。没有 9F 状态字段的历史 v1/v2 文档按“�
 新生成的 Fill 使用 `reference_price`、`slippage_amount` 和 `slippage_bps` 记录滑点。
 `price` 始终表示账本、费用和保证金实际使用的最终有效成交价。旧文档缺少滑点字段时
 Viewer 使用 `reference_price = price`、滑点为零。
+
+实验研究入口 `experiments.html` 使用左侧分组导航组织以下页面：
+
+- 策略总览：按策略实现分组，展示配置、实验、市场和运行数量；
+- 策略详情：展示策略说明、运行流程和已经研究的配置；
+- 市场环境：按市场配置列出 Seed 路径，并将日线聚合为可切换的周线或月线；
+- 实验总览：按策略分组实验，展开后查看配置 × 市场 × Seed 的 Scenario；
+- 实验详情：固定到一个策略、一个配置、一个市场和一个 Seed，展示该 Run 的指标；
+- K 线播放：在实验上下文内嵌现有逐日播放器，也可在独立窗口打开。
+
+页面从 SQLite 中读取已经保存的 `core/v1` 和应用扩展指标，不在浏览器重算指标。
+BTC 计价收益优先用于区分币本位策略效果；USDT 总收益会标注“含行情”，避免把标的
+自身涨跌误认为策略收益。全部 MetricSet 和组件参数仍保留在实验详情中供核对。
+
+研究入口必须通过实验结果服务启动，普通静态 HTTP Server 不提供 `/api`：
+
+```bash
+cd ../grid_trading
+.venv/bin/python -m grid_experiments serve-results \
+  experiments/experiment_results \
+  --viewer-root ../market_simulator/viewer \
+  --port 8088
+```

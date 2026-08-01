@@ -338,6 +338,7 @@
         "realized_pnl": {"$ref": "#/$defs/price"},
         "final_equity": {"$ref": "#/$defs/price"},
         "equity_asset": {"type": "string", "minLength": 1},
+        "initial_account_metrics": {"$ref": "#/$defs/decimalMap"},
         "final_account_metrics": {"$ref": "#/$defs/decimalMap"},
         "completed": {"type": "boolean"},
         "liquidated": {"type": "boolean"},

@@ -89,6 +89,12 @@ class SimulationRunSchemaTests(unittest.TestCase):
         self.assertEqual(document["summary"]["total_fees"], "0")
         self.assertEqual(document["summary"]["total_funding"], "0")
         self.assertEqual(
+            document["summary"]["initial_account_metrics"][
+                "total_equity_usdt"
+            ],
+            document["summary"]["initial_equity"],
+        )
+        self.assertEqual(
             document["summary"][
                 "net_pnl_after_fees_and_funding"
             ],
