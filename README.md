@@ -44,8 +44,9 @@ market_protocol
 ```
 
 脚本优先使用 `grid_trading/.venv/bin/python` 运行实盘服务测试；不存在时使用
-`python3`。真实 Binance 测试网下单用例默认关闭，只有显式设置原有测试开关时才会
-运行。
+顶层 `.venv` 或 `python3`。也可以通过 `STRATEGY_TRADING_PYTHON` 显式指定解释器；
+所选解释器必须已经安装 PyArrow 等项目依赖。真实 Binance 测试网下单用例默认关闭，
+只有显式设置原有测试开关时才会运行。
 
 长期市场环境、Experiment 和 Study 的使用方式分别见：
 
