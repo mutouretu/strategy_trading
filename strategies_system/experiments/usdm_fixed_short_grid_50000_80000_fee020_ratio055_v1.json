@@ -1,0 +1,102 @@
+{
+  "schema_version": "experiment-spec/v1",
+  "experiment_id": "usdm-fixed-short-grid-50000-80000-fee020-ratio055-v1",
+  "description": "BTCUSDT 50,000–80,000 固定空头网格：约 0.55% 等比间距、买卖每腿 0.2% 手续费、4,000 USDT 保证金与5倍杠杆",
+  "scenario_groups": [
+    {
+      "key": "fixed-short-50000-80000-fee020-ratio055",
+      "run_provider": "strategies-simulation/v1",
+      "markets": [
+        {
+          "key": "binance-btcusdt-usdm-1m-20260322-20260719",
+          "type": "historical-parquet/v1",
+          "parameters": {
+            "path": "experiments/market_data/2406269e9214083e3a60.parquet",
+            "instrument": "BTCUSDT",
+            "interval": "1m",
+            "frame_count": 172800,
+            "file_sha256": "e76fdc2b83ba551fb1459788510cb57298b6a91eb060a0cb183a7022c8983092"
+          }
+        }
+      ],
+      "strategies": [
+        {
+          "key": "fixed-short-50000-80000-ratio-055",
+          "type": "fixed-grid/v1",
+          "parameters": {
+            "strategy_id": "fixed-short-50000-80000-fee020-ratio055",
+            "rule": {
+              "grid_id": "fixed-short-grid-50000-80000-ratio-055",
+              "instrument": "BTCUSDT",
+              "mode": "short",
+              "anchor_price": "50000",
+              "grid_ratio": "0.005480872713041776734174738505",
+              "grid_count": 86,
+              "order_notional": "232.5581395348837209302325581",
+              "tick_size": "0.1",
+              "quantity_step": "0.0001",
+              "move_grid": false,
+              "market_type": "usdm"
+            }
+          }
+        }
+      ],
+      "executions": [
+        {
+          "key": "binance-fee-020-per-leg",
+          "type": "daily-bar-execution/v1",
+          "parameters": {
+            "maker_fee_rate": "0.002",
+            "taker_fee_rate": "0.002",
+            "fee_asset": "USDT",
+            "funding_model": "none"
+          }
+        }
+      ],
+      "accounts": [
+        {
+          "key": "usdm-cross-4000-5x",
+          "type": "usdm-linear/v1",
+          "parameters": {
+            "instrument": "BTCUSDT",
+            "futures_wallet_usdt": "4000",
+            "settlement_asset": "USDT",
+            "notional_asset": "USDT",
+            "margin_model": "flat-maintenance/v1",
+            "leverage": "5",
+            "maintenance_margin_rate": "0.005",
+            "mark_price_sampling": "ADVERSE_EXTREME"
+          }
+        }
+      ]
+    }
+  ],
+  "seeds": [0],
+  "output": {
+    "root": "experiment_results",
+    "default_retention_class": "standard"
+  },
+  "controls": {
+    "max_runs": 1,
+    "continue_on_error": false
+  },
+  "metadata": {
+    "purpose": "fee-adjusted-grid-frequency-and-return",
+    "reference_completed_cycles": 8289,
+    "reference_duration_days": 120,
+    "configured_range": "50000-80000",
+    "effective_upper_price": "80000.0",
+    "grid_ratio_percent": "0.5480872713041776734174738505",
+    "maker_fee_rate_per_fill": "0.002",
+    "taker_fee_rate_per_fill": "0.002",
+    "approximate_round_trip_fee_rate": "0.004",
+    "approximate_net_rate_per_completed_cycle": "0.00147",
+    "investment_margin_usdt": "4000",
+    "leverage": "5",
+    "allocated_notional_usdt": "20000",
+    "fixed_order_notional_usdt": "232.5581395348837209302325581",
+    "source": "Binance Data Vision futures/um BTCUSDT 1m archives",
+    "source_window_utc": "2026-03-22T00:00:00Z/2026-07-20T00:00:00Z",
+    "funding_model": "none"
+  }
+}

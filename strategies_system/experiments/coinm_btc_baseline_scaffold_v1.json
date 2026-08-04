@@ -1,0 +1,167 @@
+{
+  "schema_version": "experiment-spec/v1",
+  "experiment_id": "coinm-btc-baseline-scaffold-v1",
+  "description": "6A 生成行情调用链验收：HODL、阶梯止盈、单组跟随网格和分层跟随网格",
+  "scenario_groups": [
+    {
+      "key": "coinm-btc-baselines",
+      "run_provider": "strategies-simulation/v1",
+      "markets": [
+        {
+          "key": "btc-gbm-train",
+          "type": "anchored-gbm/v1",
+          "parameters": {
+            "instrument": "BTCUSD_PERP",
+            "anchors": [
+              {"date": "2026-01-01", "price": "65000"},
+              {"date": "2026-07-01", "price": "40000"},
+              {"date": "2027-01-01", "price": "115000"},
+              {"date": "2027-07-01", "price": "55000"}
+            ],
+            "annual_volatility": "0.60",
+            "intraday_steps": 24,
+            "periods_per_year": 365,
+            "price_quantum": "0.01",
+            "price_floor": "20000",
+            "price_ceiling": "200000",
+            "interval": "1d"
+          }
+        },
+        {
+          "key": "btc-gbm-validation",
+          "type": "anchored-gbm/v1",
+          "parameters": {
+            "instrument": "BTCUSD_PERP",
+            "anchors": [
+              {"date": "2027-07-01", "price": "55000"},
+              {"date": "2028-01-01", "price": "200000"},
+              {"date": "2028-07-01", "price": "45000"}
+            ],
+            "annual_volatility": "0.60",
+            "intraday_steps": 24,
+            "periods_per_year": 365,
+            "price_quantum": "0.01",
+            "price_floor": "20000",
+            "price_ceiling": "220000",
+            "interval": "1d"
+          }
+        }
+      ],
+      "strategies": [
+        {
+          "key": "hold-btc",
+          "type": "hold-btc/v1",
+          "parameters": {
+            "strategy_id": "hold-btc-6a-baseline",
+            "instrument": "BTCUSD_PERP"
+          }
+        },
+        {
+          "key": "target-liquidation-ladder",
+          "type": "target-liquidation-ladder-long/v1",
+          "parameters": {
+            "strategy_id": "target-liquidation-ladder-6a-baseline",
+            "instrument": "BTCUSD_PERP",
+            "target_liquidation_price": "20000",
+            "first_take_profit_ratio": "1.10",
+            "take_profit_end_price": "150000",
+            "take_profit_count": 10,
+            "tick_size": "0.1",
+            "quantity_step": "1",
+            "sizing_safety_buffer_ratio": "0"
+          }
+        },
+        {
+          "key": "single-following-grid",
+          "type": "single-following-grid/v1",
+          "parameters": {
+            "strategy_id": "single-following-grid-6a-baseline",
+            "rule": {
+              "grid_id": "single-following-grid-6a-rule",
+              "instrument": "BTCUSD_PERP",
+              "mode": "long",
+              "anchor_price": "65000",
+              "grid_ratio": "0.04",
+              "grid_count": 5,
+              "order_notional": "0",
+              "tick_size": "0.1",
+              "quantity_step": "1",
+              "move_grid": true,
+              "market_type": "coinm",
+              "order_coin_quantity": "0.01",
+              "contract_size": "100"
+            }
+          }
+        },
+        {
+          "key": "layered-following-grid",
+          "type": "layered-following-grid/v1",
+          "parameters": {
+            "strategy_id": "layered-following-grid-6a-baseline",
+            "rule": {
+              "grid_id": "layered-following-grid-6a-template",
+              "instrument": "BTCUSD_PERP",
+              "mode": "long",
+              "anchor_price": "65000",
+              "grid_ratio": "0.02",
+              "grid_count": 3,
+              "order_notional": "0",
+              "tick_size": "0.1",
+              "quantity_step": "1",
+              "move_grid": true,
+              "market_type": "coinm",
+              "order_coin_quantity": "0.003",
+              "contract_size": "100"
+            },
+            "deployment_step": "5000",
+            "max_layers": 8
+          }
+        }
+      ],
+      "executions": [
+        {
+          "key": "coinm-maker-fees-zero-funding",
+          "type": "daily-bar-execution/v1",
+          "parameters": {
+            "maker_fee_rate": "0.0002",
+            "taker_fee_rate": "0.0005",
+            "fee_asset": "BTC",
+            "funding_model": "none"
+          }
+        }
+      ],
+      "accounts": [
+        {
+          "key": "coinm-cross-1-1-btc",
+          "type": "coinm-inverse/v1",
+          "parameters": {
+            "instrument": "BTCUSD_PERP",
+            "contract_size": "100",
+            "spot_btc": "0",
+            "futures_wallet_btc": "1.1",
+            "base_asset": "BTC",
+            "quote_asset": "USDT",
+            "notional_asset": "USD",
+            "margin_model": "flat-maintenance/v1",
+            "leverage": "5",
+            "maintenance_margin_rate": "0.005",
+            "mark_price_sampling": "ADVERSE_EXTREME"
+          }
+        }
+      ]
+    }
+  ],
+  "seeds": [42],
+  "output": {
+    "root": "experiment_results",
+    "default_retention_class": "standard"
+  },
+  "controls": {
+    "max_runs": 8,
+    "continue_on_error": false
+  },
+  "metadata": {
+    "purpose": "strategy-optimization-6a-development-scaffold",
+    "formal_baseline": false
+  }
+}

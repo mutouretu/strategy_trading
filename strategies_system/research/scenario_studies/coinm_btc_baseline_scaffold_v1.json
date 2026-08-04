@@ -1,0 +1,27 @@
+{
+  "schema_version": "strategy-study/v1",
+  "study_id": "coinm-btc-baseline-scaffold-v1",
+  "description": "6A Study 编译、规划、运行和 SQLite 持久化验收；不作为正式历史收益结论",
+  "strategy_family": "single-following-grid/v1",
+  "baseline_ids": [
+    "hold-btc/v1",
+    "target-liquidation-ladder-long/v1",
+    "single-following-grid/v1",
+    "layered-following-grid/v1"
+  ],
+  "objective_profile": {
+    "id": "coinm-btc-accumulation-v1",
+    "path": "../protocols/coinm_btc_accumulation_v1.json"
+  },
+  "dataset_split": {
+    "id": "btc-coinm-anchored-gbm-development-v1",
+    "path": "../protocols/btc_coinm_anchored_gbm_development_v1.json"
+  },
+  "experiment_spec_path": "../../experiments/coinm_btc_baseline_scaffold_v1.json",
+  "selection_policy": "baseline-only/v1",
+  "metadata": {
+    "phase": "6A",
+    "owner": "strategy-research",
+    "formal_conclusion_allowed": false
+  }
+}

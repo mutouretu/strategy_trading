@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "strategies-system"
+version = "0.1.0"
+description = "Pure trading strategies and simulation integration plugins"
+requires-python = ">=3.11"
+dependencies = [
+    "certifi>=2024.2",
+    "experiment-system>=0.1,<0.2",
+    "market-protocol>=0.1,<0.2",
+    "market-simulator>=0.1,<0.2",
+    "metric-system>=0.1,<0.2",
+    "simulation-runtime>=0.1,<0.2",
+]
+
+[project.scripts]
+strategies-experiments = "strategy_simulation.cli:main"
+strategies-metrics = "strategy_simulation.metrics.cli:main"
+strategies-optimization = "strategy_optimization.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
