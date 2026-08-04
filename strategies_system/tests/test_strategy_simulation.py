@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from decimal import Decimal
+from unittest.mock import patch
 
 import strategy_simulation  # noqa: F401 - activates local checkout imports
 
@@ -24,6 +25,7 @@ from strategy_simulation.registry import (
     SimulationStrategyBuildContext,
     SimulationStrategyRegistry,
 )
+from strategy_simulation.cli import participating_code_revisions
 
 
 def account():
@@ -78,6 +80,16 @@ def component() -> ComponentSpec:
 
 
 class StrategySimulationTests(unittest.TestCase):
+    def test_provenance_uses_one_monorepo_revision(self):
+        expected = {"strategy_trading": object()}
+        with patch(
+            "strategy_simulation.cli.collect_code_revisions",
+            return_value=expected,
+        ) as collect:
+            self.assertIs(participating_code_revisions(), expected)
+        repositories = collect.call_args.args[0]
+        self.assertEqual(tuple(repositories), ("strategy_trading",))
+
     @staticmethod
     def binding_and_runtimes():
         account_runtime = account()

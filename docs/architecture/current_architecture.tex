@@ -1,0 +1,849 @@
+\documentclass[UTF8,fontset=fandol,11pt,a4paper]{ctexart}
+
+\usepackage[a4paper,margin=20mm,headheight=15pt]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{tikz}
+\usepackage{xcolor}
+\usepackage{xurl}
+
+\usetikzlibrary{
+  arrows.meta,
+  backgrounds,
+  calc,
+  fit,
+  matrix,
+  positioning,
+  shapes.geometric
+}
+
+\definecolor{PlatformBlue}{HTML}{2962A3}
+\definecolor{StrategyGreen}{HTML}{2F7D61}
+\definecolor{GridOrange}{HTML}{B56827}
+\definecolor{ResearchPurple}{HTML}{7257A8}
+\definecolor{StorageGray}{HTML}{55606E}
+\definecolor{SoftBlue}{HTML}{EAF2FA}
+\definecolor{SoftGreen}{HTML}{EAF6F0}
+\definecolor{SoftOrange}{HTML}{FAF0E7}
+\definecolor{SoftPurple}{HTML}{F1ECF8}
+\definecolor{SoftGray}{HTML}{F1F3F5}
+\definecolor{DangerRed}{HTML}{A63C3C}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=PlatformBlue,
+  urlcolor=PlatformBlue,
+  pdftitle={策略交易与仿真研究平台当前架构},
+  pdfauthor={strategy\_trading}
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{策略交易与仿真研究平台}
+\rhead{当前架构（6B 技术验收后）}
+\cfoot{\thepage}
+
+\setlist[itemize]{leftmargin=2em,itemsep=2pt,topsep=3pt}
+\setlist[enumerate]{leftmargin=2.2em,itemsep=2pt,topsep=3pt}
+\renewcommand{\arraystretch}{1.25}
+\setlength{\emergencystretch}{2em}
+
+\newcommand{\code}[1]{\nolinkurl{#1}}
+\newcommand{\yes}{\textcolor{StrategyGreen}{是}}
+\newcommand{\no}{\textcolor{DangerRed}{否}}
+
+\tikzset{
+  >=Latex,
+  repo/.style={
+    draw,
+    rounded corners=3pt,
+    thick,
+    align=left,
+    inner sep=7pt,
+    minimum height=12mm
+  },
+  platform/.style={repo,draw=PlatformBlue,fill=SoftBlue},
+  strategy/.style={repo,draw=StrategyGreen,fill=SoftGreen},
+  grid/.style={repo,draw=GridOrange,fill=SoftOrange},
+  research/.style={repo,draw=ResearchPurple,fill=SoftPurple},
+  storage/.style={repo,draw=StorageGray,fill=SoftGray},
+  external/.style={
+    draw=StorageGray,
+    dashed,
+    rounded corners=3pt,
+    fill=white,
+    align=center,
+    inner sep=6pt
+  },
+  component/.style={
+    draw=StorageGray,
+    rounded corners=2pt,
+    fill=white,
+    align=center,
+    inner sep=5pt,
+    minimum height=9mm
+  },
+  flow/.style={->,thick,draw=StorageGray},
+  dependency/.style={->,thick,draw=PlatformBlue},
+  adapt/.style={->,thick,draw=StrategyGreen},
+  researchflow/.style={->,thick,draw=ResearchPurple},
+  forbidden/.style={->,densely dashed,thick,draw=DangerRed},
+  note/.style={font=\small,align=left,text width=0.27\textwidth}
+}
+
+\title{\bfseries 策略交易与仿真研究平台\\当前软件架构}
+\author{基于 \code{strategy_trading} 工作区现状整理}
+\date{2026年8月4日\\架构基线：4A--4D 内容锁与单体仓库迁移后}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+\begin{abstract}
+本文描述当前策略交易与仿真研究平台的实际代码架构，而不是远期概念图。平台由
+一个 \code{strategy_trading} Git 单体仓库中的 \code{market_simulator}、
+\code{strategies_system} 和 \code{grid_trading} 三个并列工程组成。本文重点说明：
+通用仿真框架、纯策略、网格规则、仿真适配、
+实验与指标、策略优化 Study、SQLite 结果库以及未来实盘适配之间的边界和调用方向。
+\end{abstract}
+
+\tableofcontents
+\clearpage
+
+\section{架构目标与核心约束}
+
+当前架构围绕一个原则组织：
+
+\begin{quote}
+市场仿真是一台冰冷的执行机器；策略决定想做什么；规则负责机械地生成交易结构；
+实验和优化只组织、计算和筛选，不反向篡改成交与账本事实。
+\end{quote}
+
+核心约束如下：
+
+\begin{enumerate}
+  \item \code{market_simulator} 不识别任何具体策略，也不包含 Grid、RSI、BTC
+        积累等领域概念。
+  \item \code{trading_strategies} 是纯策略核心，不依赖 simulator、实验系统、
+        优化系统、Web Server 或交易所 SDK。
+  \item \code{grid_rule} 是网格机械规则，不决定何时建网格、投入多少资本或何时
+        停止策略。
+  \item \code{strategy_simulation} 是策略与仿真平台之间的适配和组装边界。
+  \item \code{strategy_optimization} 把 Study 编译成现有 Experiment，不建立第二套
+        仿真器或实验调度器。
+  \item 成交、账本、手续费、资金费、保证金和强平结果只能由
+        \code{simulation_runtime} 及其注入组件产生。
+  \item 研究结果必须保留数据、配置、代码和指标公式指纹；最终样本外数据不得参与
+        第六部分调参。
+\end{enumerate}
+
+\section{顶层物理架构}
+
+\begin{figure}[htbp]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[node distance=14mm and 18mm]
+  \node[external,text width=32mm] (marketdata) {历史行情\\生成行情\\压力场景};
+
+  \node[platform,right=of marketdata,text width=51mm] (sim) {
+    \textbf{market\_simulator}\\[2pt]
+    通用市场协议与市场源\\
+    仿真运行时与执行记账\\
+    Experiment / Metric / Viewer
+  };
+
+  \node[strategy,above right=7mm and 23mm of sim,text width=57mm] (strategies) {
+    \textbf{strategies\_system}\\[2pt]
+    纯策略核心\\
+    Simulation Adapter / Plugin / Provider\\
+    Study 与策略研究优化
+  };
+
+  \node[grid,below right=7mm and 23mm of sim,text width=57mm] (gridrepo) {
+    \textbf{grid\_trading}\\[2pt]
+    grid\_rule 网格规则\\
+    COIN-M 数值适配\\
+    grid\_server 实盘前后端服务
+  };
+
+  \node[external,right=28mm of strategies,text width=34mm] (futurelive) {
+    未来 Live Adapter\\
+    策略注册与实盘编排
+  };
+  \node[external,right=28mm of gridrepo,text width=34mm] (exchange) {
+    交易所 API\\
+    Binance / OKX 等
+  };
+
+  \draw[flow] (marketdata) -- node[above,font=\small]{MarketFrame} (sim);
+  \draw[dependency] (strategies.west) -| node[pos=0.75,above,font=\small]{公共协议与运行时} (sim.north);
+  \draw[dependency] (strategies.south) -- node[right,font=\small]{GridRulePort / COIN-M Adapter} (gridrepo.north);
+  \draw[flow] (gridrepo.east) -- node[above,font=\small]{当前实盘调用} (exchange.west);
+  \draw[adapt] (strategies.east) -- node[above,font=\small]{未来复用纯策略} (futurelive.west);
+  \draw[flow] (futurelive.south) -- node[right,font=\small]{下单与账户事实} (exchange.north);
+
+  \draw[forbidden,bend left=18] (sim.north east) to node[below,font=\small,text=DangerRed]{禁止依赖具体策略} (strategies.south west);
+\end{tikzpicture}%
+}
+\caption{单体仓库中的三个并列工程及外部系统。箭头表示运行时依赖或数据流。}
+\label{fig:top-level}
+\end{figure}
+
+\subsection{单体仓库中三个工程的职责}
+
+\noindent\begin{tabularx}{\textwidth}{>{\bfseries}p{31mm} X X}
+\toprule
+工程 & 拥有的能力 & 明确不拥有的能力 \\
+\midrule
+\code{market_simulator} &
+市场协议、行情源、主动/被动成交、账本、费用、资金费、保证金、强平、实验、指标、结果读取与 Viewer &
+具体网格规则、策略建仓逻辑、交易所实盘服务 \\
+\code{strategies_system} &
+HODL、阶梯止盈、固定/单组/分层网格等策略；仿真 Adapter、Plugin、Provider；Study 与研究协议 &
+复制成交、账本、强平公式；直接调用交易所；修改通用 runtime \\
+\code{grid_trading} &
+\code{grid_rule}、逆向合约数值适配、\code{grid_server} 实盘服务与交易所基础设施 &
+通用实验调度、通用策略优化、其他非网格策略核心 \\
+\bottomrule
+\end{tabularx}
+
+\section{包级分层与代码依赖}
+
+\begin{figure}[htbp]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[node distance=7mm and 17mm]
+  \node[platform,text width=46mm] (mp) {
+    \textbf{market\_protocol}\\
+    MarketFrame / MarketSource
+  };
+  \node[platform,below=of mp,text width=46mm] (ms) {
+    \textbf{market\_simulator}\\
+    Fixed / GBM / Parquet MarketSource
+  };
+  \node[platform,below=of ms,text width=46mm] (runtime) {
+    \textbf{simulation\_runtime}\\
+    Runner / TradePort / Ledger / Margin
+  };
+  \node[platform,below=of runtime,text width=46mm] (experiment) {
+    \textbf{experiment\_system}\\
+    ExperimentSpec / Plan / SQLite / Read API
+  };
+  \node[platform,below=of experiment,text width=46mm] (metric) {
+    \textbf{metric\_system}\\
+    MetricRegistry / Evaluation / Aggregation
+  };
+  \node[platform,below=of metric,text width=46mm] (viewer) {
+    \textbf{viewer}\\
+    只读实验、指标与 K 线回放
+  };
+
+  \node[strategy,right=32mm of mp,text width=49mm] (core) {
+    \textbf{trading\_strategies}\\
+    baselines / btc\_accumulation / grid\_following
+  };
+  \node[strategy,below=14mm of core,text width=49mm] (ssim) {
+    \textbf{strategy\_simulation}\\
+    adapters / plugins / components\\
+    experiment\_provider / metrics
+  };
+  \node[research,below=14mm of ssim,text width=49mm] (opt) {
+    \textbf{strategy\_optimization}\\
+    Study / protocol / compiler / repository
+  };
+
+  \node[grid,right=32mm of core,text width=47mm] (rule) {
+    \textbf{grid\_rule}\\
+    DTO / GridRuleEngine / inverse adapters
+  };
+  \node[grid,below=18mm of rule,text width=47mm] (server) {
+    \textbf{grid\_server}\\
+    application / domain / ports\\
+    infrastructure / API / workers
+  };
+
+  \draw[flow] (ms) -- (mp);
+  \draw[flow] (runtime) -- (mp);
+  \draw[flow] (experiment) -- (runtime);
+  \draw[flow] (experiment) -- (ms);
+  \draw[flow] (metric) -- (experiment);
+  \draw[flow] (viewer) -- (experiment);
+
+  \draw[adapt] (ssim) -- (core);
+  \draw[dependency] (ssim.west) -- (runtime.east);
+  \draw[dependency] (ssim.west) to[bend right=15] (experiment.east);
+  \draw[researchflow] (opt) -- (ssim);
+  \draw[researchflow] (opt.west) to[bend right=12] (experiment.east);
+  \draw[researchflow] (opt.west) to[bend right=25] (metric.east);
+
+  \draw[adapt] (core.east) -- node[above,font=\small]{GridRulePort + DTO} (rule.west);
+  \draw[adapt] (ssim.east) -- node[below,font=\small]{具体 Engine/账户适配} (rule.west);
+  \draw[flow] (server) -- (rule);
+
+  \draw[forbidden,bend left=16] (core.west) to node[above,font=\small]{禁止反向依赖} (runtime.east);
+  \draw[forbidden,bend right=15] (core.south west) to node[below,font=\small]{禁止依赖} (opt.north west);
+\end{tikzpicture}%
+}
+\caption{包级代码依赖。箭头从使用者指向被使用的公共边界。}
+\label{fig:packages}
+\end{figure}
+
+\subsection{策略工程内部的三个边界}
+
+\begin{description}[leftmargin=39mm,style=nextline]
+  \item[\code{trading_strategies}]
+  纯领域策略。输入是市场、成交和策略状态，输出是策略决策或规则调用；可以被仿真和
+  未来实盘共同复用。
+
+  \item[\code{strategy_simulation}]
+  仿真环境适配层。负责把策略输出转换成 \code{SimulationTradePort} 协议，注册
+  Plugin，构造 Market、Account、Execution、Margin，并向实验系统提供 Provider。
+
+  \item[\code{strategy_optimization}]
+  研究编排层。负责 Study、目标协议、数据划分、指纹、Experiment 编译和
+  \code{optimization_*} 状态；不生成交易指令。
+\end{description}
+
+\section{单次仿真的发起与执行链}
+
+\begin{figure}[htbp]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[node distance=7mm]
+  \node[research,text width=77mm] (entry) {
+    \textbf{发起入口}\\
+    直接 ExperimentSpec，或 StudySpec 经 StudyCompiler 编译
+  };
+  \node[platform,below=of entry,text width=77mm] (plan) {
+    \textbf{experiment\_system}\\
+    校验组件 $\rightarrow$ 展开笛卡尔积 $\rightarrow$ 生成 Scenario / Run 指纹
+  };
+  \node[strategy,below=of plan,text width=77mm] (provider) {
+    \textbf{StrategiesSimulationProvider}\\
+    Registry 查找 Plugin；组装策略、Adapter、Market、Account、Execution
+  };
+  \node[strategy,below=of provider,text width=77mm] (prepared) {
+    \textbf{PreparedRun}\\
+    持有已经完成依赖注入的 SimulationRunner
+  };
+  \node[platform,below=of prepared,text width=77mm] (runner) {
+    \textbf{SimulationRunner.execute}\\
+    初始化 $\rightarrow$ 逐帧执行 $\rightarrow$ 期末状态
+  };
+  \node[storage,below left=9mm and -3mm of runner,text width=43mm] (facts) {
+    Summary / Trace\\Market Parquet
+  };
+  \node[storage,below right=9mm and -3mm of runner,text width=43mm] (db) {
+    Experiment SQLite\\Run / Metric / Study
+  };
+
+  \draw[researchflow] (entry) -- (plan);
+  \draw[flow] (plan) -- (provider);
+  \draw[adapt] (provider) -- (prepared);
+  \draw[flow] (prepared) -- (runner);
+  \draw[flow] (runner) -- (facts);
+  \draw[flow] (runner) -- (db);
+\end{tikzpicture}%
+}
+\caption{SimulationRunner 是单次仿真的执行者；Experiment/Study 是运行计划的发起与编排入口。}
+\label{fig:run-entry}
+\end{figure}
+
+\subsection{逐根 K 线的执行顺序}
+
+\begin{figure}[htbp]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[node distance=8mm and 9mm]
+  \node[component,text width=27mm] (frame) {MarketSource\\产生 MarketFrame};
+  \node[strategy,right=of frame,text width=29mm] (decision) {Strategy Core\\读取当前状态};
+  \node[strategy,right=of decision,text width=30mm] (adapter) {Simulation Adapter\\形成 TradeInstruction};
+  \node[platform,right=of adapter,text width=29mm] (execution) {Execution Model\\主动成交/价格覆盖};
+  \node[platform,right=of execution,text width=27mm] (ledger) {Ledger + Fee\\Funding 入账};
+  \node[platform,right=of ledger,text width=29mm] (margin) {Margin Model\\检查强平};
+
+  \draw[flow] (frame) -- (decision);
+  \draw[adapt] (decision) -- (adapter);
+  \draw[flow] (adapter) -- (execution);
+  \draw[flow] (execution) -- node[above,font=\small]{SimFill} (ledger);
+  \draw[flow] (ledger) -- (margin);
+  \draw[flow,bend right=27] (ledger.south) to node[below,font=\small]{on\_fills} (decision.south);
+  \draw[flow,bend left=32] (margin.north) to node[above,font=\small]{on\_market / 下一帧} (frame.north);
+\end{tikzpicture}%
+}
+\caption{逐帧执行链。成交和强平是平台事实，策略只能接收结果并更新自身状态。}
+\label{fig:frame-loop}
+\end{figure}
+
+当前成交模型只模拟策略研究所需的两类语义：
+
+\noindent\begin{tabularx}{\textwidth}{>{\bfseries}p{31mm} X X}
+\toprule
+类型 & 典型策略 & 仿真器责任 \\
+\midrule
+被动触发 & 网格在指定价格等待成交 & 当前 K 线高低价覆盖被动价格时产生 Fill；不模拟完整订单簿和买卖盘撮合 \\
+主动触发 & RSI、一次性建仓等 & 策略决定在哪一根 K 线执行，并显式给出当前成交价，例如下一根 K 线 Open \\
+\bottomrule
+\end{tabularx}
+
+\section{Strategy、Rule 与 Adapter 的边界}
+
+\begin{figure}[htbp]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[node distance=10mm and 14mm]
+  \node[strategy,text width=52mm] (strategycore) {
+    \textbf{Strategy Core}\\
+    何时开始/停止\\投入多少资本\\是否加层、复位或退出
+  };
+  \node[component,right=of strategycore,text width=45mm] (port) {
+    \textbf{GridRulePort}\\
+    策略侧依赖倒置端口
+  };
+  \node[grid,right=of port,text width=52mm] (ruleengine) {
+    \textbf{GridRuleEngine}\\
+    Cell/Entry/Exit\\价格、方向、数量与移动规则
+  };
+
+  \node[strategy,below=17mm of port,text width=57mm] (simadapter) {
+    \textbf{Simulation Adapter}\\
+    Rule Intent $\rightarrow$ TradeInstruction\\
+    Fill $\rightarrow$ 策略/Rule 状态
+  };
+  \node[platform,below=of simadapter,text width=57mm] (tradeport) {
+    \textbf{SimulationTradePort}\\
+    initialize / instructions\_for\\on\_fills / on\_market
+  };
+
+  \draw[adapt] (strategycore) -- node[above,font=\small]{调用抽象端口} (port);
+  \draw[adapt] (port) -- node[above,font=\small]{外层注入实现} (ruleengine);
+  \draw[adapt] (strategycore.south) |- (simadapter.west);
+  \draw[adapt] (ruleengine.south) |- (simadapter.east);
+  \draw[dependency] (simadapter) -- (tradeport);
+
+  \node[note,below left=8mm and -6mm of tradeport] (snote) {
+    \textbf{策略拥有：}建仓时机、数量、层级、资本分配、暂停、复位和退出条件。
+  };
+  \node[note,below right=8mm and -6mm of tradeport] (rnote) {
+    \textbf{Rule 拥有：}给定锚点和参数后，机械生成网格价格及 Entry/Exit 生命周期。
+  };
+\end{tikzpicture}%
+}
+\caption{高层策略与网格规则通过端口解耦；仿真 Adapter 只负责协议转换。}
+\label{fig:strategy-rule}
+\end{figure}
+
+因此：
+
+\begin{itemize}
+  \item 单组、分层和固定网格策略位于
+        \code{strategies_system/src/trading_strategies/grid_following}；
+  \item 网格机械规则位于 \code{grid_trading/grid_rule}；
+  \item 具体 \code{GridRuleEngine} 的包装位于
+        \code{strategy_simulation.adapters.GridRuleEnginePort}；
+  \item 非网格策略（例如 RSI）无需依赖 \code{grid_rule}，但仍可通过同一个 Plugin
+        Registry 接入仿真。
+\end{itemize}
+
+\section{策略插件与实验 Provider}
+
+新增策略不修改通用实验 Provider，而是增加一个显式 Plugin：
+
+\begin{figure}[htbp]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[node distance=7mm]
+  \node[platform,text width=75mm] (expreg) {
+    \textbf{experiment\_system.ProviderRegistry}\\
+    \code{strategies-simulation/v1}
+  };
+  \node[strategy,below=of expreg,text width=75mm] (provider) {
+    \textbf{StrategiesSimulationProvider}\\
+    通用组件解析、跨组件校验与 PreparedRun 组装
+  };
+  \node[strategy,below=of provider,text width=75mm] (registry) {
+    \textbf{SimulationStrategyRegistry}\\
+    strategy type $\rightarrow$ SimulationStrategyPlugin
+  };
+
+  \node[component,below left=10mm and 55mm of registry,text width=39mm] (hold) {hold-btc/v1};
+  \node[component,right=5mm of hold,text width=47mm] (ladder) {target-liquidation-\\ladder-long/v1};
+  \node[component,right=5mm of ladder,text width=41mm] (single) {single-following-\\grid/v1};
+  \node[component,right=5mm of single,text width=41mm] (layered) {layered-following-\\grid/v1};
+  \node[component,right=5mm of layered,text width=35mm] (fixed) {fixed-grid/v1};
+
+  \draw[flow] (expreg) -- (provider);
+  \draw[adapt] (provider) -- (registry);
+  \foreach \n in {hold,ladder,single,layered,fixed} {
+    \draw[adapt] (registry.south) |- (\n.north);
+  }
+\end{tikzpicture}%
+}
+\caption{两级注册边界。Provider 不通过 if/else 识别具体策略。}
+\label{fig:plugins}
+\end{figure}
+
+每个 Plugin 拥有该策略的：
+
+\begin{itemize}
+  \item 配置默认值和严格校验；
+  \item Strategy Core 与 Simulation Adapter 的构造；
+  \item 策略专属 Summary 事实和展示描述；
+  \item 所需 Rule Engine、Position Sizer 或其他外部端口的注入。
+\end{itemize}
+
+\section{实验、指标与 Study 研究链}
+
+\subsection{Experiment 是实际运行计划}
+
+\code{ExperimentSpec} 声明：
+
+\[
+\text{Markets}
+\times \text{Strategies}
+\times \text{Executions}
+\times \text{Accounts}
+\times \text{Parameter Axes}
+\times \text{Seeds}
+\]
+
+实验系统负责展开、预检、运行、恢复、版本记录和结果持久化，不负责判断哪个策略更好。
+
+\subsection{Study 是 Experiment 之上的研究语义}
+
+\begin{figure}[htbp]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[node distance=8mm and 9mm]
+  \node[research,text width=31mm] (study) {StudySpec\\研究对象与基线};
+  \node[research,above right=5mm and 7mm of study,text width=33mm] (objective) {ObjectiveProfile\\目标与资格条件};
+  \node[research,below right=5mm and 7mm of study,text width=33mm] (split) {DatasetSplit\\TRAIN / VALIDATION\\/ HOLDOUT};
+  \node[research,right=28mm of study,text width=34mm] (compiler) {StudyCompiler\\校验并绑定指纹};
+  \node[platform,right=of compiler,text width=34mm] (espec) {ExperimentSpec\\现有运行配置};
+  \node[platform,right=of espec,text width=33mm] (runs) {ExperimentPlan\\Scenario / Run};
+  \node[storage,right=of runs,text width=31mm] (results) {SQLite\\事实与指标};
+  \node[research,right=of results,text width=32mm] (later) {后续 6D--6F\\敏感性/Pareto/候选};
+
+  \draw[researchflow] (study) -- (compiler);
+  \draw[researchflow] (objective) -- (compiler);
+  \draw[researchflow] (split) -- (compiler);
+  \draw[researchflow] (compiler) -- (espec);
+  \draw[flow] (espec) -- (runs);
+  \draw[flow] (runs) -- (results);
+  \draw[researchflow] (results) -- (later);
+
+  \draw[forbidden,bend right=27] (split.south) to node[below,font=\small,align=center]{HOLDOUT 禁止进入\\调参 Experiment} (espec.south);
+\end{tikzpicture}%
+}
+\caption{6A 后的研究链。Study 复用现有 Experiment，不产生第二套运行时。}
+\label{fig:study}
+\end{figure}
+
+Study 指纹由 Study 定义与实际 Experiment 配置形成；协议指纹同时绑定：
+
+\begin{itemize}
+  \item Objective Profile；
+  \item Dataset Split；
+  \item 实际 MetricSet definition hash。
+\end{itemize}
+
+因此即使指标键名不变，只要公式定义改变，协议身份也会改变。
+
+\subsection{指标边界}
+
+\begin{figure}[htbp]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[node distance=8mm and 10mm]
+  \node[storage,text width=36mm] (summary) {Run Summary\\结构化期末事实};
+  \node[storage,below=of summary,text width=36mm] (trace) {Trace BLOB\\逐帧/成交/权益};
+  \node[storage,below=of trace,text width=36mm] (market) {Market Parquet\\内容寻址行情};
+  \node[platform,right=22mm of trace,text width=45mm] (input) {MetricInputBuilder\\Provider Contributor};
+  \node[platform,right=of input,text width=44mm] (registry) {MetricRegistry\\Core + Strategy Metrics};
+  \node[storage,right=of registry,text width=39mm] (values) {Metric Values\\Aggregate Values};
+
+  \draw[flow] (summary) -- (input);
+  \draw[flow] (trace) -- (input);
+  \draw[flow] (market) -- (input);
+  \draw[flow] (input) -- (registry);
+  \draw[flow] (registry) -- (values);
+  \draw[forbidden,bend right=34] (values.south) to node[below,font=\small,align=center]{指标不得反向\\修改事实} (summary.south);
+\end{tikzpicture}%
+}
+\caption{指标是可重算的派生事实；策略排名和目标权重属于优化层。}
+\label{fig:metrics}
+\end{figure}
+
+\section{存储架构}
+
+\begin{figure}[htbp]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[node distance=7mm and 13mm]
+  \node[storage,text width=52mm] (sqlite) {
+    \textbf{一个 Experiment SQLite}\\
+    单一实验的正式状态与结果索引
+  };
+
+  \node[platform,below left=10mm and 19mm of sqlite,text width=48mm] (expTables) {
+    \textbf{通用实验表}\\
+    experiments / runs\\
+    run\_payloads / market\_references
+  };
+  \node[platform,below=10mm of sqlite,text width=48mm] (metricTables) {
+    \textbf{通用指标表}\\
+    metric\_sets\\run/aggregate\\metric values
+  };
+  \node[research,below right=10mm and 19mm of sqlite,text width=48mm] (studyTables) {
+    \textbf{优化命名空间表}\\
+    optimization\_studies\\optimization\_study\_events
+  };
+
+  \node[storage,below=21mm of metricTables,text width=48mm] (parquet) {
+    \textbf{Parquet Market Store}\\
+    K 线按内容哈希去重保存
+  };
+  \node[platform,right=21mm of parquet,text width=43mm] (readapi) {
+    \textbf{Read API / Viewer}\\
+    动态组合数据库与行情
+  };
+
+  \draw[flow] (sqlite) -- (expTables);
+  \draw[flow] (sqlite) -- (metricTables);
+  \draw[flow] (sqlite) -- (studyTables);
+  \draw[flow] (expTables) -- node[left,font=\small]{market\_path\_id} (parquet);
+  \draw[flow] (sqlite.east) -| (readapi.north);
+  \draw[flow] (parquet) -- (readapi);
+\end{tikzpicture}%
+}
+\caption{实验状态、指标和 Study 共享一个 SQLite；大体积 K 线独立保存为 Parquet。}
+\label{fig:storage}
+\end{figure}
+
+存储原则：
+
+\begin{itemize}
+  \item 一个 SQLite 只包含一个 Experiment，避免跨实验状态混杂；
+  \item Trace 压缩为 BLOB，可按保留等级清理；Summary 与 Metric 不因清理 Trace 而消失；
+  \item Parquet 保存 K 线，数据库只保存经过哈希校验的引用；
+  \item Study 使用同一 SQLite 的 \code{optimization_*} 表，不另建散乱结果文件；
+  \item Viewer 和 Read API 是只读入口，不承担官方指标计算。
+\end{itemize}
+
+\section{COIN-M 与 USD-M（U 本位）产品差异的隔离}
+
+策略逻辑尽量不感知合约计价差异，产品差异由账户与数值适配器处理：
+
+\begin{figure}[htbp]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[node distance=9mm and 18mm]
+  \node[strategy,text width=50mm] (same) {
+    \textbf{相同策略逻辑}\\
+    建网格、跟随、复位、暂停、退出
+  };
+  \node[component,below left=12mm and 9mm of same,text width=47mm] (coinm) {
+    COIN-M / inverse\\
+    合约张数、BTC 保证金与盈亏\\
+    Inverse Ledger / Fee / Margin
+  };
+  \node[component,below right=12mm and 9mm of same,text width=47mm] (usdm) {
+    USD-M / linear（U 本位）\\
+    固定 USDT 名义金额\\
+    Linear Ledger / Fee / Margin
+  };
+  \node[research,below=14mm of coinm,text width=47mm] (btcobj) {
+    coinm-btc-accumulation/v1\\
+    BTC 权益与相对 HODL 超额 BTC
+  };
+  \node[research,below=14mm of usdm,text width=47mm] (uobj) {
+    linear-usdt-return/v1（后续）\\
+    USDT 权益与 USDT 收益率
+  };
+
+  \draw[adapt] (same) -- (coinm);
+  \draw[adapt] (same) -- (usdm);
+  \draw[researchflow] (coinm) -- (btcobj);
+  \draw[researchflow] (usdm) -- (uobj);
+\end{tikzpicture}%
+}
+\caption{策略语义可以相同，但账户模型和评价目标不能混排。}
+\label{fig:products}
+\end{figure}
+
+COIN-M 与 USD-M（U 本位）的“收益率”不得进入同一排行榜。当前第六部分的
+首个正式研究目标是 COIN-M BTC 积累；近期 U 本位固定空头网格实验属于单独的成交
+频率与手续费研究。
+
+\section{未来实盘接入位置}
+
+\begin{figure}[htbp]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[node distance=9mm and 16mm]
+  \node[strategy,text width=55mm] (pure) {
+    \textbf{Trading Strategy Core}\\
+    与运行环境无关的策略状态机和决策
+  };
+  \node[strategy,below left=12mm and 8mm of pure,text width=48mm] (simad) {
+    \textbf{Simulation Adapter}\\
+    MarketFrame / SimFill\\
+    TradeInstruction
+  };
+  \node[external,below right=12mm and 8mm of pure,text width=48mm] (livead) {
+    \textbf{Future Live Adapter}\\
+    实时行情 / 实际成交\\
+    交易所订单与恢复
+  };
+  \node[platform,below=of simad,text width=48mm] (simruntime) {
+    simulation\_runtime\\
+    仿真执行与账户事实
+  };
+  \node[grid,below=of livead,text width=48mm] (liveserver) {
+    grid\_server / future strategy server\\
+    调度、对账、持久化与 API
+  };
+  \node[external,below=of liveserver,text width=48mm] (ex) {交易所 API};
+
+  \draw[adapt] (pure) -- (simad);
+  \draw[adapt] (pure) -- (livead);
+  \draw[dependency] (simad) -- (simruntime);
+  \draw[flow] (livead) -- (liveserver);
+  \draw[flow] (liveserver) -- (ex);
+  \draw[forbidden,bend right=20] (simruntime.south east) to node[below,font=\small]{仿真对象不得进入实盘} (liveserver.south west);
+\end{tikzpicture}%
+}
+\caption{仿真和实盘复用纯策略核心，但各自拥有独立 Adapter。}
+\label{fig:live}
+\end{figure}
+
+未来 Live Adapter 至少要承担：
+
+\begin{itemize}
+  \item 从真实账户读取钱包、持仓、保证金档位和订单状态；
+  \item 将策略决策转换为交易所订单并处理部分成交、拒单和实际成交均价；
+  \item 重启后恢复策略状态，并持续对账策略计划与实际持仓；
+  \item 保持 \code{reduce_only}、数量精度、价格精度和产品语义一致；
+  \item 不依赖 \code{strategy_optimization}，只依赖纯策略及必要的 Rule/Port。
+\end{itemize}
+
+\section{当前目录映射}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{55mm} p{102mm}}
+\toprule
+路径 & 当前责任 \\
+\midrule
+\endhead
+\code{market_simulator/packages/market_protocol} & 市场数据协议 \\
+\code{market_simulator/packages/market_simulator} & 固定、GBM、Parquet 等市场源 \\
+\code{market_simulator/packages/simulation_runtime} & 交易意图、成交、账本、费用、资金费、保证金与强平 \\
+\code{market_simulator/packages/experiment_system} & Experiment、Scenario/Run 展开、SQLite 与 Read API \\
+\code{market_simulator/packages/metric_system} & 通用指标、聚合与重算 \\
+\code{market_simulator/viewer} & 策略、市场、实验详情和 K 线回放 \\
+\code{strategies_system/src/trading_strategies} & 纯策略核心 \\
+\code{strategies_system/src/strategy_simulation} & Simulation Adapter、Plugin、Provider、策略指标 \\
+\code{strategies_system/src/strategy_optimization} & Study、协议、编译器、研究状态库 \\
+\code{strategies_system/research} & 版本化目标协议、数据划分、Study 输入与后续研究产物 \\
+\code{strategies_system/experiments} & 可执行 ExperimentSpec 与正式 SQLite 结果目录 \\
+\code{grid_trading/grid_rule} & 网格 Rule DTO、Engine 和逆向合约适配 \\
+\code{grid_trading/grid_server} & 当前网格实盘前后端、调度、交易所与持久化服务 \\
+\bottomrule
+\end{longtable}
+
+\section{架构不变量检查表}
+
+\noindent\begin{tabularx}{\textwidth}{X c X}
+\toprule
+检查项 & 当前状态 & 说明 \\
+\midrule
+Simulator 不依赖具体策略 & \yes & 通用 Provider Registry 由宿主注入 \\
+纯策略不依赖 simulator & \yes & 架构测试禁止 runtime/Web/SDK 导入 \\
+网格策略不直接创建 GridRuleEngine & \yes & 通过 GridRulePort 与外层 Adapter 注入 \\
+新增策略需要修改通用 Provider & \no & 新增 Plugin 并注册即可 \\
+Study 建立第二套 Experiment Runner & \no & 编译到现有 ExperimentSpec \\
+优化层可以产生 Fill 或修改账本 & \no & 只读取结果并保存研究状态 \\
+COIN-M 与 U 本位使用同一收益目标 & \no & 按目标协议隔离 \\
+HOLDOUT 可以进入第六部分调参 & \no & Study 编译阶段禁止包含最终样本外 market key \\
+Viewer 计算官方指标 & \no & Viewer 只读数据库与 Read API \\
+实盘服务当前已复用所有新策略 & \no & Live Adapter 尚未实施，当前不改 grid\_server \\
+\bottomrule
+\end{tabularx}
+
+\section{当前完成度与下一步}
+
+\noindent\begin{tabularx}{\textwidth}{p{27mm} p{31mm} X}
+\toprule
+模块 & 状态 & 当前结论 \\
+\midrule
+1. 仿真执行 & 已完成 & 主动/被动成交、账本、费用、资金费、杠杆、保证金和强平已形成通用执行机器 \\
+2. 实验系统 & 已完成 & 多组件、多 Seed、参数轴、SQLite、Parquet 与 Viewer 调用链可用 \\
+3. 评价指标 & 已完成 & 通用指标、策略指标、多 Run 聚合和只读展示可用 \\
+4. 市场环境 & 4A--4D 已完成 & 六类三年 BTC 场景、分段随机桥、96 条 1h 路径、市场画像和内容锁已落地；4E Experiment / Study 接入为下一步 \\
+5. 策略体系 & 已完成 v1 & HODL、阶梯止盈、固定/单组/分层网格及插件注册已落地 \\
+6A. 研究骨架 & 已完成 & Study、目标协议、数据划分、指纹和同库状态表已贯通 \\
+6B. 正式基线 & 技术验收通过 & BTCUSD\_PERP 真实分钟数据已内容锁定，8 个 Run、三套指标与 HODL 对比报告均成功；clean/tag 正式复跑待版本冻结 \\
+6C. 人工规则改进 & 等待 4E 接入 & 长期市场输入已锁定；待 Experiment / Study 引用路径后，再从真实基线和长期场景事实提出少量可解释规则变体 \\
+\bottomrule
+\end{tabularx}
+
+\subsection{第四部分与 6C 的衔接}
+
+6B 没有调整总体架构，而是沿现有链路补齐了正式数据准备、语义哈希校验、基线运行和
+不可变对比报告。由于该真实区间不足以表达未来数年的大势判断，6C 之前先由第四部分
+补齐长期市场研究输入，仍不改变策略或执行边界：
+
+\begin{enumerate}
+  \item 在 \code{market_simulator} 定义长期 Scenario、分段波动率和多 Seed Path Set；
+  \item 将正式路径物化为内容锁定 Parquet，Experiment 只引用路径；
+  \item Strategy 仍只逐帧读取当前市场，不获得未来 Anchor 或 Scenario 阶段；
+  \item 第四部分只发布市场画像，不读取策略结果挑选路径；
+  \item 6C 只运行长期 TRAIN 与 VALIDATION，HOLDOUT 留给第七部分；
+  \item 在开始 6C 正式比较前，用 clean/tag 版本复跑一次 6B，使 provenance 中
+        \code{reproducible=true}。
+\end{enumerate}
+
+\section{结论}
+
+当前平台已经形成稳定的五层关系：
+
+\begin{center}
+\Large
+市场与执行平台
+$\longleftarrow$
+仿真适配
+$\longleftarrow$
+纯策略
+$\longleftarrow$
+规则端口
+$\longleftarrow$
+研究与优化
+\end{center}
+
+更准确地说，运行时调用方向和研究输入方向相反：策略与 Study 向下调用通用平台，
+平台只把成交和账户事实向上返回。这个边界使网格、RSI 和未来其他策略能够共享同一
+仿真、实验和指标基础，同时避免为了研究而搬走实盘系统已经验证的核心能力。
+
+\appendix
+\section{编译方式}
+
+本文使用 XeLaTeX 和 TikZ。进入本目录后执行：
+
+\begin{verbatim}
+latexmk -xelatex -interaction=nonstopmode -halt-on-error \
+  current_architecture.tex
+\end{verbatim}
+
+清理辅助文件：
+
+\begin{verbatim}
+latexmk -c current_architecture.tex
+\end{verbatim}
+
+\end{document}

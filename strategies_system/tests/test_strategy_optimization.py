@@ -56,6 +56,10 @@ FORMAL_STUDY_PATH = (
     / "scenario_studies"
     / "coinm_btc_formal_baseline_v1.json"
 )
+FORMAL_MARKET_PATHS = (
+    PROJECT_ROOT / "experiments" / "market_data" / "dd600d70d192eed7e7b2.parquet",
+    PROJECT_ROOT / "experiments" / "market_data" / "f03afa63d9c3bc9d400e.parquet",
+)
 REVISIONS = {
     "market_simulator": CodeRevision(commit="market-sim-6a"),
     "grid_trading": CodeRevision(commit="grid-trading-6a"),
@@ -159,6 +163,10 @@ class StudySchemaAndPlanningTests(unittest.TestCase):
             all(window.content_sha256 is not None for window in split.windows)
         )
 
+    @unittest.skipUnless(
+        all(path.is_file() for path in FORMAL_MARKET_PATHS),
+        "materialize the ignored 6B historical Parquet dataset first",
+    )
     def test_6b_formal_study_is_eight_runs_and_excludes_holdout(self) -> None:
         bundle = load_study_bundle(FORMAL_STUDY_PATH)
         report = validate_study(

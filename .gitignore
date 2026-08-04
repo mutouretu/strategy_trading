@@ -1,0 +1,61 @@
+# Secrets and local environment files
+**/.env
+**/.env.*
+**/*.env
+!**/.env.example
+!**/*.env.example
+**/*.pem
+**/*.key
+
+# Python environments and caches
+**/.venv/
+**/venv/
+**/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/*.py[cod]
+**/*.egg-info/
+**/build/
+**/dist/
+
+# Local databases and runtime state
+**/*.sqlite
+**/*.sqlite-*
+**/*.sqlite3
+**/*.sqlite3-*
+**/*.db
+**/*.db-*
+
+# Generated market and experiment data
+**/*.parquet
+**/market_environments/generated/
+**/market_data/
+**/experiment_results/
+**/exports/
+**/output/
+**/tmp/
+
+# Frontend and editor artifacts
+**/node_modules/
+**/.idea/
+**/.vscode/
+**/.DS_Store
+
+# TeX build products
+**/*.aux
+**/*.fdb_latexmk
+**/*.fls
+**/*.log
+**/*.out
+**/*.synctex.gz
+**/*.toc
+**/*.xdv
+docs/architecture/current_architecture.pdf
+
+# Coverage and temporary reports
+**/.coverage
+**/htmlcov/
+**/coverage.xml
+**/*.tmp
+**/*.swp

@@ -1,4 +1,4 @@
-"""Local-checkout imports for the three participating repositories."""
+"""Local monorepo imports for the participating Python packages."""
 
 from __future__ import annotations
 

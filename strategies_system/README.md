@@ -14,9 +14,9 @@
 - `layered-following-grid/v1`。
 - `fixed-grid/v1`（支持 USD-M/COIN-M 与 long/short）。
 
-## 本地布局
+## 单体仓库布局
 
-本项目目前以三个并列 checkout 运行：
+本项目位于统一的 `strategy_trading` 单体仓库中：
 
 ```text
 strategy_trading/
@@ -25,8 +25,8 @@ strategy_trading/
 └── strategies_system/
 ```
 
-开发模式下，`strategy_simulation` 会从上述相邻目录接入公共包和已验证的
-COIN-M 数值实现；策略实验使用的市场、账户和执行组件定义位于本仓库的
+开发模式下，`strategy_simulation` 会从同一工作树的相邻目录接入公共包和已验证的
+COIN-M 数值实现；策略实验使用的市场、账户和执行组件定义位于本模块的
 `strategy_simulation.components`。`trading_strategies.grid_following` 只依赖其中的 `grid_rule`
 DTO 和策略侧 `GridRulePort`，不创建具体 `GridRuleEngine`，也不依赖
 `grid_server`、simulator 或实验系统。`GridRuleEnginePort` 的具体包装位于

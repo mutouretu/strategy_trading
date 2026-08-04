@@ -5,6 +5,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from experiment_system import CodeRevision
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -130,6 +133,26 @@ class MarketPathMaterializationTests(unittest.TestCase):
             self.assertEqual(len(first["paths"]), 3)
             self.assertEqual(len(list(output.glob("*.parquet"))), 3)
             self.assertTrue(all(item["frame_count"] == 25 for item in first["paths"]))
+
+            clean_revision = CodeRevision(commit="a" * 40)
+            with patch.object(
+                MODULE,
+                "collect_git_revision",
+                return_value=clean_revision,
+            ):
+                refreshed, refresh_created = MODULE.materialize_path_set(
+                    path_set,
+                    output_root=output,
+                    manifest_path=manifest,
+                    refresh_lock=True,
+                    progress=None,
+                )
+            self.assertTrue(refresh_created)
+            self.assertEqual(
+                refreshed["lock_fingerprint"], first["lock_fingerprint"]
+            )
+            self.assertTrue(refreshed["reproducible"])
+            self.assertEqual(refreshed["code_revision"]["commit"], "a" * 40)
 
 
 if __name__ == "__main__":

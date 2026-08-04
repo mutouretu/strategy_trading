@@ -8,16 +8,14 @@ from collections.abc import Mapping, Sequence
 from experiment_system import CodeRevision, collect_code_revisions
 from experiment_system.cli import main as experiment_main
 
-from ._bootstrap import GRID_TRADING_ROOT, PROJECT_ROOT, SIMULATOR_ROOT
+from ._bootstrap import WORKSPACE_ROOT
 from .experiment_provider import build_provider_registry
 
 
 def participating_code_revisions() -> dict[str, CodeRevision]:
     return collect_code_revisions(
         {
-            "market_simulator": SIMULATOR_ROOT,
-            "grid_trading": GRID_TRADING_ROOT,
-            "strategies_system": PROJECT_ROOT,
+            "strategy_trading": WORKSPACE_ROOT,
         }
     )
 

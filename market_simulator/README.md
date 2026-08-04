@@ -150,7 +150,7 @@ COIN-M 代码。
 不同场景组之间不会交叉组合。实验配置不能加载任意 Python import 路径；
 具体策略应用必须通过 `ProviderRegistry` 显式注册 Provider。
 
-正式执行默认拒绝 dirty 参与仓库；探索性运行必须显式使用
+正式执行默认拒绝 dirty 单体仓库；探索性运行必须显式使用
 `allow_dirty=True` 或 CLI 的 `--allow-dirty`，并在 Manifest、Summary 和
 RunRecord 中标记为不可复现。
 

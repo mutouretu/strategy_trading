@@ -23,6 +23,7 @@ from market_simulator.market_environment import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+WORKSPACE_ROOT = PROJECT_ROOT.parent
 DEFAULT_PATH_SET = (
     PROJECT_ROOT
     / "market_environments"
@@ -198,7 +199,10 @@ def materialize_path_set(
         if not isinstance(loaded, dict):
             raise ValueError("existing market path manifest must be an object")
         existing = loaded
-        if existing.get("lock_fingerprint") == lock_fingerprint:
+        if (
+            existing.get("lock_fingerprint") == lock_fingerprint
+            and not refresh_lock
+        ):
             return existing, False
         if not refresh_lock:
             raise ValueError(
@@ -206,7 +210,7 @@ def materialize_path_set(
                 "create a new version or pass --refresh-lock after review"
             )
 
-    revision = collect_git_revision(PROJECT_ROOT)
+    revision = collect_git_revision(WORKSPACE_ROOT)
     manifest = {
         **lock_document,
         "lock_fingerprint": lock_fingerprint,

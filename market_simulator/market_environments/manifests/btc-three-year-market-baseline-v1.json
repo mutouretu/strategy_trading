@@ -11737,12 +11737,12 @@
     }
   },
   "lock_fingerprint": "dc171110a1394d76a0d42215bce1c8699c94671d8a61c42ecf3784ab8a04933e",
-  "materialized_at": "2026-08-04T09:09:43.678814+00:00",
+  "materialized_at": "2026-08-04T10:19:59.200212+00:00",
   "code_revision": {
-    "commit": "fcce3413856a24490c69701d182e58a5e1507683",
+    "commit": "0a875d3d2b405899de7188b4bf1699dccc511a97",
     "dirty": true,
-    "dirty_fingerprint": "4d05e5310fd107a876a4298ff4269e918cc731b39a0ac2aec34e2e029fde404a",
-    "tag": "strategy-system-v1.0.0"
+    "dirty_fingerprint": "454cbdf080704ee8e1d850e6365c161cb12c047a27865de1dbbcbbd5bc667f22",
+    "tag": null
   },
   "reproducible": false
 }
