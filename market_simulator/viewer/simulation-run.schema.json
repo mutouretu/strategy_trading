@@ -1,0 +1,596 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "simulation-run.schema.json",
+  "title": "SimulationRun",
+  "type": "object",
+  "required": ["schema_version", "manifest", "market", "fills"],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "enum": [1, 2]
+    },
+    "manifest": {
+      "type": "object",
+      "required": ["run_id", "instrument", "interval"],
+      "properties": {
+        "run_id": {"type": "string", "minLength": 1},
+        "instrument": {"type": "string", "minLength": 1},
+        "interval": {"type": "string", "minLength": 1},
+        "source": {"type": "string"},
+        "seed": {"type": ["integer", "null"]},
+        "funding_enabled": {"type": "boolean"},
+        "funding_source": {"type": "string", "minLength": 1},
+        "funding_market_conditioned": {"type": "boolean"},
+        "slippage_enabled": {"type": "boolean"},
+        "slippage_source": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": true
+    },
+    "run_status": {
+      "type": "object",
+      "required": [
+        "completed",
+        "liquidated",
+        "bankrupt",
+        "termination_reason",
+        "termination_sequence"
+      ],
+      "properties": {
+        "completed": {"type": "boolean"},
+        "liquidated": {"type": "boolean"},
+        "bankrupt": {"type": "boolean"},
+        "termination_reason": {
+          "type": ["string", "null"],
+          "enum": ["LIQUIDATION", null]
+        },
+        "termination_sequence": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "market": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "sequence",
+          "timestamp",
+          "instrument",
+          "open",
+          "high",
+          "low",
+          "close"
+        ],
+        "properties": {
+          "sequence": {"type": "integer", "minimum": 0},
+          "timestamp": {"type": "integer"},
+          "date": {"type": "string", "format": "date"},
+          "instrument": {"type": "string", "minLength": 1},
+          "open": {"$ref": "#/$defs/price"},
+          "high": {"$ref": "#/$defs/price"},
+          "low": {"$ref": "#/$defs/price"},
+          "close": {"$ref": "#/$defs/price"}
+        },
+        "additionalProperties": true
+      }
+    },
+    "orders": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "order_key",
+          "instrument",
+          "side",
+          "order_type",
+          "quantity",
+          "active_from_sequence",
+          "active_to_sequence",
+          "status"
+        ],
+        "properties": {
+          "order_key": {"type": "string", "minLength": 1},
+          "instrument": {"type": "string", "minLength": 1},
+          "side": {"enum": ["BUY", "SELL"]},
+          "order_type": {"enum": ["LIMIT", "MARKET"]},
+          "quantity": {"$ref": "#/$defs/price"},
+          "price": {
+            "oneOf": [
+              {"$ref": "#/$defs/price"},
+              {"type": "null"}
+            ]
+          },
+          "reduce_only": {"type": "boolean"},
+          "active_from_sequence": {"type": "integer", "minimum": 0},
+          "active_to_sequence": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "description": "Exclusive end sequence; null means active at run end."
+          },
+          "status": {"enum": ["ACTIVE", "FILLED", "CANCELLED"]},
+          "tags": {
+            "type": "object",
+            "additionalProperties": {"type": "string"}
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "intents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "intent_key",
+          "instrument",
+          "intent_mode",
+          "side",
+          "quantity",
+          "target_price",
+          "reduce_only",
+          "active_from_sequence",
+          "active_to_sequence",
+          "status"
+        ],
+        "properties": {
+          "intent_key": {"type": "string", "minLength": 1},
+          "instrument": {"type": "string", "minLength": 1},
+          "intent_mode": {"enum": ["PASSIVE", "ACTIVE"]},
+          "side": {"enum": ["BUY", "SELL"]},
+          "quantity": {"$ref": "#/$defs/price"},
+          "target_price": {
+            "oneOf": [
+              {"$ref": "#/$defs/price"},
+              {"type": "null"}
+            ]
+          },
+          "reduce_only": {"type": "boolean"},
+          "active_from_sequence": {"type": "integer", "minimum": 0},
+          "active_to_sequence": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "description": "Exclusive end sequence; null means waiting at run end."
+          },
+          "status": {"enum": ["WAITING", "FILLED", "CANCELLED"]},
+          "tags": {
+            "type": "object",
+            "additionalProperties": {"type": "string"}
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "instructions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "instruction_key",
+          "source_intent_key",
+          "instrument",
+          "frame_sequence",
+          "timestamp",
+          "intent_mode",
+          "side",
+          "price",
+          "quantity",
+          "reduce_only"
+        ],
+        "properties": {
+          "instruction_key": {"type": "string", "minLength": 1},
+          "source_intent_key": {"type": "string", "minLength": 1},
+          "instrument": {"type": "string", "minLength": 1},
+          "frame_sequence": {"type": "integer", "minimum": 0},
+          "timestamp": {"type": "integer"},
+          "date": {"type": "string", "format": "date"},
+          "intent_mode": {"enum": ["PASSIVE", "ACTIVE"]},
+          "side": {"enum": ["BUY", "SELL"]},
+          "price": {"$ref": "#/$defs/price"},
+          "quantity": {"$ref": "#/$defs/price"},
+          "reduce_only": {"type": "boolean"},
+          "tags": {
+            "type": "object",
+            "additionalProperties": {"type": "string"}
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "fills": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "fill_id",
+          "instrument",
+          "sequence",
+          "timestamp",
+          "side",
+          "price",
+          "quantity"
+        ],
+        "properties": {
+          "fill_id": {"type": "string", "minLength": 1},
+          "order_key": {"type": "string", "minLength": 1},
+          "source_intent_key": {"type": "string", "minLength": 1},
+          "instruction_key": {"type": "string", "minLength": 1},
+          "intent_mode": {"enum": ["PASSIVE", "ACTIVE"]},
+          "instrument": {"type": "string", "minLength": 1},
+          "sequence": {"type": "integer", "minimum": 0},
+          "timestamp": {"type": "integer"},
+          "date": {"type": "string", "format": "date"},
+          "side": {"enum": ["BUY", "SELL"]},
+          "reference_price": {"$ref": "#/$defs/price"},
+          "price": {"$ref": "#/$defs/price"},
+          "slippage_amount": {"$ref": "#/$defs/price"},
+          "slippage_bps": {"$ref": "#/$defs/price"},
+          "quantity": {"$ref": "#/$defs/price"},
+          "liquidity_role": {"enum": ["MAKER", "TAKER"]},
+          "fee_rate": {"$ref": "#/$defs/price"},
+          "fee_amount": {"$ref": "#/$defs/price"},
+          "fee_asset": {"type": "string", "minLength": 1},
+          "reduce_only": {"type": "boolean"},
+          "tags": {
+            "type": "object",
+            "additionalProperties": {"type": "string"}
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "equity": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "sequence",
+          "timestamp",
+          "cash",
+          "positions",
+          "average_costs",
+          "marks",
+          "realized_pnl",
+          "equity"
+        ],
+        "properties": {
+          "sequence": {"type": "integer", "minimum": 0},
+          "timestamp": {"type": "integer"},
+          "date": {"type": "string", "format": "date"},
+          "cash": {"$ref": "#/$defs/price"},
+          "positions": {"$ref": "#/$defs/decimalMap"},
+          "average_costs": {"$ref": "#/$defs/decimalMap"},
+          "marks": {"$ref": "#/$defs/decimalMap"},
+          "gross_realized_pnl": {"$ref": "#/$defs/price"},
+          "total_fees": {"$ref": "#/$defs/price"},
+          "net_realized_pnl": {"$ref": "#/$defs/price"},
+          "total_funding": {"$ref": "#/$defs/price"},
+          "net_pnl_after_fees_and_funding": {
+            "$ref": "#/$defs/price"
+          },
+          "realized_pnl": {"$ref": "#/$defs/price"},
+          "equity": {"$ref": "#/$defs/price"},
+          "equity_asset": {"type": "string", "minLength": 1},
+          "account_metrics": {"$ref": "#/$defs/decimalMap"}
+        },
+        "additionalProperties": true
+      }
+    },
+    "margin": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/marginSnapshot"}
+    },
+    "account_events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "event_type",
+          "sequence",
+          "timestamp",
+          "instrument",
+          "mark_price_sampling",
+          "maintenance_schedule_version",
+          "intrabar_ordering_ambiguous",
+          "bankrupt",
+          "snapshot"
+        ],
+        "properties": {
+          "event_type": {"const": "LIQUIDATION"},
+          "sequence": {"type": "integer", "minimum": 0},
+          "timestamp": {"type": "integer"},
+          "date": {"type": "string", "format": "date"},
+          "instrument": {"type": "string", "minLength": 1},
+          "mark_price_sampling": {
+            "enum": ["CLOSE_ONLY", "ADVERSE_EXTREME"]
+          },
+          "maintenance_schedule_version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "intrabar_ordering_ambiguous": {"type": "boolean"},
+          "bankrupt": {"type": "boolean"},
+          "snapshot": {"$ref": "#/$defs/marginSnapshot"}
+        },
+        "additionalProperties": true
+      }
+    },
+    "funding_events": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/fundingSettlement"}
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "initial_equity": {"$ref": "#/$defs/price"},
+        "final_cash": {"$ref": "#/$defs/price"},
+        "final_positions": {"$ref": "#/$defs/decimalMap"},
+        "final_average_costs": {"$ref": "#/$defs/decimalMap"},
+        "gross_realized_pnl": {"$ref": "#/$defs/price"},
+        "total_fees": {"$ref": "#/$defs/price"},
+        "net_realized_pnl": {"$ref": "#/$defs/price"},
+        "total_funding": {"$ref": "#/$defs/price"},
+        "net_pnl_after_fees_and_funding": {
+          "$ref": "#/$defs/price"
+        },
+        "realized_pnl": {"$ref": "#/$defs/price"},
+        "final_equity": {"$ref": "#/$defs/price"},
+        "equity_asset": {"type": "string", "minLength": 1},
+        "initial_account_metrics": {"$ref": "#/$defs/decimalMap"},
+        "final_account_metrics": {"$ref": "#/$defs/decimalMap"},
+        "completed": {"type": "boolean"},
+        "liquidated": {"type": "boolean"},
+        "bankrupt": {"type": "boolean"},
+        "termination_reason": {
+          "type": ["string", "null"],
+          "enum": ["LIQUIDATION", null]
+        },
+        "termination_sequence": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "margin_snapshot_count": {"type": "integer", "minimum": 0},
+        "account_event_count": {"type": "integer", "minimum": 0},
+        "funding_event_count": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": true
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"schema_version": {"const": 1}},
+        "required": ["schema_version"]
+      },
+      "then": {
+        "required": ["orders"],
+        "properties": {
+          "fills": {
+            "items": {"required": ["order_key"]}
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"schema_version": {"const": 2}},
+        "required": ["schema_version"]
+      },
+      "then": {
+        "required": [
+          "intents",
+          "instructions",
+          "equity",
+          "summary"
+        ],
+        "properties": {
+          "fills": {
+            "items": {
+              "required": [
+                "source_intent_key",
+                "instruction_key",
+                "intent_mode",
+                "liquidity_role",
+                "fee_rate",
+                "fee_amount",
+                "fee_asset",
+                "reduce_only"
+              ]
+            }
+          },
+          "equity": {
+            "items": {
+              "required": [
+                "gross_realized_pnl",
+                "total_fees",
+                "net_realized_pnl"
+              ]
+            }
+          },
+          "summary": {
+            "required": [
+              "gross_realized_pnl",
+              "total_fees",
+              "net_realized_pnl"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "run_status": {
+            "properties": {"liquidated": {"const": true}},
+            "required": ["liquidated"]
+          }
+        },
+        "required": ["run_status"]
+      },
+      "then": {
+        "required": ["margin", "account_events"],
+        "properties": {
+          "run_status": {
+            "properties": {
+              "completed": {"const": false},
+              "termination_reason": {"const": "LIQUIDATION"},
+              "termination_sequence": {"type": "integer", "minimum": 0}
+            }
+          },
+          "margin": {"minItems": 1},
+          "account_events": {"minItems": 1}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "run_status": {
+            "properties": {"liquidated": {"const": false}},
+            "required": ["liquidated"]
+          }
+        },
+        "required": ["run_status"]
+      },
+      "then": {
+        "properties": {
+          "run_status": {
+            "properties": {
+              "completed": {"const": true},
+              "bankrupt": {"const": false},
+              "termination_reason": {"type": "null"},
+              "termination_sequence": {"type": "null"}
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "price": {
+      "oneOf": [
+        {"type": "number"},
+        {"type": "string", "pattern": "^-?[0-9]+(?:\\.[0-9]+)?$"}
+      ]
+    },
+    "decimalMap": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/price"}
+    },
+    "nullablePrice": {
+      "oneOf": [
+        {"$ref": "#/$defs/price"},
+        {"type": "null"}
+      ]
+    },
+    "marginSnapshot": {
+      "type": "object",
+      "required": [
+        "sequence",
+        "timestamp",
+        "instrument",
+        "settlement_asset",
+        "notional_asset",
+        "mark_price",
+        "mark_price_source",
+        "leverage",
+        "position_quantity",
+        "position_unit",
+        "average_entry_price",
+        "position_notional",
+        "wallet_balance",
+        "unrealized_pnl",
+        "margin_balance",
+        "position_initial_margin",
+        "maintenance_margin",
+        "available_balance",
+        "margin_buffer",
+        "initial_margin_utilization",
+        "maintenance_margin_utilization",
+        "effective_leverage",
+        "estimated_liquidation_price",
+        "liquidation_triggered",
+        "bankrupt"
+      ],
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 0},
+        "timestamp": {"type": "integer"},
+        "date": {"type": "string", "format": "date"},
+        "instrument": {"type": "string", "minLength": 1},
+        "settlement_asset": {"type": "string", "minLength": 1},
+        "notional_asset": {"type": "string", "minLength": 1},
+        "mark_price": {"$ref": "#/$defs/price"},
+        "mark_price_source": {"type": "string", "minLength": 1},
+        "leverage": {"$ref": "#/$defs/price"},
+        "position_quantity": {"$ref": "#/$defs/price"},
+        "position_unit": {"type": "string", "minLength": 1},
+        "average_entry_price": {"$ref": "#/$defs/price"},
+        "position_notional": {"$ref": "#/$defs/price"},
+        "wallet_balance": {"$ref": "#/$defs/price"},
+        "unrealized_pnl": {"$ref": "#/$defs/price"},
+        "margin_balance": {"$ref": "#/$defs/price"},
+        "position_initial_margin": {"$ref": "#/$defs/price"},
+        "maintenance_margin": {"$ref": "#/$defs/price"},
+        "available_balance": {"$ref": "#/$defs/price"},
+        "margin_buffer": {"$ref": "#/$defs/price"},
+        "initial_margin_utilization": {
+          "$ref": "#/$defs/nullablePrice"
+        },
+        "maintenance_margin_utilization": {
+          "$ref": "#/$defs/nullablePrice"
+        },
+        "effective_leverage": {
+          "$ref": "#/$defs/nullablePrice"
+        },
+        "estimated_liquidation_price": {
+          "$ref": "#/$defs/nullablePrice"
+        },
+        "liquidation_triggered": {"type": "boolean"},
+        "bankrupt": {"type": "boolean"}
+      },
+      "additionalProperties": true
+    },
+    "fundingSettlement": {
+      "type": "object",
+      "required": [
+        "event_type",
+        "settlement_id",
+        "sequence",
+        "timestamp",
+        "instrument",
+        "source",
+        "funding_rate",
+        "position_quantity",
+        "mark_price",
+        "mark_price_source",
+        "position_notional",
+        "notional_asset",
+        "position_value",
+        "settlement_asset",
+        "wallet_delta"
+      ],
+      "properties": {
+        "event_type": {"const": "FUNDING_SETTLEMENT"},
+        "settlement_id": {"type": "string", "minLength": 1},
+        "sequence": {"type": "integer", "minimum": 0},
+        "timestamp": {"type": "integer"},
+        "date": {"type": "string", "format": "date"},
+        "instrument": {"type": "string", "minLength": 1},
+        "source": {"type": "string", "minLength": 1},
+        "funding_rate": {"$ref": "#/$defs/price"},
+        "position_quantity": {"$ref": "#/$defs/price"},
+        "mark_price": {"$ref": "#/$defs/price"},
+        "mark_price_source": {"type": "string", "minLength": 1},
+        "position_notional": {"$ref": "#/$defs/price"},
+        "notional_asset": {"type": "string", "minLength": 1},
+        "position_value": {"$ref": "#/$defs/price"},
+        "settlement_asset": {"type": "string", "minLength": 1},
+        "wallet_delta": {"$ref": "#/$defs/price"}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

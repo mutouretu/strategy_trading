@@ -1,0 +1,40 @@
+{
+  "schema_version": "market-scenario/v1",
+  "scenario_id": "btc-long-range-v1",
+  "name": "BTC 长期宽幅震荡",
+  "description": "三年内反复触碰宽幅区间上下沿，不出现持续大牛市",
+  "origin": "SYNTHETIC",
+  "asset_profile_id": "btc-24x7/v1",
+  "instrument": "BTCUSD_PERP",
+  "horizon": {"start": "2026-08-01", "end": "2029-08-01"},
+  "interval": "1h",
+  "model": {
+    "type": "anchored-regime-bridge/v1",
+    "price_quantum": "0.1",
+    "periods_per_year": 365,
+    "substeps_per_bar": 6
+  },
+  "anchors": [
+    {"date": "2026-08-01", "target": {"type": "HARD", "price": "62794.3"}},
+    {"date": "2027-02-01", "target": {"type": "BAND", "minimum": "45000", "maximum": "58000"}},
+    {"date": "2027-08-01", "target": {"type": "BAND", "minimum": "75000", "maximum": "90000"}},
+    {"date": "2028-02-01", "target": {"type": "BAND", "minimum": "48000", "maximum": "62000"}},
+    {"date": "2028-08-01", "target": {"type": "BAND", "minimum": "80000", "maximum": "100000"}},
+    {"date": "2029-02-01", "target": {"type": "BAND", "minimum": "50000", "maximum": "70000"}},
+    {"date": "2029-08-01", "target": {"type": "BAND", "minimum": "65000", "maximum": "90000"}}
+  ],
+  "volatility_regimes": [
+    {"start": "2026-08-01", "end_exclusive": "2027-02-01", "annual_volatility": {"minimum": "0.45", "maximum": "0.70"}},
+    {"start": "2027-02-01", "end_exclusive": "2027-08-01", "annual_volatility": {"minimum": "0.50", "maximum": "0.75"}},
+    {"start": "2027-08-01", "end_exclusive": "2028-02-01", "annual_volatility": {"minimum": "0.50", "maximum": "0.80"}},
+    {"start": "2028-02-01", "end_exclusive": "2028-08-01", "annual_volatility": {"minimum": "0.50", "maximum": "0.80"}},
+    {"start": "2028-08-01", "end_exclusive": "2029-02-01", "annual_volatility": {"minimum": "0.50", "maximum": "0.80"}},
+    {"start": "2029-02-01", "end_exclusive": "2029-08-01", "annual_volatility": {"minimum": "0.45", "maximum": "0.70"}}
+  ],
+  "status": "LOCKED",
+  "metadata": {
+    "family": "LONG_RANGE",
+    "thesis": "研究假设，不是价格预测",
+    "starting_price_source": "Binance BTCUSD_PERP 2026-07-31 23:59 UTC close"
+  }
+}

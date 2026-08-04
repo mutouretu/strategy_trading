@@ -1,0 +1,483 @@
+{
+  "schema_version": 2,
+  "manifest": {
+    "description": "Deterministic intent resolution, explicit trades, and ledger probe",
+    "run_id": "deterministic-runtime-probe",
+    "instrument": "BTCUSD",
+    "interval": "1d",
+    "source": "fixed_bar_probe",
+    "seed": null,
+    "funding_enabled": false,
+    "funding_source": "ZERO",
+    "funding_market_conditioned": false,
+    "slippage_enabled": false,
+    "slippage_source": "ZERO"
+  },
+  "run_status": {
+    "completed": true,
+    "liquidated": false,
+    "bankrupt": false,
+    "termination_reason": null,
+    "termination_sequence": null
+  },
+  "market": [
+    {
+      "sequence": 0,
+      "timestamp": 1767225600000,
+      "date": "2026-01-01",
+      "instrument": "BTCUSD",
+      "open": "100",
+      "high": "102",
+      "low": "98",
+      "close": "101"
+    },
+    {
+      "sequence": 1,
+      "timestamp": 1767312000000,
+      "date": "2026-01-02",
+      "instrument": "BTCUSD",
+      "open": "101",
+      "high": "103",
+      "low": "97",
+      "close": "100"
+    },
+    {
+      "sequence": 2,
+      "timestamp": 1767398400000,
+      "date": "2026-01-03",
+      "instrument": "BTCUSD",
+      "open": "100",
+      "high": "104",
+      "low": "98",
+      "close": "103"
+    },
+    {
+      "sequence": 3,
+      "timestamp": 1767484800000,
+      "date": "2026-01-04",
+      "instrument": "BTCUSD",
+      "open": "103",
+      "high": "109",
+      "low": "101",
+      "close": "108"
+    },
+    {
+      "sequence": 4,
+      "timestamp": 1767571200000,
+      "date": "2026-01-05",
+      "instrument": "BTCUSD",
+      "open": "108",
+      "high": "109",
+      "low": "96",
+      "close": "97"
+    },
+    {
+      "sequence": 5,
+      "timestamp": 1767657600000,
+      "date": "2026-01-06",
+      "instrument": "BTCUSD",
+      "open": "96",
+      "high": "100",
+      "low": "94",
+      "close": "99"
+    }
+  ],
+  "fills": [
+    {
+      "fill_id": "probe:entry:replacement:frame:2@2",
+      "source_intent_key": "probe:entry:replacement",
+      "instruction_key": "probe:entry:replacement:frame:2",
+      "intent_mode": "PASSIVE",
+      "instrument": "BTCUSD",
+      "sequence": 2,
+      "timestamp": 1767398400000,
+      "date": "2026-01-03",
+      "side": "BUY",
+      "reference_price": "99",
+      "price": "99",
+      "slippage_amount": "0",
+      "slippage_bps": "0",
+      "quantity": "2",
+      "liquidity_role": "MAKER",
+      "fee_rate": "0",
+      "fee_amount": "0",
+      "fee_asset": "USDT",
+      "reduce_only": false,
+      "tags": {
+        "probe_step": "replacement-entry"
+      }
+    },
+    {
+      "fill_id": "probe:exit:take-profit:frame:3@3",
+      "source_intent_key": "probe:exit:take-profit",
+      "instruction_key": "probe:exit:take-profit:frame:3",
+      "intent_mode": "PASSIVE",
+      "instrument": "BTCUSD",
+      "sequence": 3,
+      "timestamp": 1767484800000,
+      "date": "2026-01-04",
+      "side": "SELL",
+      "reference_price": "108",
+      "price": "108",
+      "slippage_amount": "0",
+      "slippage_bps": "0",
+      "quantity": "1",
+      "liquidity_role": "MAKER",
+      "fee_rate": "0",
+      "fee_amount": "0",
+      "fee_asset": "USDT",
+      "reduce_only": true,
+      "tags": {
+        "probe_step": "take-profit"
+      }
+    },
+    {
+      "fill_id": "probe:exit:active:frame:5@5",
+      "source_intent_key": "probe:exit:active",
+      "instruction_key": "probe:exit:active:frame:5",
+      "intent_mode": "ACTIVE",
+      "instrument": "BTCUSD",
+      "sequence": 5,
+      "timestamp": 1767657600000,
+      "date": "2026-01-06",
+      "side": "SELL",
+      "reference_price": "96",
+      "price": "96",
+      "slippage_amount": "0",
+      "slippage_bps": "0",
+      "quantity": "1",
+      "liquidity_role": "TAKER",
+      "fee_rate": "0",
+      "fee_amount": "0",
+      "fee_asset": "USDT",
+      "reduce_only": true,
+      "tags": {
+        "probe_step": "active-exit"
+      }
+    }
+  ],
+  "equity": [
+    {
+      "sequence": 0,
+      "timestamp": 1767225600000,
+      "date": "2026-01-01",
+      "cash": "1000",
+      "positions": {},
+      "average_costs": {},
+      "marks": {
+        "BTCUSD": "101"
+      },
+      "gross_realized_pnl": "0",
+      "total_fees": "0",
+      "net_realized_pnl": "0",
+      "total_funding": "0",
+      "net_pnl_after_fees_and_funding": "0",
+      "realized_pnl": "0",
+      "equity": "1000",
+      "equity_asset": "USDT",
+      "account_metrics": {
+        "gross_realized_pnl_usdt": "0",
+        "total_fees_usdt": "0",
+        "net_realized_pnl_usdt": "0",
+        "total_funding_usdt": "0",
+        "net_pnl_after_fees_and_funding_usdt": "0",
+        "total_equity_usdt": "1000"
+      }
+    },
+    {
+      "sequence": 1,
+      "timestamp": 1767312000000,
+      "date": "2026-01-02",
+      "cash": "1000",
+      "positions": {},
+      "average_costs": {},
+      "marks": {
+        "BTCUSD": "100"
+      },
+      "gross_realized_pnl": "0",
+      "total_fees": "0",
+      "net_realized_pnl": "0",
+      "total_funding": "0",
+      "net_pnl_after_fees_and_funding": "0",
+      "realized_pnl": "0",
+      "equity": "1000",
+      "equity_asset": "USDT",
+      "account_metrics": {
+        "gross_realized_pnl_usdt": "0",
+        "total_fees_usdt": "0",
+        "net_realized_pnl_usdt": "0",
+        "total_funding_usdt": "0",
+        "net_pnl_after_fees_and_funding_usdt": "0",
+        "total_equity_usdt": "1000"
+      }
+    },
+    {
+      "sequence": 2,
+      "timestamp": 1767398400000,
+      "date": "2026-01-03",
+      "cash": "802",
+      "positions": {
+        "BTCUSD": "2"
+      },
+      "average_costs": {
+        "BTCUSD": "99"
+      },
+      "marks": {
+        "BTCUSD": "103"
+      },
+      "gross_realized_pnl": "0",
+      "total_fees": "0",
+      "net_realized_pnl": "0",
+      "total_funding": "0",
+      "net_pnl_after_fees_and_funding": "0",
+      "realized_pnl": "0",
+      "equity": "1008",
+      "equity_asset": "USDT",
+      "account_metrics": {
+        "gross_realized_pnl_usdt": "0",
+        "total_fees_usdt": "0",
+        "net_realized_pnl_usdt": "0",
+        "total_funding_usdt": "0",
+        "net_pnl_after_fees_and_funding_usdt": "0",
+        "total_equity_usdt": "1008"
+      }
+    },
+    {
+      "sequence": 3,
+      "timestamp": 1767484800000,
+      "date": "2026-01-04",
+      "cash": "910",
+      "positions": {
+        "BTCUSD": "1"
+      },
+      "average_costs": {
+        "BTCUSD": "99"
+      },
+      "marks": {
+        "BTCUSD": "108"
+      },
+      "gross_realized_pnl": "9",
+      "total_fees": "0",
+      "net_realized_pnl": "9",
+      "total_funding": "0",
+      "net_pnl_after_fees_and_funding": "9",
+      "realized_pnl": "9",
+      "equity": "1018",
+      "equity_asset": "USDT",
+      "account_metrics": {
+        "gross_realized_pnl_usdt": "9",
+        "total_fees_usdt": "0",
+        "net_realized_pnl_usdt": "9",
+        "total_funding_usdt": "0",
+        "net_pnl_after_fees_and_funding_usdt": "9",
+        "total_equity_usdt": "1018"
+      }
+    },
+    {
+      "sequence": 4,
+      "timestamp": 1767571200000,
+      "date": "2026-01-05",
+      "cash": "910",
+      "positions": {
+        "BTCUSD": "1"
+      },
+      "average_costs": {
+        "BTCUSD": "99"
+      },
+      "marks": {
+        "BTCUSD": "97"
+      },
+      "gross_realized_pnl": "9",
+      "total_fees": "0",
+      "net_realized_pnl": "9",
+      "total_funding": "0",
+      "net_pnl_after_fees_and_funding": "9",
+      "realized_pnl": "9",
+      "equity": "1007",
+      "equity_asset": "USDT",
+      "account_metrics": {
+        "gross_realized_pnl_usdt": "9",
+        "total_fees_usdt": "0",
+        "net_realized_pnl_usdt": "9",
+        "total_funding_usdt": "0",
+        "net_pnl_after_fees_and_funding_usdt": "9",
+        "total_equity_usdt": "1007"
+      }
+    },
+    {
+      "sequence": 5,
+      "timestamp": 1767657600000,
+      "date": "2026-01-06",
+      "cash": "1006",
+      "positions": {},
+      "average_costs": {},
+      "marks": {
+        "BTCUSD": "99"
+      },
+      "gross_realized_pnl": "6",
+      "total_fees": "0",
+      "net_realized_pnl": "6",
+      "total_funding": "0",
+      "net_pnl_after_fees_and_funding": "6",
+      "realized_pnl": "6",
+      "equity": "1006",
+      "equity_asset": "USDT",
+      "account_metrics": {
+        "gross_realized_pnl_usdt": "6",
+        "total_fees_usdt": "0",
+        "net_realized_pnl_usdt": "6",
+        "total_funding_usdt": "0",
+        "net_pnl_after_fees_and_funding_usdt": "6",
+        "total_equity_usdt": "1006"
+      }
+    }
+  ],
+  "margin": [],
+  "account_events": [],
+  "funding_events": [],
+  "summary": {
+    "initial_equity": "1000",
+    "final_cash": "1006",
+    "final_positions": {},
+    "final_average_costs": {},
+    "gross_realized_pnl": "6",
+    "total_fees": "0",
+    "net_realized_pnl": "6",
+    "total_funding": "0",
+    "net_pnl_after_fees_and_funding": "6",
+    "realized_pnl": "6",
+    "final_equity": "1006",
+    "equity_asset": "USDT",
+    "final_account_metrics": {
+      "gross_realized_pnl_usdt": "6",
+      "total_fees_usdt": "0",
+      "net_realized_pnl_usdt": "6",
+      "total_funding_usdt": "0",
+      "net_pnl_after_fees_and_funding_usdt": "6",
+      "total_equity_usdt": "1006"
+    },
+    "completed": true,
+    "liquidated": false,
+    "bankrupt": false,
+    "termination_reason": null,
+    "termination_sequence": null,
+    "intent_count": 4,
+    "instruction_count": 3,
+    "fill_count": 3,
+    "margin_snapshot_count": 0,
+    "account_event_count": 0,
+    "funding_event_count": 0
+  },
+  "intents": [
+    {
+      "intent_key": "probe:entry:original",
+      "instrument": "BTCUSD",
+      "intent_mode": "PASSIVE",
+      "side": "BUY",
+      "quantity": "2",
+      "target_price": "95",
+      "reduce_only": false,
+      "active_from_sequence": 0,
+      "active_to_sequence": 1,
+      "status": "CANCELLED",
+      "tags": {
+        "probe_step": "original-entry"
+      }
+    },
+    {
+      "intent_key": "probe:entry:replacement",
+      "instrument": "BTCUSD",
+      "intent_mode": "PASSIVE",
+      "side": "BUY",
+      "quantity": "2",
+      "target_price": "99",
+      "reduce_only": false,
+      "active_from_sequence": 1,
+      "active_to_sequence": 2,
+      "status": "FILLED",
+      "tags": {
+        "probe_step": "replacement-entry"
+      }
+    },
+    {
+      "intent_key": "probe:exit:take-profit",
+      "instrument": "BTCUSD",
+      "intent_mode": "PASSIVE",
+      "side": "SELL",
+      "quantity": "1",
+      "target_price": "108",
+      "reduce_only": true,
+      "active_from_sequence": 2,
+      "active_to_sequence": 3,
+      "status": "FILLED",
+      "tags": {
+        "probe_step": "take-profit"
+      }
+    },
+    {
+      "intent_key": "probe:exit:active",
+      "instrument": "BTCUSD",
+      "intent_mode": "ACTIVE",
+      "side": "SELL",
+      "quantity": "1",
+      "target_price": null,
+      "reduce_only": true,
+      "active_from_sequence": 4,
+      "active_to_sequence": 5,
+      "status": "FILLED",
+      "tags": {
+        "probe_step": "active-exit"
+      }
+    }
+  ],
+  "instructions": [
+    {
+      "instruction_key": "probe:entry:replacement:frame:2",
+      "source_intent_key": "probe:entry:replacement",
+      "instrument": "BTCUSD",
+      "frame_sequence": 2,
+      "timestamp": 1767398400000,
+      "date": "2026-01-03",
+      "intent_mode": "PASSIVE",
+      "side": "BUY",
+      "price": "99",
+      "quantity": "2",
+      "reduce_only": false,
+      "tags": {
+        "probe_step": "replacement-entry"
+      }
+    },
+    {
+      "instruction_key": "probe:exit:take-profit:frame:3",
+      "source_intent_key": "probe:exit:take-profit",
+      "instrument": "BTCUSD",
+      "frame_sequence": 3,
+      "timestamp": 1767484800000,
+      "date": "2026-01-04",
+      "intent_mode": "PASSIVE",
+      "side": "SELL",
+      "price": "108",
+      "quantity": "1",
+      "reduce_only": true,
+      "tags": {
+        "probe_step": "take-profit"
+      }
+    },
+    {
+      "instruction_key": "probe:exit:active:frame:5",
+      "source_intent_key": "probe:exit:active",
+      "instrument": "BTCUSD",
+      "frame_sequence": 5,
+      "timestamp": 1767657600000,
+      "date": "2026-01-06",
+      "intent_mode": "ACTIVE",
+      "side": "SELL",
+      "price": "96",
+      "quantity": "1",
+      "reduce_only": true,
+      "tags": {
+        "probe_step": "active-exit"
+      }
+    }
+  ]
+}

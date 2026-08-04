@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.pytest_cache/
+.venv/
+*.egg-info/
+build/
+dist/
+experiment_results/
+market_data/
+exports/
+market_environments/generated/

@@ -1,0 +1,20 @@
+{
+  "schema_version": "market-path-set/v1",
+  "path_set_id": "btc-three-year-market-baseline-v1",
+  "description": "BTC 三年长期市场基线：六类宏观场景与分离的 TRAIN、VALIDATION、HOLDOUT Seed",
+  "asset_profile_path": "../asset_profiles/btc-24x7-v1.json",
+  "scenarios": [
+    {"scenario_id": "btc-base-bull-v1", "path": "../scenarios/btc-base-bull-v1.json"},
+    {"scenario_id": "btc-delayed-bull-v1", "path": "../scenarios/btc-delayed-bull-v1.json"},
+    {"scenario_id": "btc-deep-bear-then-bull-v1", "path": "../scenarios/btc-deep-bear-then-bull-v1.json"},
+    {"scenario_id": "btc-early-bull-crash-v1", "path": "../scenarios/btc-early-bull-crash-v1.json"},
+    {"scenario_id": "btc-long-range-v1", "path": "../scenarios/btc-long-range-v1.json"},
+    {"scenario_id": "btc-thesis-failure-v1", "path": "../scenarios/btc-thesis-failure-v1.json"}
+  ],
+  "roles": {
+    "TRAIN": [1101, 1102, 1103, 1104, 1105, 1106, 1107, 1108],
+    "VALIDATION": [2101, 2102, 2103, 2104],
+    "HOLDOUT": [3101, 3102, 3103, 3104]
+  },
+  "status": "LOCKED"
+}

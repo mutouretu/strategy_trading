@@ -1,0 +1,36 @@
+{
+  "schema_version": "market-scenario/v1",
+  "scenario_id": "btc-delayed-bull-v1",
+  "name": "BTC 延迟牛市",
+  "description": "前两年保持宽幅震荡，最后一年才快速进入牛市",
+  "origin": "SYNTHETIC",
+  "asset_profile_id": "btc-24x7/v1",
+  "instrument": "BTCUSD_PERP",
+  "horizon": {"start": "2026-08-01", "end": "2029-08-01"},
+  "interval": "1h",
+  "model": {
+    "type": "anchored-regime-bridge/v1",
+    "price_quantum": "0.1",
+    "periods_per_year": 365,
+    "substeps_per_bar": 6
+  },
+  "anchors": [
+    {"date": "2026-08-01", "target": {"type": "HARD", "price": "62794.3"}},
+    {"date": "2027-08-01", "target": {"type": "BAND", "minimum": "45000", "maximum": "75000"}},
+    {"date": "2028-08-01", "target": {"type": "BAND", "minimum": "50000", "maximum": "85000"}},
+    {"date": "2029-04-01", "target": {"type": "BAND", "minimum": "130000", "maximum": "190000"}},
+    {"date": "2029-08-01", "target": {"type": "BAND", "minimum": "110000", "maximum": "170000"}}
+  ],
+  "volatility_regimes": [
+    {"start": "2026-08-01", "end_exclusive": "2027-08-01", "annual_volatility": {"minimum": "0.45", "maximum": "0.70"}},
+    {"start": "2027-08-01", "end_exclusive": "2028-08-01", "annual_volatility": {"minimum": "0.45", "maximum": "0.70"}},
+    {"start": "2028-08-01", "end_exclusive": "2029-04-01", "annual_volatility": {"minimum": "0.65", "maximum": "0.95"}},
+    {"start": "2029-04-01", "end_exclusive": "2029-08-01", "annual_volatility": {"minimum": "0.55", "maximum": "0.85"}}
+  ],
+  "status": "LOCKED",
+  "metadata": {
+    "family": "DELAYED_BULL",
+    "thesis": "研究假设，不是价格预测",
+    "starting_price_source": "Binance BTCUSD_PERP 2026-07-31 23:59 UTC close"
+  }
+}

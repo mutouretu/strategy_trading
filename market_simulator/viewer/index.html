@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Simulation K-Line Viewer</title>
+    <meta
+      name="description"
+      content="Playback OHLC market paths, strategy intents, instructions, and fills from simulation runs."
+    >
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">Simulation Viewer</div>
+      <div class="header-actions">
+        <a class="button" href="./experiments.html">研究工作台</a>
+        <label class="file-button" for="run-file">
+          打开 run JSON
+          <input id="run-file" type="file" accept="application/json,.json">
+        </label>
+      </div>
+    </header>
+
+    <main>
+      <section class="chart-shell" aria-label="仿真 K 线回放">
+        <div class="symbol-row">
+          <div>
+            <span class="symbol" id="symbol">—</span>
+            <span class="interval" id="interval">1D</span>
+          </div>
+          <div class="chart-meta">
+            <div class="trade-legend" aria-label="交易方向颜色">
+              <span><i class="legend-swatch buy"></i>买单 / BUY</span>
+              <span><i class="legend-swatch sell"></i>卖单 / SELL</span>
+              <span><i class="legend-swatch liquidation"></i>强平 / LIQ</span>
+            </div>
+            <div class="ohlc" id="ohlc" aria-live="polite"></div>
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <button class="button button-primary" id="play" type="button" aria-pressed="false">
+            播放
+          </button>
+          <button class="button" id="step" type="button">下一日</button>
+          <button class="button" id="reset" type="button">回到开始</button>
+          <label>
+            速度
+            <select id="speed">
+              <option value="800">1×</option>
+              <option value="400" selected>2×</option>
+              <option value="200">4×</option>
+              <option value="100">8×</option>
+            </select>
+          </label>
+          <span class="run-meta" id="run-meta"></span>
+        </div>
+
+        <div class="chart-wrap">
+          <svg
+            id="chart"
+            viewBox="0 0 1200 680"
+            role="img"
+            aria-labelledby="chart-title chart-description"
+          >
+            <title id="chart-title">仿真日线 K 线</title>
+            <desc id="chart-description">
+              可播放、逐日查看，并叠加等待中的被动意图和策略成交。
+            </desc>
+          </svg>
+          <div class="tooltip" id="tooltip"></div>
+        </div>
+
+        <div class="timeline">
+          <input id="timeline" type="range" min="0" max="0" value="0" aria-label="仿真日期">
+          <span id="progress">—</span>
+        </div>
+        <div class="message" id="message" role="status"></div>
+        <div class="run-status-banner" id="run-status-banner" role="status">
+          <strong id="run-status-title">—</strong>
+          <span id="run-status-detail"></span>
+        </div>
+
+        <section class="account-strip" aria-label="仿真账户状态">
+          <div class="metric">
+            <span class="metric-label" id="account-equity-label">结算权益</span>
+            <strong id="account-equity">—</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label" id="account-equity-quote-label">折算权益</span>
+            <strong id="account-equity-quote">—</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label" id="account-spot-label">长期底仓</span>
+            <strong id="account-spot">—</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label" id="account-cash-label">钱包 / 现金</span>
+            <strong id="account-cash">—</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label" id="account-unrealized-label">未实现盈亏</span>
+            <strong id="account-unrealized">—</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label" id="account-position-label">持仓</span>
+            <strong id="account-position">—</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label">持仓均价</span>
+            <strong id="account-average">—</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label" id="account-realized-label">净已实现盈亏</span>
+            <strong id="account-realized">—</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label" id="account-fees-label">累计手续费</span>
+            <strong id="account-fees">—</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label" id="account-funding-label">资金费净入账</span>
+            <strong id="account-funding">—</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label" id="margin-balance-label">保证金余额</span>
+            <strong id="margin-balance">—</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label" id="maintenance-margin-label">维持保证金</span>
+            <strong id="maintenance-margin">—</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label" id="available-balance-label">可用余额</span>
+            <strong id="available-balance">—</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label">预估强平价</span>
+            <strong id="estimated-liquidation-price">—</strong>
+          </div>
+          <div class="metric">
+            <span class="metric-label">等待意图</span>
+            <strong id="active-intent-count">—</strong>
+          </div>
+        </section>
+
+        <div class="detail-grid">
+          <section class="detail-panel" aria-labelledby="equity-heading">
+            <div class="panel-heading">
+              <div>
+                <h2 id="equity-heading">账户权益</h2>
+                <p id="equity-note">随回放进度更新的期末盯市权益</p>
+              </div>
+              <label class="equity-unit-control">
+                计价
+                <select id="equity-unit" aria-label="权益曲线计价单位">
+                  <option value="settlement">结算币</option>
+                  <option value="quote">USDT</option>
+                </select>
+              </label>
+            </div>
+            <svg
+              id="equity-chart"
+              viewBox="0 0 1200 230"
+              role="img"
+              aria-label="账户权益曲线"
+            ></svg>
+          </section>
+
+          <section class="detail-panel fill-panel" aria-labelledby="fills-heading">
+            <div class="panel-heading">
+              <div>
+                <h2 id="fills-heading">成交明细</h2>
+                <p id="fill-count">截至当前日期 0 笔</p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>日期</th>
+                    <th>方向</th>
+                    <th>价格</th>
+                    <th>数量</th>
+                    <th>角色</th>
+                    <th>滑点</th>
+                    <th>手续费</th>
+                    <th>来源意图</th>
+                  </tr>
+                </thead>
+                <tbody id="fills-body">
+                  <tr><td colspan="8" class="empty-cell">暂无成交</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section
+            class="detail-panel intent-panel"
+            aria-labelledby="intents-heading"
+          >
+            <div class="panel-heading">
+              <div>
+                <h2 id="intents-heading">意图生命周期</h2>
+                <p id="intent-count">当前等待 0 条 · 累计出现 0 条</p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>状态</th>
+                    <th>类型</th>
+                    <th>方向</th>
+                    <th>目标 / 执行</th>
+                    <th>意图</th>
+                  </tr>
+                </thead>
+                <tbody id="intents-body">
+                  <tr>
+                    <td colspan="5" class="empty-cell">暂无交易意图</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section
+            class="detail-panel liquidation-panel"
+            id="liquidation-panel"
+            aria-labelledby="liquidation-heading"
+            hidden
+          >
+            <div class="panel-heading">
+              <div>
+                <h2 id="liquidation-heading">强平事件</h2>
+                <p id="liquidation-note">仿真终止时的平台保证金事实</p>
+              </div>
+            </div>
+            <dl class="liquidation-facts">
+              <div><dt>触发日期</dt><dd id="liquidation-date">—</dd></div>
+              <div><dt>触发标记价</dt><dd id="liquidation-mark">—</dd></div>
+              <div><dt>采样方式</dt><dd id="liquidation-sampling">—</dd></div>
+              <div><dt>持仓</dt><dd id="liquidation-position">—</dd></div>
+              <div><dt>钱包余额</dt><dd id="liquidation-wallet">—</dd></div>
+              <div><dt>未实现盈亏</dt><dd id="liquidation-unrealized">—</dd></div>
+              <div><dt>保证金余额</dt><dd id="liquidation-balance">—</dd></div>
+              <div><dt>维持保证金</dt><dd id="liquidation-maintenance">—</dd></div>
+              <div><dt>保证金缓冲</dt><dd id="liquidation-buffer">—</dd></div>
+              <div><dt>杠杆</dt><dd id="liquidation-leverage">—</dd></div>
+              <div><dt>维持保证金版本</dt><dd id="liquidation-version">—</dd></div>
+              <div><dt>盘中顺序</dt><dd id="liquidation-ordering">—</dd></div>
+            </dl>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <script src="./run-model.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

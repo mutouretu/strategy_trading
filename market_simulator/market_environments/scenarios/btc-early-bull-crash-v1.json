@@ -1,0 +1,38 @@
+{
+  "schema_version": "market-scenario/v1",
+  "scenario_id": "btc-early-bull-crash-v1",
+  "name": "BTC 提前牛市后暴跌",
+  "description": "较早进入高位牛市，随后发生大幅回撤并部分恢复",
+  "origin": "SYNTHETIC",
+  "asset_profile_id": "btc-24x7/v1",
+  "instrument": "BTCUSD_PERP",
+  "horizon": {"start": "2026-08-01", "end": "2029-08-01"},
+  "interval": "1h",
+  "model": {
+    "type": "anchored-regime-bridge/v1",
+    "price_quantum": "0.1",
+    "periods_per_year": 365,
+    "substeps_per_bar": 6
+  },
+  "anchors": [
+    {"date": "2026-08-01", "target": {"type": "HARD", "price": "62794.3"}},
+    {"date": "2027-04-01", "target": {"type": "BAND", "minimum": "130000", "maximum": "190000"}},
+    {"date": "2027-10-01", "target": {"type": "BAND", "minimum": "160000", "maximum": "230000"}},
+    {"date": "2028-04-01", "target": {"type": "BAND", "minimum": "70000", "maximum": "110000"}},
+    {"date": "2029-02-01", "target": {"type": "BAND", "minimum": "100000", "maximum": "160000"}},
+    {"date": "2029-08-01", "target": {"type": "BAND", "minimum": "90000", "maximum": "150000"}}
+  ],
+  "volatility_regimes": [
+    {"start": "2026-08-01", "end_exclusive": "2027-04-01", "annual_volatility": {"minimum": "0.65", "maximum": "0.95"}},
+    {"start": "2027-04-01", "end_exclusive": "2027-10-01", "annual_volatility": {"minimum": "0.70", "maximum": "1.00"}},
+    {"start": "2027-10-01", "end_exclusive": "2028-04-01", "annual_volatility": {"minimum": "0.85", "maximum": "1.20"}},
+    {"start": "2028-04-01", "end_exclusive": "2029-02-01", "annual_volatility": {"minimum": "0.55", "maximum": "0.85"}},
+    {"start": "2029-02-01", "end_exclusive": "2029-08-01", "annual_volatility": {"minimum": "0.50", "maximum": "0.80"}}
+  ],
+  "status": "LOCKED",
+  "metadata": {
+    "family": "EARLY_BULL_CRASH",
+    "thesis": "研究假设，不是价格预测",
+    "starting_price_source": "Binance BTCUSD_PERP 2026-07-31 23:59 UTC close"
+  }
+}
