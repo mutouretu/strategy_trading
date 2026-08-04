@@ -4,7 +4,10 @@ import unittest
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from market_simulator import AnchoredGBMMarketSource
+from market_simulator import (
+    AnchoredGBMIntradayMarketSource,
+    AnchoredGBMMarketSource,
+)
 
 
 class AnchoredGBMMarketSourceTests(unittest.TestCase):
@@ -102,6 +105,24 @@ class AnchoredGBMMarketSourceTests(unittest.TestCase):
                 price_floor="40000",
                 price_ceiling="200000",
             )
+
+    def test_intraday_source_emits_ordered_executable_frames(self) -> None:
+        source = AnchoredGBMIntradayMarketSource(
+            "BTCUSDT",
+            [("2026-01-01", "65000"), ("2026-01-03", "62000")],
+            annual_volatility="0.60",
+            bars_per_day=24,
+        )
+
+        frames = self.all_frames(source, 42)
+
+        self.assertEqual(len(frames), 49)
+        self.assertEqual(frames[0].close, Decimal("65000"))
+        self.assertEqual(frames[-1].close, Decimal("62000"))
+        self.assertEqual(frames[1].timestamp - frames[0].timestamp, 3_600_000)
+        for previous, current in zip(frames, frames[1:]):
+            self.assertEqual(current.open, previous.close)
+            self.assertGreater(current.timestamp, previous.timestamp)
 
 
 if __name__ == "__main__":

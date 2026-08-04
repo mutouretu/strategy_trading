@@ -251,17 +251,18 @@
   }
 
   function aggregateBars(bars, interval) {
-    if (interval === "1d") return bars.map((bar) => ({...bar}));
     const groups = new Map();
     bars.forEach((bar) => {
-      const key = interval === "1w"
-        ? weekStart(bar.date)
-        : String(bar.date).slice(0, 7);
+      const key = interval === "1d"
+        ? String(bar.date).slice(0, 10)
+        : interval === "1w"
+          ? weekStart(bar.date)
+          : String(bar.date).slice(0, 7);
       if (!groups.has(key)) {
         groups.set(key, {
           sequence: bar.sequence,
           timestamp: bar.timestamp,
-          date: interval === "1w" ? key : `${key}-01`,
+          date: interval === "1d" || interval === "1w" ? key : `${key}-01`,
           instrument: bar.instrument,
           open: Number(bar.open),
           high: Number(bar.high),

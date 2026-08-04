@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from decimal import Decimal
 
 from metric_system import (
@@ -106,6 +107,46 @@ def available_values(metric_input_value: MetricInput):
 
 
 class CoreMetricTests(unittest.TestCase):
+    def test_intraday_equity_is_sampled_for_daily_risk_metrics(self) -> None:
+        interval = 300_000
+        boundaries = {
+            0: Decimal("100"),
+            DAY: Decimal("110"),
+            DAY * 2: Decimal("99"),
+            DAY * 3: Decimal("108.9"),
+        }
+        points = []
+        current = Decimal("100")
+        for timestamp in range(0, DAY * 3 + interval, interval):
+            current = boundaries.get(timestamp, current)
+            points.append(EquityPoint(timestamp, current))
+        base = metric_input(("100", "108.9"))
+        intraday = replace(
+            base,
+            interval_ms=interval,
+            equity_series=(
+                EquitySeries(
+                    series_key="account.total_equity",
+                    valuation_asset="USDT",
+                    initial_value=Decimal("100"),
+                    final_value=Decimal("108.9"),
+                    points=tuple(points),
+                    source_level=MetricInputLevel.TRACE,
+                ),
+            ),
+        )
+
+        values = available_values(intraday)
+        dimensions = (
+            ("scope", "account.total_equity"),
+            ("valuation_asset", "USDT"),
+        )
+        self.assertEqual(
+            values[("risk.daily_mean_return", dimensions)].value,
+            Decimal("0.03333333333333333333333333333"),
+        )
+        self.assertIn(("risk.annualized_volatility", dimensions), values)
+
     def test_hand_calculated_drawdown_and_return(self) -> None:
         values = available_values(metric_input(("100", "120", "90", "110")))
         dimensions = (

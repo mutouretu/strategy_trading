@@ -18,6 +18,7 @@ from .comparison import (
     RunQueryResult,
     flatten_scalars,
 )
+from .documents import experiment_spec_to_document
 from .execution import (
     ExperimentOutcome,
     SingleRunOutcome,
@@ -160,6 +161,7 @@ __all__ = [
     "encode_trace",
     "execute_single_run",
     "execute_experiment",
+    "experiment_spec_to_document",
     "export_comparison_csv",
     "export_viewer_json",
     "expand_scenarios",

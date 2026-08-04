@@ -9,3 +9,4 @@ dist/
 experiment_results/
 market_data/
 exports/
+market_environments/generated/

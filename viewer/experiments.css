@@ -667,6 +667,26 @@
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--tv-border);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.experiment-group-heading::-webkit-details-marker {
+  display: none;
+}
+
+.experiment-strategy-group:not([open]) .experiment-group-heading {
+  border-bottom-color: transparent;
+}
+
+.experiment-group-heading:hover {
+  background: var(--tv-panel-hover);
+}
+
+.experiment-group-identity strong,
+.experiment-group-identity span {
+  display: block;
 }
 
 .experiment-group-heading strong {
@@ -676,6 +696,22 @@
 .experiment-group-heading span {
   color: var(--tv-muted);
   font-size: 10px;
+}
+
+.experiment-group-heading .experiment-group-action {
+  color: #7394ff;
+  font-size: 11px;
+}
+
+.experiment-detail-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.experiment-detail-link:hover {
+  color: #9bb1ff;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .experiment-row td {

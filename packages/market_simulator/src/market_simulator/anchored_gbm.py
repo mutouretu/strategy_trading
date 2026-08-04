@@ -133,24 +133,7 @@ class AnchoredGBMMarketSource:
     def _generate(self, seed: int | None) -> tuple[MarketFrame, ...]:
         generator = random.Random(seed)
         sigma = float(self.annual_volatility)
-        closes: list[tuple[date, float]] = []
-
-        for segment_index, (start, end) in enumerate(
-            zip(self.anchors, self.anchors[1:])
-        ):
-            steps = (end.date - start.date).days
-            segment = self._bridge(
-                float(start.price),
-                float(end.price),
-                steps,
-                sigma,
-                1 / self.periods_per_year,
-                generator,
-            )
-            for offset, close in enumerate(segment):
-                if segment_index > 0 and offset == 0:
-                    continue
-                closes.append((start.date + timedelta(days=offset), close))
+        closes = self._daily_closes(generator)
 
         frames: list[MarketFrame] = []
         exact_anchors = {anchor.date: anchor.price for anchor in self.anchors}
@@ -199,6 +182,29 @@ class AnchoredGBMMarketSource:
                 )
             )
         return tuple(frames)
+
+    def _daily_closes(
+        self, generator: random.Random
+    ) -> list[tuple[date, float]]:
+        sigma = float(self.annual_volatility)
+        closes: list[tuple[date, float]] = []
+        for segment_index, (start, end) in enumerate(
+            zip(self.anchors, self.anchors[1:])
+        ):
+            steps = (end.date - start.date).days
+            segment = self._bridge(
+                float(start.price),
+                float(end.price),
+                steps,
+                sigma,
+                1 / self.periods_per_year,
+                generator,
+            )
+            for offset, close in enumerate(segment):
+                if segment_index > 0 and offset == 0:
+                    continue
+                closes.append((start.date + timedelta(days=offset), close))
+        return closes
 
     def _quantize(self, value: float) -> Decimal:
         return Decimal(str(value)).quantize(
@@ -269,3 +275,120 @@ class AnchoredGBMMarketSource:
         values[0] = start_price
         values[-1] = end_price
         return tuple(values)
+
+
+class AnchoredGBMIntradayMarketSource(AnchoredGBMMarketSource):
+    """Emit an executable intraday path while preserving daily anchors.
+
+    Unlike the daily source, each sampled point is its own market frame. A
+    strategy can therefore complete several grid legs during one calendar
+    day without relying on unknowable ordering inside a daily high/low range.
+    """
+
+    def __init__(
+        self,
+        instrument: str,
+        anchors: Iterable[PriceAnchor | tuple[date | str, PriceInput]],
+        *,
+        annual_volatility: PriceInput,
+        bars_per_day: int = 288,
+        periods_per_year: int = 365,
+        price_quantum: PriceInput = Decimal("0.01"),
+        price_floor: PriceInput | None = None,
+        price_ceiling: PriceInput | None = None,
+    ) -> None:
+        if (
+            isinstance(bars_per_day, bool)
+            or not isinstance(bars_per_day, int)
+            or bars_per_day < 2
+        ):
+            raise ValueError("bars_per_day must be an integer >= 2")
+        if 86_400 % bars_per_day != 0:
+            raise ValueError("bars_per_day must divide 86400 exactly")
+        super().__init__(
+            instrument,
+            anchors,
+            annual_volatility=annual_volatility,
+            intraday_steps=bars_per_day,
+            periods_per_year=periods_per_year,
+            price_quantum=price_quantum,
+            price_floor=price_floor,
+            price_ceiling=price_ceiling,
+        )
+        self.bars_per_day = bars_per_day
+
+    def _generate(self, seed: int | None) -> tuple[MarketFrame, ...]:
+        generator = random.Random(seed)
+        sigma = float(self.annual_volatility)
+        daily_closes = self._daily_closes(generator)
+        interval_ms = 86_400_000 // self.bars_per_day
+        frames: list[MarketFrame] = []
+
+        first_date, first_raw = daily_closes[0]
+        first_price = self._anchor_or_quantized(first_date, first_raw)
+        first_timestamp = self._timestamp(first_date)
+        frames.append(
+            MarketFrame(
+                sequence=0,
+                timestamp=first_timestamp,
+                instrument=self.instrument,
+                open=first_price,
+                high=first_price,
+                low=first_price,
+                close=first_price,
+            )
+        )
+
+        for (start_date, start_raw), (end_date, end_raw) in zip(
+            daily_closes, daily_closes[1:]
+        ):
+            start_price = self._anchor_or_quantized(start_date, start_raw)
+            end_price = self._anchor_or_quantized(end_date, end_raw)
+            path = self._bridge(
+                float(start_price),
+                float(end_price),
+                self.bars_per_day,
+                sigma,
+                1 / (self.periods_per_year * self.bars_per_day),
+                generator,
+            )
+            points = [start_price]
+            points.extend(
+                self._bounded_quantize(value) for value in path[1:-1]
+            )
+            points.append(end_price)
+            day_start = self._timestamp(start_date)
+            for step in range(1, self.bars_per_day + 1):
+                open_price = points[step - 1]
+                close_price = points[step]
+                frames.append(
+                    MarketFrame(
+                        sequence=len(frames),
+                        timestamp=day_start + step * interval_ms,
+                        instrument=self.instrument,
+                        open=open_price,
+                        high=max(open_price, close_price),
+                        low=min(open_price, close_price),
+                        close=close_price,
+                    )
+                )
+        return tuple(frames)
+
+    def _anchor_or_quantized(self, day: date, raw: float) -> Decimal:
+        exact = next(
+            (anchor.price for anchor in self.anchors if anchor.date == day),
+            None,
+        )
+        return exact if exact is not None else self._bounded_quantize(raw)
+
+    @staticmethod
+    def _timestamp(day: date) -> int:
+        return int(
+            datetime(
+                day.year,
+                day.month,
+                day.day,
+                tzinfo=timezone.utc,
+            ).timestamp()
+            * 1_000
+        )

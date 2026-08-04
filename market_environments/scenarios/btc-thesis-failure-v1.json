@@ -1,0 +1,38 @@
+{
+  "schema_version": "market-scenario/v1",
+  "scenario_id": "btc-thesis-failure-v1",
+  "name": "BTC 牛市判断失败",
+  "description": "持续走弱并长期停留在起点下方，三年内没有恢复",
+  "origin": "SYNTHETIC",
+  "asset_profile_id": "btc-24x7/v1",
+  "instrument": "BTCUSD_PERP",
+  "horizon": {"start": "2026-08-01", "end": "2029-08-01"},
+  "interval": "1h",
+  "model": {
+    "type": "anchored-regime-bridge/v1",
+    "price_quantum": "0.1",
+    "periods_per_year": 365,
+    "substeps_per_bar": 6
+  },
+  "anchors": [
+    {"date": "2026-08-01", "target": {"type": "HARD", "price": "62794.3"}},
+    {"date": "2027-02-01", "target": {"type": "BAND", "minimum": "45000", "maximum": "55000"}},
+    {"date": "2027-10-01", "target": {"type": "BAND", "minimum": "30000", "maximum": "45000"}},
+    {"date": "2028-08-01", "target": {"type": "BAND", "minimum": "25000", "maximum": "40000"}},
+    {"date": "2029-04-01", "target": {"type": "BAND", "minimum": "32000", "maximum": "50000"}},
+    {"date": "2029-08-01", "target": {"type": "BAND", "minimum": "35000", "maximum": "55000"}}
+  ],
+  "volatility_regimes": [
+    {"start": "2026-08-01", "end_exclusive": "2027-02-01", "annual_volatility": {"minimum": "0.55", "maximum": "0.85"}},
+    {"start": "2027-02-01", "end_exclusive": "2027-10-01", "annual_volatility": {"minimum": "0.60", "maximum": "0.95"}},
+    {"start": "2027-10-01", "end_exclusive": "2028-08-01", "annual_volatility": {"minimum": "0.55", "maximum": "0.90"}},
+    {"start": "2028-08-01", "end_exclusive": "2029-04-01", "annual_volatility": {"minimum": "0.45", "maximum": "0.75"}},
+    {"start": "2029-04-01", "end_exclusive": "2029-08-01", "annual_volatility": {"minimum": "0.45", "maximum": "0.70"}}
+  ],
+  "status": "LOCKED",
+  "metadata": {
+    "family": "THESIS_FAILURE",
+    "thesis": "研究假设，不是价格预测",
+    "starting_price_source": "Binance BTCUSD_PERP 2026-07-31 23:59 UTC close"
+  }
+}

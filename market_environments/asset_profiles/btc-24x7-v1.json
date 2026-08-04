@@ -1,0 +1,19 @@
+{
+  "schema_version": "asset-profile/v1",
+  "profile_id": "btc-24x7/v1",
+  "name": "BTC 24×7 市场",
+  "calendar": "24x7",
+  "periods_per_year": 365,
+  "price_quantum": "0.1",
+  "default_interval": "1h",
+  "metadata": {
+    "asset": "BTC",
+    "timezone": "UTC",
+    "description": "连续交易的 BTC 价格参考，不包含交易所订单簿和资金费",
+    "reference_price": "62794.3",
+    "reference_timestamp": "2026-07-31T23:59:00Z",
+    "reference_source": "Binance COIN-M BTCUSD_PERP 1m monthly archive",
+    "reference_archive": "BTCUSD_PERP-1m-2026-07.zip",
+    "reference_archive_sha256": "9a94e42db85460d98601e0c89c536d1032378a6d05f79ccc1a2cf804962be87b"
+  }
+}

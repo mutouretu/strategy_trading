@@ -362,12 +362,23 @@ class CoreMetricCalculator:
             "risk.daily_return_p05",
             "risk.daily_expected_shortfall_p05",
         )
-        if metric_input.interval_ms != DAY_MS:
+        interval_ms = metric_input.interval_ms
+        if (
+            interval_ms is None
+            or interval_ms <= 0
+            or interval_ms > DAY_MS
+            or DAY_MS % interval_ms != 0
+        ):
             return [_unavailable(self.d(key), "UNSUPPORTED_FREQUENCY", unit="ratio", dimensions=dimensions) for key in keys]
-        if len(points) < 3:
+        daily_points = (
+            tuple(points)
+            if interval_ms == DAY_MS
+            else self._daily_equity_points(points, interval_ms)
+        )
+        if len(daily_points) < 3:
             return [_unavailable(self.d(key), "INSUFFICIENT_OBSERVATIONS", unit="ratio", dimensions=dimensions) for key in keys]
         returns: list[Decimal] = []
-        for previous, current in zip(points, points[1:]):
+        for previous, current in zip(daily_points, daily_points[1:]):
             if previous.value <= 0:
                 return [_unavailable(self.d(key), "NONPOSITIVE_EQUITY", unit="ratio", dimensions=dimensions) for key in keys]
             returns.append(current.value / previous.value - 1)
@@ -392,6 +403,28 @@ class CoreMetricCalculator:
         else:
             result.append(_available(self.d("risk.sortino"), average / downside * SQRT_365, unit="ratio", dimensions=dimensions))
         return result
+
+    @staticmethod
+    def _daily_equity_points(
+        points: Sequence[EquityPoint],
+        interval_ms: int,
+    ) -> tuple[EquityPoint, ...]:
+        """Sample a regular intraday equity series at daily boundaries."""
+
+        if len(points) < 2:
+            return tuple(points)
+        first_observed = points[1]
+        boundary_offset = first_observed.timestamp % DAY_MS
+        sampled = [
+            point
+            for point in points[1:]
+            if point.timestamp % DAY_MS == boundary_offset
+        ]
+        if not sampled or sampled[0] != first_observed:
+            sampled.insert(0, first_observed)
+        if points[-1].timestamp - sampled[-1].timestamp >= interval_ms:
+            sampled.append(points[-1])
+        return tuple(sampled)
 
     def _pnl_metrics(self, metric_input: MetricInput) -> list[MetricValue]:
         result = metric_input.result_summary

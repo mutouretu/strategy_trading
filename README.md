@@ -42,6 +42,17 @@ market_protocol
 `grid_trading`；同一仓库中的薄适配器把规则状态、订单意图和成交事件映射到
 `SimulationTradePort`。规则引擎不能依赖市场生成模型或 `simulation_runtime`。
 
+## 长期市场环境
+
+`market_environment` 将宏观假设和具体路径分开：Scenario 只声明绝对价格 Anchor、
+分段波动率和时间范围，`anchored-regime-bridge/v1` 再按固定 Seed 生成连续的小时
+OHLC。策略只能逐 Bar 读取 `MarketFrame`，不会获得未来 Anchor 或场景阶段。
+
+首版 `btc-three-year-market-baseline-v1` 已锁定 6 类三年 BTC 场景，并为每类场景
+生成 8 个 TRAIN、4 个 VALIDATION、4 个 HOLDOUT Seed，共 96 条路径。正式定义和
+内容锁位于 `market_environments/`，可复现 Parquet 位于被 Git 忽略的 `generated/`。
+生成方式与目录边界见 [market_environments/README.md](market_environments/README.md)。
+
 ## 当前执行语义
 
 - `MarketFrame` 是经过校验的 OHLC bar，`price` 是 `close` 的兼容别名。

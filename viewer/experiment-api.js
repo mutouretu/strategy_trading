@@ -163,6 +163,31 @@
     return cell;
   }
 
+  function experimentDetailHref(experimentId) {
+    const url = new URL(window.location.href);
+    url.search = "";
+    url.searchParams.set("page", "experiment-detail");
+    url.searchParams.set("experiment", experimentId);
+    return url.toString();
+  }
+
+  function experimentCell(experiment) {
+    const cell = make("td", "primary-cell");
+    const title = make("strong");
+    const link = make(
+      "a",
+      "experiment-detail-link",
+      experiment.experiment_id,
+    );
+    link.href = experimentDetailHref(experiment.experiment_id);
+    title.append(link);
+    cell.append(
+      title,
+      make("span", "", experiment.database_name),
+    );
+    return cell;
+  }
+
   function appendCell(row, value, className = "") {
     const cell = make("td", className, value ?? "—");
     row.append(cell);
@@ -619,8 +644,8 @@
       "市场 / 执行 / 账户",
       "Seeds",
       "状态",
-      "BTC 收益均值",
-      "BTC 回撤均值",
+      "账户收益均值",
+      "账户回撤均值",
       "强平率",
       "成交均值",
       "",
@@ -641,21 +666,11 @@
       appendCell(row, statusText(scenario.status_counts));
       appendCell(
         row,
-        scenarioMetricText(
-          scenario,
-          "return.total_rate",
-          {scope: "account.total_equity", valuation_asset: "BTC"},
-          true,
-        ),
+        scenarioAccountMetricText(scenario, "return.total_rate"),
       );
       appendCell(
         row,
-        scenarioMetricText(
-          scenario,
-          "risk.max_drawdown_rate",
-          {scope: "account.total_equity", valuation_asset: "BTC"},
-          true,
-        ),
+        scenarioAccountMetricText(scenario, "risk.max_drawdown_rate"),
       );
       appendCell(row, scenarioLiquidationRate(scenario));
       appendCell(
@@ -675,6 +690,19 @@
     return wrapper;
   }
 
+  function scenarioAccountMetricText(scenario, metricKey) {
+    for (const asset of ["BTC", "USDT"]) {
+      const rendered = scenarioMetricText(
+        scenario,
+        metricKey,
+        {scope: "account.total_equity", valuation_asset: asset},
+        true,
+      );
+      if (rendered !== "—") return `${rendered} ${asset}`;
+    }
+    return "—";
+  }
+
   function renderExperimentOverview() {
     elements.experimentGroups.replaceChildren();
     state.strategies.forEach((strategy) => {
@@ -683,12 +711,24 @@
           (run) => run.resolved_components.strategy.type === strategy.type,
         ),
       );
-      const panel = make("section", "data-panel");
-      const heading = make("div", "experiment-group-heading");
-      heading.append(
+      const panel = make(
+        "details",
+        "data-panel experiment-strategy-group",
+      );
+      const heading = make("summary", "experiment-group-heading");
+      const identity = make("div", "experiment-group-identity");
+      identity.append(
         make("strong", "", strategyName(strategy)),
         make("span", "", `${records.length} 个实验 · ${strategy.runs.length} Runs`),
       );
+      heading.append(
+        identity,
+        make("span", "experiment-group-action", "展开"),
+      );
+      panel.addEventListener("toggle", () => {
+        heading.querySelector(".experiment-group-action").textContent =
+          panel.open ? "收起" : "展开";
+      });
       const wrapper = make("div", "table-wrap");
       const table = make("table", "research-table");
       const head = document.createElement("thead");
@@ -702,9 +742,7 @@
         const scenarios = Model.scenarioRows(record);
         const experiment = record.experiment;
         const row = make("tr", "experiment-row");
-        row.append(
-          primaryCell(experiment.experiment_id, experiment.database_name),
-        );
+        row.append(experimentCell(experiment));
         appendCell(row, experiment.description || "—");
         appendCell(row, scenarios.length);
         appendCell(
@@ -810,6 +848,14 @@
       dimensions.valuation_asset
     ) {
       label = `${dimensions.valuation_asset} 最大回撤率`;
+    } else if (
+      value.metric_key === "grid.completed_cycle_annualized_on_initial_equity"
+    ) {
+      label = "完整网格循环简单年化（按初始权益）";
+    } else if (value.metric_key === "grid.completed_cycle_net_pnl_total") {
+      label = "完整网格循环累计净收益";
+    } else if (value.metric_key === "grid.open_inventory_net_pnl") {
+      label = "未完成网格期末净盈亏";
     } else {
       const qualifiers = [
         dimensions.valuation_asset,
@@ -846,6 +892,12 @@
     if (value.metric_key === "margin.max_effective_leverage") return 21;
     if (value.metric_key === "execution.fill_count") return 24;
     if (value.metric_key === "grid.completed_cycles") return 25;
+    if (
+      value.metric_key
+      === "grid.completed_cycle_annualized_on_initial_equity"
+    ) return 8;
+    if (value.metric_key === "grid.completed_cycle_net_pnl_total") return 26;
+    if (value.metric_key === "grid.open_inventory_net_pnl") return 27;
     if (value.metric_key === "cost.total_fees") return 28;
     return Number.POSITIVE_INFINITY;
   }
@@ -1156,7 +1208,9 @@
     if (state.playbackUrl) window.open(state.playbackUrl.standalone, "_blank");
   });
 
-  const requestedPage = new URLSearchParams(window.location.search).get("page");
+  const requestedParams = new URLSearchParams(window.location.search);
+  const requestedPage = requestedParams.get("page");
+  state.detailExperimentId = requestedParams.get("experiment");
   setPage(PAGE_META[requestedPage] ? requestedPage : "strategy-overview", {
     updateUrl: false,
   });

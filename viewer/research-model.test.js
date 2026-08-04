@@ -111,3 +111,20 @@ assert.deepEqual(
   [monthly[0].open, monthly[0].high, monthly[0].low, monthly[0].close],
   [100, 115, 90, 110],
 );
+
+const intraday = [
+  {date: "2026-01-30", open: 100, high: 102, low: 99, close: 101},
+  {date: "2026-01-30", open: 101, high: 105, low: 100, close: 104},
+  {date: "2026-01-31", open: 104, high: 106, low: 103, close: 105},
+];
+const aggregatedDaily = aggregateBars(intraday, "1d");
+assert.equal(aggregatedDaily.length, 2);
+assert.deepEqual(
+  [
+    aggregatedDaily[0].open,
+    aggregatedDaily[0].high,
+    aggregatedDaily[0].low,
+    aggregatedDaily[0].close,
+  ],
+  [100, 105, 99, 104],
+);

@@ -83,6 +83,21 @@ class LinearLedger:
     def positions(self) -> dict[str, Decimal]:
         return dict(self._positions)
 
+    def clone(self) -> LinearLedger:
+        """Return an independent accounting copy for projected fills."""
+
+        cloned = LinearLedger(
+            self.initial_equity,
+            equity_asset=self.equity_asset,
+        )
+        cloned.cash = self.cash
+        cloned._positions.update(self._positions)
+        cloned._average_costs.update(self._average_costs)
+        cloned._gross_realized_pnl.update(self._gross_realized_pnl)
+        cloned._fees.update(self._fees)
+        cloned._funding.update(self._funding)
+        return cloned
+
     @property
     def average_costs(self) -> dict[str, Decimal]:
         return {
