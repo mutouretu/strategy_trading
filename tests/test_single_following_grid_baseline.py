@@ -88,7 +88,7 @@ class SingleFollowingGridBaselineTests(unittest.TestCase):
             )
             grid = service.evaluate_experiment(
                 metric_set_id="grid",
-                version="v1",
+                version="v2",
             )
 
             self.assertEqual(core.evaluated_count, 1)
@@ -97,7 +97,7 @@ class SingleFollowingGridBaselineTests(unittest.TestCase):
             evaluation = store.run_evaluation(
                 plan.runs[0].run_id,
                 "grid",
-                "v1",
+                "v2",
             )
             self.assertIsNotNone(evaluation)
             values = {

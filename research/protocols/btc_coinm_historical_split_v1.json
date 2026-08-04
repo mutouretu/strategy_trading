@@ -1,0 +1,36 @@
+{
+  "schema_version": "dataset-split/v1",
+  "split_id": "btc-coinm-historical-split-v1",
+  "description": "Binance COIN-M BTCUSD_PERP 1 分钟正式研究边界；月度 K 线缺失日使用同合约官方 aggTrades 重建 OHLC",
+  "status": "CONTENT_LOCKED",
+  "source": "Binance public data COIN-M BTCUSD_PERP monthly klines; missing archive days reconstructed from same-contract official aggTrades",
+  "instrument": "BTCUSD_PERP",
+  "interval": "1m",
+  "proxy_market": false,
+  "windows": [
+    {
+      "key": "historical-train",
+      "role": "TRAIN",
+      "market_key": "btc-coinm-train",
+      "start": "2026-03-22",
+      "end_exclusive": "2026-06-02",
+      "content_sha256": "dd600d70d192eed7e7b2b5d3f2067bfdafae054ea741b666f767d48b21d71b0e"
+    },
+    {
+      "key": "historical-validation",
+      "role": "VALIDATION",
+      "market_key": "btc-coinm-validation",
+      "start": "2026-06-02",
+      "end_exclusive": "2026-06-26",
+      "content_sha256": "f03afa63d9c3bc9d400e48b720b1a8d848714d8c345bd82e454948c95cb69442"
+    },
+    {
+      "key": "historical-final-holdout",
+      "role": "HOLDOUT",
+      "market_key": "btc-coinm-final-holdout",
+      "start": "2026-06-26",
+      "end_exclusive": "2026-07-20",
+      "content_sha256": "689fc1e21041633c3c58859f4d91a82f6e3da709b51c0042d77ff887c1bd8d41"
+    }
+  ]
+}

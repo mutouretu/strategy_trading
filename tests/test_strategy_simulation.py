@@ -116,6 +116,7 @@ class StrategySimulationTests(unittest.TestCase):
         self.assertEqual(
             set(registry.strategy_types),
             {
+                "fixed-grid/v1",
                 "hold-btc/v1",
                 "layered-following-grid/v1",
                 "target-liquidation-ladder-long/v1",

@@ -1,0 +1,77 @@
+{
+  "schema_version": "objective-profile/v1",
+  "profile_id": "coinm-btc-accumulation-v1",
+  "description": "以 BTC 期末权益及相对 HODL 的超额 BTC 为主目标，USDT 权益仅作估值展示",
+  "valuation_asset": "BTC",
+  "baseline_strategy_type": "hold-btc/v1",
+  "objectives": [
+    {
+      "key": "excess-btc-vs-hodl",
+      "selector": {
+        "metric_set_id": "core",
+        "metric_set_version": "v1",
+        "metric_key": "return.final_equity",
+        "unit": "BTC",
+        "dimensions": {
+          "scope": "account.futures_equity",
+          "valuation_asset": "BTC"
+        }
+      },
+      "direction": "MAXIMIZE",
+      "comparison": "DELTA_FROM_BASELINE"
+    },
+    {
+      "key": "btc-max-drawdown",
+      "selector": {
+        "metric_set_id": "core",
+        "metric_set_version": "v1",
+        "metric_key": "risk.max_drawdown_rate",
+        "unit": "ratio",
+        "dimensions": {
+          "scope": "account.futures_equity",
+          "valuation_asset": "BTC"
+        }
+      },
+      "direction": "MINIMIZE",
+      "comparison": "DIRECT"
+    }
+  ],
+  "eligibility_constraints": [
+    {
+      "key": "run-completed",
+      "selector": {
+        "metric_set_id": "core",
+        "metric_set_version": "v1",
+        "metric_key": "run.completed",
+        "unit": "boolean",
+        "dimensions": {}
+      },
+      "operator": "EQ",
+      "value": true
+    },
+    {
+      "key": "not-liquidated",
+      "selector": {
+        "metric_set_id": "core",
+        "metric_set_version": "v1",
+        "metric_key": "run.liquidated",
+        "unit": "boolean",
+        "dimensions": {}
+      },
+      "operator": "EQ",
+      "value": false
+    },
+    {
+      "key": "not-bankrupt",
+      "selector": {
+        "metric_set_id": "core",
+        "metric_set_version": "v1",
+        "metric_key": "run.bankrupt",
+        "unit": "boolean",
+        "dimensions": {}
+      },
+      "operator": "EQ",
+      "value": false
+    }
+  ]
+}

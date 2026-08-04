@@ -1,0 +1,98 @@
+{
+  "schema_version": "experiment-spec/v1",
+  "experiment_id": "usdm-fixed-short-grid-structure-v1",
+  "description": "BTCUSDT U 本位固定空头网格结构验证；区间沿用 30,000–70,168，未使用用户尚未提供的派网网格数、本金和杠杆参数做收益复现",
+  "scenario_groups": [
+    {
+      "key": "usdm-fixed-short-grid",
+      "run_provider": "strategies-simulation/v1",
+      "markets": [
+        {
+          "key": "btc-four-month-intraday-5m",
+          "type": "anchored-gbm-intraday/v1",
+          "parameters": {
+            "instrument": "BTCUSDT",
+            "anchors": [
+              {"date": "2026-01-01", "price": "65000"},
+              {"date": "2026-02-01", "price": "48000"},
+              {"date": "2026-03-01", "price": "68000"},
+              {"date": "2026-04-01", "price": "42000"},
+              {"date": "2026-05-01", "price": "60000"}
+            ],
+            "annual_volatility": "0.80",
+            "bars_per_day": 288,
+            "periods_per_year": 365,
+            "price_quantum": "0.01",
+            "price_floor": "30000",
+            "price_ceiling": "70168",
+            "interval": "5m"
+          }
+        }
+      ],
+      "strategies": [
+        {
+          "key": "fixed-short-30000-70168-structural",
+          "type": "fixed-grid/v1",
+          "parameters": {
+            "strategy_id": "fixed-short-grid-usdm-structural",
+            "rule": {
+              "grid_id": "fixed-short-grid-30000-70168",
+              "instrument": "BTCUSDT",
+              "mode": "short",
+              "anchor_price": "30000",
+              "grid_ratio": "0.008533151389824578",
+              "grid_count": 100,
+              "order_notional": "200",
+              "tick_size": "0.1",
+              "quantity_step": "0.001",
+              "move_grid": false,
+              "market_type": "usdm"
+            }
+          }
+        }
+      ],
+      "executions": [
+        {
+          "key": "intraday-passive-usdm",
+          "type": "daily-bar-execution/v1",
+          "parameters": {
+            "maker_fee_rate": "0.0002",
+            "taker_fee_rate": "0.0005",
+            "fee_asset": "USDT",
+            "funding_model": "none"
+          }
+        }
+      ],
+      "accounts": [
+        {
+          "key": "usdm-cross-structural",
+          "type": "usdm-linear/v1",
+          "parameters": {
+            "instrument": "BTCUSDT",
+            "futures_wallet_usdt": "10000",
+            "settlement_asset": "USDT",
+            "notional_asset": "USDT",
+            "margin_model": "flat-maintenance/v1",
+            "leverage": "3",
+            "maintenance_margin_rate": "0.005",
+            "mark_price_sampling": "ADVERSE_EXTREME"
+          }
+        }
+      ]
+    }
+  ],
+  "seeds": [42],
+  "output": {
+    "root": "experiment_results",
+    "default_retention_class": "standard"
+  },
+  "controls": {
+    "max_runs": 1,
+    "continue_on_error": false
+  },
+  "metadata": {
+    "purpose": "usdm-fixed-short-grid-structure-validation",
+    "reference_range": "30000-70168",
+    "calibration_status": "uncalibrated"
+  }
+}

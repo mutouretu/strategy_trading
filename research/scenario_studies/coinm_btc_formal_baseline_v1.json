@@ -1,0 +1,28 @@
+{
+  "schema_version": "strategy-study/v1",
+  "study_id": "coinm-btc-formal-baseline-v1",
+  "description": "6B 真实 BTCUSD_PERP 1 分钟 COIN-M 正式基线",
+  "strategy_family": "single-following-grid/v1",
+  "baseline_ids": [
+    "hold-btc/v1",
+    "target-liquidation-ladder-long/v1",
+    "single-following-grid/v1",
+    "layered-following-grid/v1"
+  ],
+  "objective_profile": {
+    "id": "coinm-btc-accumulation-v1",
+    "path": "../protocols/coinm_btc_accumulation_v1.json"
+  },
+  "dataset_split": {
+    "id": "btc-coinm-historical-split-v1",
+    "path": "../protocols/btc_coinm_historical_split_v1.json"
+  },
+  "experiment_spec_path": "../../experiments/coinm_btc_formal_baseline_v1.json",
+  "selection_policy": "baseline-only/v1",
+  "metadata": {
+    "phase": "6B",
+    "owner": "strategy-research",
+    "formal_conclusion_allowed": true,
+    "holdout_executed": false
+  }
+}

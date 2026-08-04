@@ -1,5 +1,7 @@
 """High-level strategies that coordinate one or more grid-rule engines."""
 
+from .fixed import FixedGridStrategy, FixedGridStrategyConfig
+
 from .layered import (
     FollowingGridLayerSnapshot,
     LayeredFollowingGridStrategy,
@@ -17,6 +19,8 @@ from .single import (
 )
 
 __all__ = [
+    "FixedGridStrategy",
+    "FixedGridStrategyConfig",
     "FollowingGridLayerSnapshot",
     "GridRuleCellSnapshot",
     "GridRuleFactory",

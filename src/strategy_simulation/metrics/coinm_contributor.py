@@ -1,4 +1,4 @@
-"""Declare COIN-M account valuation series without generic name guessing."""
+"""Declare derivative account valuation series without name guessing."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from metric_system import (
 from ..experiment_provider import STRATEGIES_SIMULATION_PROVIDER_V1
 
 class StrategiesCoinMMetricInputContributor:
-    contributor_name = "strategies-coinm-account-series"
+    contributor_name = "strategies-derivative-account-series"
     provider_id = STRATEGIES_SIMULATION_PROVIDER_V1
     version = "v1"
 
@@ -30,9 +30,29 @@ class StrategiesCoinMMetricInputContributor:
         parameters = account.get("parameters", {})
         if not isinstance(parameters, Mapping):
             parameters = {}
-        base = str(parameters.get("base_asset", "BTC")).upper()
-        quote = str(parameters.get("quote_asset", "USDT")).upper()
+        account_type = str(account.get("type", "coinm-inverse/v1"))
+        is_usdm = account_type == "usdm-linear/v1"
+        base = str(
+            parameters.get(
+                "settlement_asset" if is_usdm else "base_asset",
+                "USDT" if is_usdm else "BTC",
+            )
+        ).upper()
+        quote = str(
+            parameters.get(
+                "settlement_asset" if is_usdm else "quote_asset",
+                "USDT",
+            )
+        ).upper()
         instrument = str(parameters.get("instrument", ""))
+        if is_usdm:
+            return metric_input.with_contribution(
+                position_units=(
+                    {instrument: "base_asset"} if instrument else {}
+                ),
+                contributor_name=self.contributor_name,
+                contributor_version=self.version,
+            )
         result = metric_input.result_summary
         initial_metrics_raw = result.get("initial_account_metrics", {})
         final_metrics_raw = result.get("final_account_metrics", {})
@@ -52,39 +72,49 @@ class StrategiesCoinMMetricInputContributor:
             if isinstance(raw, list):
                 trace_equity = [row for row in raw if isinstance(row, Mapping)]
         if not initial_metrics:
-            initial_base = decimal_value(
-                parameters.get("spot_btc", "0"),
-                name="account.spot_btc",
-            ) + decimal_value(
-                parameters.get("futures_wallet_btc", "0"),
-                name="account.futures_wallet_btc",
-            )
-            initial_futures = decimal_value(
-                parameters.get("futures_wallet_btc", "0"),
-                name="account.futures_wallet_btc",
-            )
+            if is_usdm:
+                initial_base = decimal_value(
+                    parameters.get("futures_wallet_usdt", "0"),
+                    name="account.futures_wallet_usdt",
+                )
+                initial_futures = initial_base
+            else:
+                initial_base = decimal_value(
+                    parameters.get("spot_btc", "0"),
+                    name="account.spot_btc",
+                ) + decimal_value(
+                    parameters.get("futures_wallet_btc", "0"),
+                    name="account.futures_wallet_btc",
+                )
+                initial_futures = decimal_value(
+                    parameters.get("futures_wallet_btc", "0"),
+                    name="account.futures_wallet_btc",
+                )
             first_mark = self._first_mark(trace_equity, instrument)
             initial_metrics = {
                 f"total_equity_{base.lower()}": initial_base,
                 f"futures_equity_{base.lower()}": initial_futures,
             }
-            if first_mark is not None:
+            if is_usdm:
+                initial_metrics[f"total_equity_{quote.lower()}"] = initial_base
+            elif first_mark is not None:
                 initial_metrics[f"total_equity_{quote.lower()}"] = (
                     initial_base * first_mark
                 )
         series: list[EquitySeries] = []
-        candidates = (
+        candidates = [
             (
                 "account.total_equity",
                 quote,
                 f"total_equity_{quote.lower()}",
             ),
-            (
+        ]
+        if not is_usdm:
+            candidates.append((
                 "account.futures_equity",
                 base,
                 f"futures_equity_{base.lower()}",
-            ),
-        )
+            ))
         for series_key, asset, field in candidates:
             if field not in initial_metrics or field not in final_metrics:
                 continue
@@ -136,7 +166,11 @@ class StrategiesCoinMMetricInputContributor:
                     ),
                 )
             )
-        units = {instrument: "contracts"} if instrument else {}
+        units = (
+            {instrument: "base_asset" if is_usdm else "contracts"}
+            if instrument
+            else {}
+        )
         return metric_input.with_contribution(
             equity_series=tuple(series),
             position_units=units,

@@ -10,6 +10,7 @@ class StrategySystemGridMetricCalculator(GridMetricCalculator):
 
     def calculate(self, metric_input):
         if metric_input.provider_summary.get("strategy_type") not in {
+            "fixed-grid/v1",
             "single-following-grid/v1",
             "layered-following-grid/v1",
         }:

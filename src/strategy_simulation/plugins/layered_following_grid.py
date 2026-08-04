@@ -102,7 +102,12 @@ class LayeredFollowingGridSimulationPlugin:
         instrument = rule.instrument
         if instrument != context.instrument:
             raise ValueError("strategy and account instruments must match")
-        if rule.contract_size != context.contract_size:
+        if rule.market_type.value != context.market_type:
+            raise ValueError("strategy and account market_type must match")
+        if (
+            context.market_type == "coinm"
+            and rule.contract_size != context.contract_size
+        ):
             raise ValueError("strategy and account contract_size must match")
         raw_max_layers = parameters["max_layers"]
         max_layers = (

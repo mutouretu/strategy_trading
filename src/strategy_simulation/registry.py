@@ -19,6 +19,7 @@ class SimulationStrategyBuildContext:
     ledger_factory: Callable[[], object]
     margin_model: object | None
     fee_model: FeeModel
+    market_type: str = "coinm"
 
 
 @dataclass(frozen=True, slots=True)

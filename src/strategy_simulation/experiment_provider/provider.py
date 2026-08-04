@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from experiment_system import ProviderRegistry, RunSpec, ScenarioConfiguration
-from market_simulator import AnchoredGBMMarketSource
+from market_protocol import MarketSource
 from simulation_runtime import SimulationResult, SimulationRunner
 
 from ..components import (
-    CoinMAccountRuntime,
+    AccountRuntime,
     DailyExecutionRuntime,
     build_account_runtime,
     build_execution_runtime,
@@ -20,6 +20,7 @@ from ..components import (
 )
 
 from ..plugins import (
+    FixedGridSimulationPlugin,
     HoldBtcSimulationPlugin,
     LayeredFollowingGridSimulationPlugin,
     SingleFollowingGridSimulationPlugin,
@@ -37,9 +38,9 @@ STRATEGIES_SIMULATION_PROVIDER_V1 = "strategies-simulation/v1"
 
 @dataclass(frozen=True, slots=True)
 class StrategyRuntimeComponents:
-    source: AnchoredGBMMarketSource
+    source: MarketSource
     binding: SimulationStrategyBinding
-    account: CoinMAccountRuntime
+    account: AccountRuntime
     execution: DailyExecutionRuntime
 
 
@@ -115,14 +116,16 @@ class StrategiesSimulationProvider:
         execution = build_execution_runtime(
             configuration.execution,
             contract_size=account.contract_size,
-            settlement_asset=account.base_asset,
+            settlement_asset=account.settlement_asset,
+            market_type=account.market_type,
         )
         if source.instrument != account.instrument:
             raise ValueError("market and account instruments must match")
         context = SimulationStrategyBuildContext(
             instrument=account.instrument,
+            market_type=account.market_type,
             contract_size=account.contract_size,
-            settlement_asset=account.base_asset,
+            settlement_asset=account.settlement_asset,
             ledger_factory=account.ledger_factory,
             margin_model=account.margin_model,
             fee_model=execution.fee_model,
@@ -140,6 +143,7 @@ class StrategiesSimulationProvider:
 
 def build_strategy_registry() -> SimulationStrategyRegistry:
     registry = SimulationStrategyRegistry()
+    registry.register(FixedGridSimulationPlugin())
     registry.register(HoldBtcSimulationPlugin())
     registry.register(TargetLiquidationLadderSimulationPlugin())
     registry.register(SingleFollowingGridSimulationPlugin())

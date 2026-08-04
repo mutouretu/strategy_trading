@@ -10,6 +10,12 @@ from grid_rule.adapters import (
     FixedRateInverseContractFundingModel,
     InverseContractFeeModel,
 )
+from simulation_runtime import (
+    FeeModel,
+    FixedRateFeeModel,
+    FixedRateFundingModel,
+    FundingModel,
+)
 
 from ._values import check_fields, decimal_value, integer, string
 
@@ -39,8 +45,8 @@ _FUNDING_FIELDS = {
 
 @dataclass(frozen=True, slots=True)
 class DailyExecutionRuntime:
-    fee_model: InverseContractFeeModel
-    funding_model: FixedRateInverseContractFundingModel | None
+    fee_model: FeeModel
+    funding_model: FundingModel | None
 
 
 def resolve_execution_component(
@@ -67,6 +73,7 @@ def build_execution_runtime(
     *,
     contract_size: Decimal,
     settlement_asset: str,
+    market_type: str = "coinm",
 ) -> DailyExecutionRuntime:
     if component.type != DAILY_BAR_EXECUTION_V1:
         raise ValueError(
@@ -86,22 +93,29 @@ def build_execution_runtime(
     ).upper()
     if fee_asset != settlement_asset.upper():
         raise ValueError(
-            f"{_CONTEXT}.fee_asset must match account base_asset"
+            f"{_CONTEXT}.fee_asset must match account settlement_asset"
         )
-    fee_model = InverseContractFeeModel(
-        contract_size=contract_size,
-        maker_fee_rate=decimal_value(
-            parameters,
-            "maker_fee_rate",
-            context=_CONTEXT,
-        ),
-        taker_fee_rate=decimal_value(
-            parameters,
-            "taker_fee_rate",
-            context=_CONTEXT,
-        ),
-        fee_asset=fee_asset,
+    maker_fee_rate = decimal_value(
+        parameters, "maker_fee_rate", context=_CONTEXT
     )
+    taker_fee_rate = decimal_value(
+        parameters, "taker_fee_rate", context=_CONTEXT
+    )
+    if market_type == "coinm":
+        fee_model: FeeModel = InverseContractFeeModel(
+            contract_size=contract_size,
+            maker_fee_rate=maker_fee_rate,
+            taker_fee_rate=taker_fee_rate,
+            fee_asset=fee_asset,
+        )
+    elif market_type == "usdm":
+        fee_model = FixedRateFeeModel(
+            maker_fee_rate=maker_fee_rate,
+            taker_fee_rate=taker_fee_rate,
+            fee_asset=fee_asset,
+        )
+    else:
+        raise ValueError(f"unsupported derivative market_type {market_type!r}")
 
     funding_kind = string(
         parameters,
@@ -124,23 +138,28 @@ def build_execution_runtime(
                 f"{_CONTEXT} is missing funding parameters: "
                 f"{sorted(missing)}"
             )
-        funding_model = FixedRateInverseContractFundingModel(
-            funding_rate=decimal_value(
-                parameters,
-                "funding_rate",
-                context=_CONTEXT,
-            ),
-            funding_interval_seconds=integer(
-                parameters,
-                "funding_interval_seconds",
-                context=_CONTEXT,
-            ),
-            settlement_offset_seconds=integer(
-                parameters,
-                "settlement_offset_seconds",
-                context=_CONTEXT,
-            ),
+        funding_rate = decimal_value(
+            parameters, "funding_rate", context=_CONTEXT
         )
+        funding_interval_seconds = integer(
+            parameters, "funding_interval_seconds", context=_CONTEXT
+        )
+        settlement_offset_seconds = integer(
+            parameters, "settlement_offset_seconds", context=_CONTEXT
+        )
+        if market_type == "coinm":
+            funding_model = FixedRateInverseContractFundingModel(
+                funding_rate=funding_rate,
+                funding_interval_seconds=funding_interval_seconds,
+                settlement_offset_seconds=settlement_offset_seconds,
+            )
+        else:
+            funding_model = FixedRateFundingModel(
+                funding_rate=funding_rate,
+                funding_interval_seconds=funding_interval_seconds,
+                settlement_offset_seconds=settlement_offset_seconds,
+                funding_asset=fee_asset,
+            )
     else:
         raise ValueError(
             f"{_CONTEXT}.funding_model must be {NO_FUNDING!r} or "

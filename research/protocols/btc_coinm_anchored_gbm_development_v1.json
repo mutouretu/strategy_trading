@@ -1,0 +1,36 @@
+{
+  "schema_version": "dataset-split/v1",
+  "split_id": "btc-coinm-anchored-gbm-development-v1",
+  "description": "6A 调用链验收专用生成行情；不得作为正式历史收益结论",
+  "status": "DEVELOPMENT",
+  "source": "anchored-gbm/v1",
+  "instrument": "BTCUSD_PERP",
+  "interval": "1d",
+  "proxy_market": false,
+  "windows": [
+    {
+      "key": "gbm-train",
+      "role": "TRAIN",
+      "market_key": "btc-gbm-train",
+      "start": "2026-01-01",
+      "end_exclusive": "2027-07-01",
+      "content_sha256": null
+    },
+    {
+      "key": "gbm-validation",
+      "role": "VALIDATION",
+      "market_key": "btc-gbm-validation",
+      "start": "2027-07-01",
+      "end_exclusive": "2028-07-01",
+      "content_sha256": null
+    },
+    {
+      "key": "gbm-final-holdout",
+      "role": "HOLDOUT",
+      "market_key": "btc-gbm-final-holdout",
+      "start": "2028-07-01",
+      "end_exclusive": "2029-01-02",
+      "content_sha256": null
+    }
+  ]
+}

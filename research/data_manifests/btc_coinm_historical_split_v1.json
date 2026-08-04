@@ -1,0 +1,146 @@
+{
+  "schema_version": "historical-market-manifest/v1",
+  "split_id": "btc-coinm-historical-split-v1",
+  "source": "Binance public data COIN-M BTCUSD_PERP monthly klines; missing archive days reconstructed from same-contract official aggTrades",
+  "instrument": "BTCUSD_PERP",
+  "interval": "1m",
+  "proxy_market": false,
+  "status": "CONTENT_LOCKED",
+  "windows": [
+    {
+      "key": "historical-train",
+      "role": "TRAIN",
+      "market_key": "btc-coinm-train",
+      "start": "2026-03-22",
+      "end_exclusive": "2026-06-02",
+      "path": "experiments/market_data/dd600d70d192eed7e7b2.parquet",
+      "market_path_id": "dd600d70d192eed7e7b2",
+      "content_sha256": "dd600d70d192eed7e7b2b5d3f2067bfdafae054ea741b666f767d48b21d71b0e",
+      "file_sha256": "45698c1a6b22f13e3919b33ae956e6b1c5f538e58707d5f8cd45d6be88720c03",
+      "frame_count": 103680,
+      "instrument": "BTCUSD_PERP",
+      "first_timestamp": 1774137600000,
+      "last_timestamp": 1780358340000,
+      "first_close": "68725.8",
+      "last_close": "71299.4",
+      "minimum_low": "64903.3",
+      "maximum_high": "82809.3",
+      "source_archives": [
+        {
+          "date": "2026-03-01",
+          "file_name": "BTCUSD_PERP-1m-2026-03.zip",
+          "url": "https://data.binance.vision/data/futures/cm/monthly/klines/BTCUSD_PERP/1m/BTCUSD_PERP-1m-2026-03.zip",
+          "sha256": "53816c5c8ecf6be5e3161780468d604dd8b9567d544e2e916eabed855a9d9e3e",
+          "frame_count": 44640,
+          "data_type": "klines",
+          "frequency": "monthly"
+        },
+        {
+          "date": "2026-04-01",
+          "file_name": "BTCUSD_PERP-1m-2026-04.zip",
+          "url": "https://data.binance.vision/data/futures/cm/monthly/klines/BTCUSD_PERP/1m/BTCUSD_PERP-1m-2026-04.zip",
+          "sha256": "fed2c4d6a7e77bdcfd22d1a58d33661945481ab57b07effa94b5d002a7f0282b",
+          "frame_count": 43200,
+          "data_type": "klines",
+          "frequency": "monthly"
+        },
+        {
+          "date": "2026-05-01",
+          "file_name": "BTCUSD_PERP-1m-2026-05.zip",
+          "url": "https://data.binance.vision/data/futures/cm/monthly/klines/BTCUSD_PERP/1m/BTCUSD_PERP-1m-2026-05.zip",
+          "sha256": "24cc5b6d68b02da23062a313a956faeab0921d3424d42b2bb245be6615343a01",
+          "frame_count": 44640,
+          "data_type": "klines",
+          "frequency": "monthly"
+        },
+        {
+          "date": "2026-06-01",
+          "file_name": "BTCUSD_PERP-1m-2026-06.zip",
+          "url": "https://data.binance.vision/data/futures/cm/monthly/klines/BTCUSD_PERP/1m/BTCUSD_PERP-1m-2026-06.zip",
+          "sha256": "1244a50c653444a1b6879e8c42641b143f45025688cdcffed0d83a06356be03b",
+          "frame_count": 41760,
+          "data_type": "klines",
+          "frequency": "monthly"
+        }
+      ]
+    },
+    {
+      "key": "historical-validation",
+      "role": "VALIDATION",
+      "market_key": "btc-coinm-validation",
+      "start": "2026-06-02",
+      "end_exclusive": "2026-06-26",
+      "path": "experiments/market_data/f03afa63d9c3bc9d400e.parquet",
+      "market_path_id": "f03afa63d9c3bc9d400e",
+      "content_sha256": "f03afa63d9c3bc9d400e48b720b1a8d848714d8c345bd82e454948c95cb69442",
+      "file_sha256": "a17094f9159fbe6bb0bea250850eac2c2c719e79c17d364b25e02b00e55087e0",
+      "frame_count": 34560,
+      "instrument": "BTCUSD_PERP",
+      "first_timestamp": 1780358400000,
+      "last_timestamp": 1782431940000,
+      "first_close": "71237.4",
+      "last_close": "59667.7",
+      "minimum_low": "57952.2",
+      "maximum_high": "71301.2",
+      "source_archives": [
+        {
+          "date": "2026-06-01",
+          "file_name": "BTCUSD_PERP-1m-2026-06.zip",
+          "url": "https://data.binance.vision/data/futures/cm/monthly/klines/BTCUSD_PERP/1m/BTCUSD_PERP-1m-2026-06.zip",
+          "sha256": "1244a50c653444a1b6879e8c42641b143f45025688cdcffed0d83a06356be03b",
+          "frame_count": 41760,
+          "data_type": "klines",
+          "frequency": "monthly"
+        }
+      ]
+    },
+    {
+      "key": "historical-final-holdout",
+      "role": "HOLDOUT",
+      "market_key": "btc-coinm-final-holdout",
+      "start": "2026-06-26",
+      "end_exclusive": "2026-07-20",
+      "path": "experiments/market_data/689fc1e21041633c3c58.parquet",
+      "market_path_id": "689fc1e21041633c3c58",
+      "content_sha256": "689fc1e21041633c3c58859f4d91a82f6e3da709b51c0042d77ff887c1bd8d41",
+      "file_sha256": "a6738ba27880f6623446c5328b5da174bb97502245fa1efbcc4d8d2ae803d050",
+      "frame_count": 34560,
+      "instrument": "BTCUSD_PERP",
+      "first_timestamp": 1782432000000,
+      "last_timestamp": 1784505540000,
+      "first_close": "59671.4",
+      "last_close": "64650.6",
+      "minimum_low": "57689.0",
+      "maximum_high": "65500.0",
+      "source_archives": [
+        {
+          "date": "2026-06-01",
+          "file_name": "BTCUSD_PERP-1m-2026-06.zip",
+          "url": "https://data.binance.vision/data/futures/cm/monthly/klines/BTCUSD_PERP/1m/BTCUSD_PERP-1m-2026-06.zip",
+          "sha256": "1244a50c653444a1b6879e8c42641b143f45025688cdcffed0d83a06356be03b",
+          "frame_count": 41760,
+          "data_type": "klines",
+          "frequency": "monthly"
+        },
+        {
+          "date": "2026-06-29",
+          "file_name": "BTCUSD_PERP-aggTrades-2026-06-29.zip",
+          "url": "https://data.binance.vision/data/futures/cm/daily/aggTrades/BTCUSD_PERP/BTCUSD_PERP-aggTrades-2026-06-29.zip",
+          "sha256": "7f70264e073599c342871ea1b6be15f52e3124d193c2f91efcac3b5e3c18ec92",
+          "frame_count": 123578,
+          "data_type": "aggTrades",
+          "frequency": "daily"
+        },
+        {
+          "date": "2026-07-01",
+          "file_name": "BTCUSD_PERP-1m-2026-07.zip",
+          "url": "https://data.binance.vision/data/futures/cm/monthly/klines/BTCUSD_PERP/1m/BTCUSD_PERP-1m-2026-07.zip",
+          "sha256": "9a94e42db85460d98601e0c89c536d1032378a6d05f79ccc1a2cf804962be87b",
+          "frame_count": 44640,
+          "data_type": "klines",
+          "frequency": "monthly"
+        }
+      ]
+    }
+  ]
+}
