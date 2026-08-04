@@ -1,0 +1,58 @@
+\section{自动化基线、网格计算与 API 功能测试}
+
+\CaseHeader{FT-AUTO-001}{完整自动化回归}{\OwnerAuto}{无资金风险}{\StatusPass}
+
+\textbf{前置条件：}Python 虚拟环境和依赖已安装。\par
+\textbf{步骤：}
+\begin{enumerate}
+  \item 运行 \texttt{.venv/bin/python -m unittest discover -s tests -v}。
+  \item 运行旧引擎 5 项特征基线测试。
+  \item 对 \texttt{gridtrader/}、\texttt{scripts/}、\texttt{tests/} 执行 \texttt{compileall}。
+\end{enumerate}
+\textbf{预期：}新后端 75 项、旧引擎 5 项全部通过，无语法错误；允许存在已知 TestClient 弃用警告，但不得有失败或错误。
+
+\CaseHeader{FT-ENV-001}{统一加载与密钥保护}{\OwnerAuto}{凭据安全}{\StatusPass}
+
+使用隔离的伪密钥启动 FastAPI 和调度器，验证二者从同一配置入口读取 \texttt{.env}；缺少必需变量时应快速失败并给出不含密钥值的提示。测试日志、异常、OpenAPI 响应和进程参数中不得出现 Secret。完成后再用真实环境执行只读签名检查。
+
+\CaseHeader{FT-MATH-001}{做多等比网格预览}{\OwnerAuto}{无资金风险}{\StatusPass}
+
+输入锚点 $p_0$、比例 $r$ 和网格数 $n$，验证做多按
+$p_{i+1}=p_i/(1+r)$ 向下生成；Cell 按价格升序编号，最高卖出边界等于锚点。验证 tick size 取整后买入价严格小于卖出价，Cell ID 重建后稳定。
+
+\CaseHeader{FT-MATH-002}{做空等比网格预览}{\OwnerAuto}{无资金风险}{\StatusPass}
+
+输入锚点 $p_0$、比例 $r$ 和网格数 $n$，验证做空按
+$p_{i+1}=p_i(1+r)$ 向上生成；最低买入边界等于锚点，价格顺序、编号和 Cell ID 满足约束。
+
+\CaseHeader{FT-MATH-003}{交易规则边界}{\OwnerAuto}{无资金风险}{\StatusPass}
+
+覆盖 tick size、step size、最小数量、最小名义价值、1 个和 100 个网格、极小比例、非法价格、非法杠杆与非法轮询间隔。非法输入必须在创建策略或下单前被拒绝。
+
+\CaseHeader{FT-API-001}{健康检查与 OpenAPI}{\OwnerAuto}{无资金风险}{\StatusPass}
+
+启动单 worker FastAPI，访问 \texttt{GET /health} 和 \texttt{/docs}。预期健康检查返回 200 和 \texttt{status=ok}，OpenAPI 页面可加载。多 worker 启动不属于支持配置。
+
+\CaseHeader{FT-API-002}{做多/做空预览}{\OwnerAuto}{只读币安规则}{\StatusPass}
+
+分别调用 \texttt{POST /strategies/preview}，验证币对自动大写、方向、锚点语义、网格数、买卖价和币安交易规则一致；预览不得写入策略、Cell 或启动进程。
+
+\CaseHeader{FT-API-003}{创建、编辑与校验}{\OwnerAuto}{无资金风险}{\StatusPass}
+
+创建草稿后验证可编辑；非法 symbol、比例、数量、金额和杠杆返回 4xx。允许同币对同方向存在多组策略，但每组 \texttt{strategy\_id} 和 client order ID 必须唯一。
+
+\CaseHeader{FT-API-004}{启动后配置不可修改}{\OwnerAuto}{本地进程}{\StatusPass}
+
+首次启动前记录配置，启动后尝试编辑；预期返回冲突，\texttt{has\_started=true} 永久保留。停止后再次编辑仍必须失败，删除或归档不应清除审计数据。
+
+\CaseHeader{FT-API-005}{单共享调度器}{\OwnerAuto}{本地进程}{\StatusPass}
+
+启动多组策略，验证返回同一调度器 PID；停止其中一组只改变该组状态，其他组和调度器继续运行。僵尸 PID 文件应被识别并清理。
+
+\CaseHeader{FT-API-006}{详情、事件和资源池接口}{\OwnerAuto}{无资金风险}{\StatusPass}
+
+验证 \texttt{/strategies}、\texttt{/cells}、\texttt{/events}、\texttt{/position-pools} 字段完整，Decimal 不丢精度；事件按 ID 有序，资源池以 \texttt{symbol+positionSide} 隔离。
+
+\CaseHeader{FT-DB-001}{SQLite 重启与审计保留}{\OwnerAuto}{无资金风险}{\StatusPass}
+
+写入策略、Cell、部分成交量、事件和资源池，关闭后重开数据库。预期配置锁、订单 ID、\texttt{open\_qty}、\texttt{exit\_executed\_qty}、成交时间与软删除记录全部保留。

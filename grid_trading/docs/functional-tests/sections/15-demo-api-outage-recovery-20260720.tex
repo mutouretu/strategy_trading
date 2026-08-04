@@ -1,0 +1,75 @@
+\section{2026-07-20 Demo API 超时故障恢复}
+
+\subsection{故障与恢复边界}
+
+Binance 旧 Futures Testnet 地址停止支持期间，撤单和平仓请求持续出现
+\texttt{-1007 Timeout waiting for response from backend server}。该返回表示执行结果未知，
+不能按普通失败直接重试，否则可能重复下单。客服确认新的 USD-M Demo REST 地址为
+\url{https://demo-fapi.binance.com}。
+
+恢复前暂停全部 53 组策略并终止旧共享调度器，平台既有挂单与仓位保持不动。
+SQLite 完整性检查结果为 \texttt{ok}，随后备份到：
+
+\begin{quote}
+  \small\path{runtime/backups/overnight-before-recovery-20260720T1710.sqlite3}
+\end{quote}
+
+备份 SHA-256 为
+\texttt{c4cea960b290bb591debbe4ce3a7fde8acf95dac09d76d490908a15acf521f11}。
+
+\subsection{代码修复与自动回归}
+
+交易所适配层将 HTTP 408、5xx、网络超时以及 Binance \texttt{-1006/-1007}
+统一分类为“执行结果未知”。建仓请求先持久化每次提交唯一的
+\texttt{clientOrderId}；返回未知时先按该 ID 查询，确认不存在后才按退避周期重试。
+撤单返回未知或 \texttt{-2011} 时读取最终订单状态，只有确认终态才视为撤单完成。
+
+数据库同时丢失订单号和 client ID 时，恢复逻辑可以从新旧两种 client ID 的稳定
+策略前缀、Cell 前缀和订单角色定位原 Cell；前缀存在歧义时拒绝猜测。窗口回收遇到
+撤单结果未知会停止删除最远 Cell，并在后续轮询重新确认。
+
+\begin{longtable}{p{4.2cm}p{2.0cm}p{7.8cm}}
+  \toprule
+  验证项 & 结果 & 证据 \\
+  \midrule
+  \endhead
+  UNKNOWN 下单确认 & \ResultPass & 模拟响应丢失后按 client ID 找回原订单，未创建第二张订单。 \\
+  UNKNOWN 撤单确认 & \ResultPass & 模拟超时和 \texttt{-2011} 后读取 CANCELED 终态；未确认时继续保留 Cell。 \\
+  新旧 client ID 恢复 & \ResultPass & SQLite 清空本地引用后，三张带唯一后缀的订单均回到精确 Cell；属性不符的订单进入隔离。 \\
+  全量自动回归 & \ResultPass & \texttt{unittest discover} 共 150 项通过；14 项需显式启用测试网，按设计跳过。 \\
+  \bottomrule
+\end{longtable}
+
+\subsection{真实 SQLite 修复与竞态验证}
+
+只读规划先取得平台开放订单、逐单终态和真实仓位，计算每个
+\texttt{symbol+positionSide} 修复后的逻辑仓位；任一资源池不与真实仓位精确相等时，
+脚本在写库前中止。修复脚本默认干运行，\texttt{--apply} 也只允许回填订单引用、
+结算已发生的成交，以及为确认存在的仓位创建保护性平仓单；不会撤单、不会新增建仓、
+不会主动平仓。
+
+本次共恢复 22 个开放订单引用并结算 33 个终态订单。第一次写回期间，BUS 的保护性
+平仓立即成交且 ZIL、ANKR 原有建仓挂单继续成交；第二次规划曾因仓位接口先出现
+ANKR 2840、订单接口尚未出现成交而自动中止。订单接口同步后，成交单唯一定位到
+ANKR Cell，重新规划才允许继续。该现象验证了资源池闭合门禁能够阻止按仓位差额猜测
+Cell。
+
+最终只读巡检结果如下：
+
+\begin{itemize}
+  \item 仓位不足、未分配仓位、缺失预期订单、未知网格订单均为 0；
+  \item 可恢复订单引用、订单属性冲突、阶段冲突、重复订单均为 0；
+  \item \texttt{manual\_review}、策略错误、运行时错误均为 0；
+  \item SQLite \texttt{integrity\_check=ok}，WAL 为 0 字节。
+\end{itemize}
+
+\subsection{恢复运行验收}
+
+FastAPI 与共享调度器均使用新 Demo 地址重启。53 组策略全部进入
+\texttt{running}，共享调度器仅一个进程（恢复时 PID 81658），RSS 约 94 MB；
+FastAPI 重启未中断调度器。通过 8110 API 刷新 APE 标记价成功，8010 Streamlit
+健康检查通过。
+
+两个独立恢复后巡检样本均为 \texttt{overall=ok}，异常计数为空；最近 500 条事件中
+没有新的 \texttt{-1007}、HTTP 502、提交结果未知或撤单失败记录。本轮结论：
+\StatusPass。

@@ -1,0 +1,55 @@
+\section{2026-07-18 同币对同方向多组耦合测试}
+
+\subsection{范围与边界}
+
+本轮验证同一币对、同一持仓方向下的多组网格，覆盖价格隔离、价格交错、订单归属、停止隔离和仓位资源穿透。测试严格限定为 Binance Futures Testnet 的 UNIUSDT LONG；不创建同币对 LONG/SHORT 双向仓位。双向逐仓资源池留待后续独立分支验证。
+
+\subsection{真实平台 LLT}
+
+\begin{longtable}{p{3.5cm}p{2.0cm}p{8.4cm}}
+  \toprule
+  场景 & 结果 & 证据与结论 \\
+  \midrule
+  \endhead
+  三组订单归属隔离 & \ResultPass & 三个 UNIUSDT LONG 组分别产生唯一订单号和唯一 \texttt{clientOrderId} 前缀。仅取消中间组订单后，只有该组生成替代订单；另外两组订单号完全不变。平台开放订单集合与三组 SQLite Cell 精确相等。 \\
+  两组仓位不足穿透 & \ResultPass & 两个 LONG 组共三个 Cell，各声明持仓 2 UNI。真实仓位由 6 缩减为 3 后，按退出价与现价距离分配为 2、1、0；最近 Cell 被释放，开放退出单总量为 3。真实仓位继续归零后，资源穿透两组并释放全部 Cell，资源池始终为 \texttt{consistent}。 \\
+  \bottomrule
+\end{longtable}
+
+执行前后均断言 UNIUSDT 无既有开放订单和非零仓位。两项 LLT 使用临时 SQLite，并在 \texttt{tearDown} 中无条件撤单和平仓；本轮显式执行结果为 2/2 PASS。
+
+\subsection{页面驱动交错网格}
+
+Playwright 通过 Streamlit 页面创建并启动两组 UNIUSDT 做多网格，单格金额 10 USDT、杠杆 3 倍、比例 1\%、每组 3 Cell：
+
+\begin{longtable}{p{3.5cm}p{2.4cm}p{6.5cm}}
+  \toprule
+  策略 ID & 锚点 & 实际建仓价格 \\
+  \midrule
+  \endhead
+  \texttt{uniusdt-long-c43226d7} & 3.540 & 3.434、3.469、3.504 \\
+  \texttt{uniusdt-long-18e4d352} & 3.558 & 3.452、3.487、3.522 \\
+  \bottomrule
+\end{longtable}
+
+六个价格排序为 A--B--A--B--A--B，形成严格交错。平台创建 6 张 BUY/LONG 订单；两组分别使用 \texttt{wg-e07f9710-} 和 \texttt{wg-c0675abc-} 前缀，订单号、价格、数量与 SQLite Cell 一一对应。
+
+\subsection{页面生命周期与运行隔离}
+
+\begin{longtable}{p{3.5cm}p{2.0cm}p{8.4cm}}
+  \toprule
+  场景 & 结果 & 证据与结论 \\
+  \midrule
+  \endhead
+  运行组单 Cell 撤单 & \ResultPass & 取消组 B 中间订单 \#364199096 后仅替换为 \#364199834；组 A 三张及组 B 另外两张订单号均未改变，平台总数仍为 6。 \\
+  停止组与运行组同时撤单 & \ResultPass & 页面停止组 A 后，分别取消组 A 的 \#364198923 和运行中组 B 的 \#364199086。下一轮组 A 未补单；组 B 只补为 \#364203358。停止组没有被共享调度器或资源协调器改写。 \\
+  另一组自然成交 & \ResultPass & 等待期间组 B 的 \#364199109 自然成交 2 UNI，并创建退出单 \#364205189。资源池记录 actual/logical 均为 2、unassigned/shortage 均为 0，状态为 \texttt{consistent}。 \\
+  带另一组持仓恢复 & \ResultPass & 页面恢复组 A 后仅将自己的缺单补为 \#364206466；组 B 两张待建仓单和退出单 \#364205189 均未改写。平台 6 张活动订单与两组 Cell 精确对应。 \\
+  \bottomrule
+\end{longtable}
+
+\subsection{清场与结论}
+
+两组均通过页面停止。清场程序仅接受上述两组的 \texttt{clientOrderId} 前缀，撤销 6 张开放订单，并以 SELL/LONG 市价单平掉本轮 2 UNI 仓位；随后从页面永久删除两组。最终 UNIUSDT 开放订单 0、LONG/SHORT 非零仓位 0，AKE/HOME 原有策略未被停止或删除。
+
+本轮结论：\StatusPass。同币对同方向多组的订单隔离、交错价格归属、单组停止/恢复、共享持仓资源池及跨组穿透均已在真实测试网通过。后续可进入更多组数、成交并发和故障注入耦合测试；同币对双向持仓不纳入本轮结论。

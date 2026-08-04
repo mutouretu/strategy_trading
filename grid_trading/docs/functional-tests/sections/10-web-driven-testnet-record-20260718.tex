@@ -1,0 +1,45 @@
+\section{2026-07-18 页面驱动 Testnet E2E 执行记录}
+
+\subsection{执行范围与安全结果}
+
+本轮使用 Codex App 内置浏览器的 Playwright 能力操作 Streamlit 页面。策略的预览、创建、编辑、刷新价格、启动、停止、重启和永久删除全部从页面发起；测试代码没有直接调用对应 FastAPI 写接口，也没有直接修改 SQLite。币安 API 仅用于只读核对、取消页面产生的测试订单和最终清场。
+
+隔离边界与最终安全状态如下：
+
+\begin{itemize}
+  \item 临时数据库为 \path{/tmp/grid-web-e2e-20260718.jnaP2s/e2e.sqlite3}；
+  \item FastAPI 使用 8110，Streamlit 使用 8010，共享调度器 PID 为 52758；
+  \item 原 8000/8100 服务未被修改，主机白名单确认连接 \path{testnet.binancefuture.com}；
+  \item 交易对为 UNIUSDT，执行前后开放订单均为 0，LONG/SHORT 非零仓位均为 0。
+\end{itemize}
+
+\subsection{逐项结果}
+
+\begin{longtable}{p{3.3cm}p{2.0cm}p{9.5cm}}
+  \toprule
+  用例 & 判定 & 实际结果与证据 \\
+  \midrule
+  \endhead
+  FT-WEB-LIVE-001 & \ResultPass & Playwright 输入 UNIUSDT 做多、锚点 3.7160、8\%、1 Cell、15 USDT、3 倍杠杆；预览范围为 3.4400--3.7160。页面确认创建 \texttt{uniusdt-long-2caf733c} 后，SQLite 为 draft，币安仍为零订单零仓位。 \\
+  FT-WEB-LIVE-002 & \ResultPass & 页面编辑将比例由 8\% 改为 7.5\%，Cell 买入价变为 3.4560；页面刷新显示 3.5667，SQLite 保存测试网原始标记价 3.56674922。全程未产生平台订单。 \\
+  FT-WEB-LIVE-003 & \ResultPass & 页面打开运行开关后，币安产生 BUY/LONG \#362814107，价格 3.4560、数量 4 UNI、状态 NEW；页面详情显示“挂单:\#362814107”，SQLite 三方一致。 \\
+  FT-WEB-LIVE-004 & \ResultPass & 币安侧取消 \#362814107 后，调度器记录 \texttt{ENTRY\_ENDED} 并补出 \#362818393；页面详情更新为新订单号。继续等待多个轮询周期仍只有该订单，未重复补单。 \\
+  FT-WEB-LIVE-005 & \ResultPass & 页面停止后数据库保持 stopped，编辑按钮继续禁用，\#362818393 未被撤销或替换；页面重启后事件记录 \texttt{OPEN\_ORDER\_RECOVERED}，开放订单仍为同一张。 \\
+  FT-WEB-LIVE-006 & \ResultPass & 页面停止并永久删除后策略从总览消失，SQLite 保留 \texttt{deleted\_at} 和 Cell 审计数据；平台订单按产品语义继续存在。cleanup 撤销该订单，等待后未被补回。 \\
+  FT-WEB-LIVE-007 & \ResultPass & Playwright 输入 UNIUSDT 做空、锚点 3.4210、8\%、1 Cell、15 USDT、3 倍杠杆；页面启动产生 SELL/SHORT \#362828140，价格 3.6940、数量 4 UNI。币安取消后只补出 \#362830229，页面同步显示；页面停止、删除及 cleanup 完成。 \\
+  最终清场 & \ResultPass & UNIUSDT 开放订单 0；LONG/SHORT 非零仓位 0；两个策略均已停止并软删除；隔离策略没有继续补单。 \\
+  \bottomrule
+\end{longtable}
+
+\subsection{执行中确认的前端缺陷}
+
+\begin{longtable}{p{3.0cm}p{2.0cm}p{9.8cm}}
+  \toprule
+  缺陷 & 严重度 & 复现结果与影响 \\
+  \midrule
+  \endhead
+  WEB-DEF-001 & 中 & 总览中的 UNIUSDT 链接具有正确的 \texttt{?strategy=} href，但 Playwright 点击后 URL 仍停留在根路径。左侧“币对详情”按钮可以正确进入同一策略详情，因此没有阻断订单链路验收；币对链接仍需单独修复并回归。 \\
+  \bottomrule
+\end{longtable}
+
+本轮结论：\textbf{页面作为唯一业务写入口时，做多和做空的创建、启动、建仓挂单、外部撤单恢复、停止/重启、删除与清场链路均已在 Binance Futures Testnet 通过。} 可以进入真实成交闭环或多组合耦合之前的下一层测试设计。

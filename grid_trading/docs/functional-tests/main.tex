@@ -1,0 +1,113 @@
+\documentclass[11pt,a4paper,fontset=mac]{ctexart}
+
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage{amsmath}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\usepackage{lastpage}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage[table]{xcolor}
+
+\definecolor{GridBlue}{HTML}{1D4ED8}
+\definecolor{GridGreen}{HTML}{15803D}
+\definecolor{GridRed}{HTML}{B91C1C}
+\definecolor{GridOrange}{HTML}{C2410C}
+\definecolor{GridGray}{HTML}{475569}
+\definecolor{GridLight}{HTML}{F1F5F9}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=GridBlue,
+  urlcolor=GridBlue,
+  pdftitle={Grid Trading Web 功能测试与全链路验收方案},
+  pdfauthor={Codex / 项目负责人}
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{Grid Trading Web 功能测试方案}
+\rhead{v0.8}
+\cfoot{第 \thepage\ 页 / 共 \pageref{LastPage} 页}
+\setlength{\headheight}{14pt}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.45em}
+\setlist{nosep,leftmargin=2em}
+\renewcommand{\arraystretch}{1.22}
+
+\newcommand{\OwnerAuto}{\colorbox{green!15}{\textcolor{GridGreen}{\textbf{C-AUTO}}}}
+\newcommand{\OwnerLive}{\colorbox{orange!15}{\textcolor{GridOrange}{\textbf{C-LIVE}}}}
+\newcommand{\OwnerHuman}{\colorbox{red!12}{\textcolor{GridRed}{\textbf{HUMAN}}}}
+\newcommand{\OwnerJoint}{\colorbox{blue!12}{\textcolor{GridBlue}{\textbf{JOINT}}}}
+\newcommand{\StatusPass}{\textcolor{GridGreen}{\textbf{已通过}}}
+\newcommand{\StatusReady}{\textcolor{GridBlue}{\textbf{可执行}}}
+\newcommand{\StatusBlocked}{\textcolor{GridRed}{\textbf{待打通}}}
+\newcommand{\StatusManual}{\textcolor{GridOrange}{\textbf{待人工}}}
+\newcommand{\StatusPartial}{\textcolor{GridOrange}{\textbf{部分通过}}}
+\newcommand{\StatusFail}{\textcolor{GridRed}{\textbf{未通过}}}
+\newcommand{\StatusSkipped}{\textcolor{GridGray}{\textbf{未执行}}}
+
+\newcommand{\ResultPass}{\textcolor{GridGreen}{\textbf{PASS}}}
+\newcommand{\ResultPartial}{\textcolor{GridOrange}{\textbf{PARTIAL}}}
+\newcommand{\ResultFail}{\textcolor{GridRed}{\textbf{FAIL}}}
+\newcommand{\ResultSkipped}{\textcolor{GridGray}{\textbf{SKIPPED}}}
+
+\newcommand{\CaseHeader}[5]{%
+  \subsection{\texorpdfstring{#1\quad #2}{#1 #2}}
+  \begin{tabularx}{\textwidth}{>{\bfseries}p{2.1cm}X>{\bfseries}p{2.1cm}X}
+    \rowcolor{GridLight}
+    执行责任 & #3 & 风险等级 & #4 \\
+    当前状态 & #5 & 证据要求 & 日志、API 响应、数据库快照或截图 \\
+  \end{tabularx}
+}
+
+\begin{document}
+
+\hypersetup{pageanchor=false}
+\begin{titlepage}
+  \centering
+  \vspace*{3.5cm}
+  {\Huge\bfseries Grid Trading Web\par}
+  \vspace{0.7cm}
+  {\LARGE 功能测试与全链路验收方案\par}
+  \vspace{1.2cm}
+  {\large 触发式移动等比网格 / Binance USD-M Futures\par}
+  \vfill
+  \begin{tabular}{rl}
+    文档版本： & v1.0 \\
+    编制日期： & 2026-07-20 \\
+    编制方式： & Codex 设计，项目负责人确认并参与实盘步骤 \\
+    当前基线： & 自动回归 150 项；Demo API 故障恢复后 53 组连续巡检通过 \\
+  \end{tabular}
+  \vfill
+  {\small 本文档不包含旧 CSV 数据迁移。迁移应在全链路验收通过后单独执行。\par}
+\end{titlepage}
+
+\clearpage
+\hypersetup{pageanchor=true}
+\pagenumbering{roman}
+\tableofcontents
+\clearpage
+\pagenumbering{arabic}
+
+\input{sections/00-scope-and-roles}
+\input{sections/01-automatic-and-api}
+\input{sections/02-binance-live}
+\input{sections/03-consistency}
+\input{sections/04-recovery-and-load}
+\input{sections/05-web-acceptance}
+\input{sections/06-execution-runbook}
+\input{sections/07-execution-record-20260717}
+\input{sections/08-testnet-single-chain-20260717}
+\input{sections/09-web-driven-testnet-e2e}
+\input{sections/10-web-driven-testnet-record-20260718}
+\input{sections/11-overnight-testnet-baseline-20260718}
+\input{sections/12-multigroup-coupling-20260718}
+\input{sections/13-cell-boundary-and-ake-e2e-20260718}
+\input{sections/14-uni-basic-e2e-and-supervisor-20260719}
+\input{sections/15-demo-api-outage-recovery-20260720}
+
+\end{document}

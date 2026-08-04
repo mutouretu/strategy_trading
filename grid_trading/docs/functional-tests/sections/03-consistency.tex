@@ -1,0 +1,77 @@
+\section{订单与持仓一致性功能测试}
+
+\subsection{自动化场景矩阵}
+
+下表所有场景先由 \OwnerAuto 使用 FakeExchange 和临时 SQLite 执行。标记“联合实盘”的场景，还需在最小金额测试组上由人工制造平台变化，Codex 观察轮询收敛。
+
+\begin{longtable}{p{2.3cm}p{5.2cm}p{2.4cm}p{5.0cm}}
+  \toprule
+  编号 & 场景 & 实盘责任 & 预期收敛 \\
+  \midrule
+  \endhead
+  FT-CON-001 & 待建仓单保持 NEW & 无 & 不撤、不补，订单 ID 不变。 \\
+  FT-CON-002 & 平台明确取消待建仓单 & \OwnerJoint & 一轮轮询内补挂；该 Cell 已触发，不重新判断当前价格。 \\
+  FT-CON-003 & 待建仓单完全查不到 & 自动故障注入 & 禁止盲补，进入 \texttt{manual\_review}；真实仓位标记 \texttt{unassigned}。 \\
+  FT-CON-004 & 建仓单部分成交仍开放 & 联合实盘可选 & 撤销余量，只为最终成交量挂对偶平仓单。 \\
+  FT-CON-005 & 部分成交建仓单被取消 & \OwnerJoint & 不补足原建仓量，只保护已成交量。 \\
+  FT-CON-006 & 待平仓单保持 NEW & 无 & 保持订单和 Cell，不重复挂单。 \\
+  FT-CON-007 & 平台取消/删除待平仓单 & \OwnerJoint & 先核对真实持仓，再按实际持仓恢复平仓单。 \\
+  FT-CON-008 & 删除同币对全部订单 & \OwnerJoint & 建仓单和平仓单分类恢复；多组策略的订单 ID 不冲突。 \\
+  FT-CON-009 & 平仓单部分成交后取消 & \OwnerJoint & 扣除成交增量，按真实剩余仓位缩量恢复，不重复扣减。 \\
+  FT-CON-010 & 手动部分平仓但未先删网格单 & \OwnerJoint & 撤销超额平仓单，优先保留仍有效订单，按真实数量重挂。 \\
+  FT-CON-011 & 手动全部平仓 & \OwnerJoint & 撤销残余平仓单，Cell 释放；运行策略下一轮重新进入待建仓。 \\
+  FT-CON-012 & 外部平仓单等待成交 & \OwnerJoint & 只占用订单覆盖量，不能提前缩减 Cell 的 \texttt{open\_qty}。 \\
+  FT-CON-013 & 外部平仓单被取消 & \OwnerJoint & 原 Cell 所有权不变，网格平仓单自动扩回。 \\
+  FT-CON-014 & 外部平仓单部分成交 & 联合实盘可选 & Cell 只按实际成交数量缩减，未成交余量继续占用覆盖量。 \\
+  FT-CON-015 & 外部平仓单总量超过真实仓位 & 自动为主 & 不修改外部单；网格单停止争抢资源，资源池标记 \texttt{order\_excess}。 \\
+  FT-CON-016 & 停止组平仓单被删除 & \OwnerJoint & 不为停止组补单，资源池标记 \texttt{manual\_review}，运行组不受影响。 \\
+  FT-CON-017 & 多组持仓总量不足 & 自动为主 & 活跃平仓单优先；末端 Cell 缩量，后续 Cell 释放。 \\
+  FT-CON-018 & LONG/SHORT 同币对并存 & 自动为主 & 两个资源池独立，退出单方向分别为 SELL/LONG 和 BUY/SHORT。 \\
+  FT-CON-019 & 撤单期间发生部分成交 & 自动故障注入 & 查询最终订单状态并刷新持仓，使用新快照重新分配。 \\
+  FT-CON-020 & 低于最小下单数量 & 自动为主 & 不发送非法订单，Cell 和资源池进入人工检查。 \\
+  FT-CON-021 & 持仓查询失败 & 自动故障注入 & 本轮不重写持仓；保留可审计状态，下轮恢复后再修正。 \\
+  FT-CON-022 & 平仓补单失败 & 自动故障注入 & Cell 保持 \texttt{manual\_review}，资源池为 \texttt{error}；下轮重试。 \\
+  FT-CON-023 & 一致状态重复轮询 & 无 & 幂等：订单 ID、数量和 Cell 均不变化。 \\
+  \bottomrule
+\end{longtable}
+
+\subsection{联合实盘步骤}
+
+\CaseHeader{FT-CON-L01}{人工删除一个待建仓单}{\OwnerJoint}{小额真实订单}{\StatusManual}
+
+\textbf{人工：}在币安页面取消指定测试组的一个 BUY/LONG 或 SELL/SHORT 建仓限价单，记录订单号和时间。\par
+\textbf{Codex：}轮询 API、事件和 SQLite，确认旧订单为 \texttt{CANCELED}，新订单 client ID 仍属于同一 strategy/cell，数量和价格正确。\par
+\textbf{通过：}一个一致性周期内只补一单；连续两轮不再新增订单。
+
+\CaseHeader{FT-CON-L02}{人工删除一个待平仓单}{\OwnerJoint}{已有小额持仓}{\StatusManual}
+
+人工取消指定 Cell 的平仓单。Codex 先确认对应方向真实持仓仍存在，再观察协调器恢复同方向、同价格和不超过真实持仓的平仓单。若真实持仓不足，预期缩量而非照抄旧数量。
+
+\CaseHeader{FT-CON-L03}{人工删除测试币对全部挂单}{\OwnerJoint}{小额多组策略}{\StatusManual}
+
+准备至少一组待建仓 Cell 和一组待平仓 Cell。人工在币安页面取消该测试币对全部挂单；Codex 验证运行组分类恢复、停止组不恢复、平仓单总量不超过真实持仓。
+
+\CaseHeader{FT-CON-L04}{人工部分平仓}{\OwnerJoint}{真实资金}{\StatusManual}
+
+人工只减少测试仓位的一部分。Codex 比较操作前后 position quantity，验证资源分配优先级、缩量平仓单和 \texttt{position-pools}。不得依据账户总余额推算本次变化。
+
+\CaseHeader{FT-CON-L05}{人工全部平仓}{\OwnerJoint}{真实资金}{\StatusManual}
+
+人工将测试方向仓位归零。Codex 观察协调器撤销残余退出单、释放 Cell，并确认下一策略扫描只恢复待建仓单，不产生反向仓位。
+
+\CaseHeader{FT-CON-L06}{外部平仓单等待、取消和成交}{\OwnerJoint}{真实订单}{\StatusManual}
+
+分三次独立执行：仅挂单后取消、部分成交后取消、完全成交。每次都记录外部订单未成交数量、真实持仓、网格退出单总量与 Cell 所有权。任何时刻所有可能平仓的开放订单总量不得超过真实仓位；若人为制造超额单，系统必须报警且不得扩大网格订单。
+
+\subsection{一致性判定不变量}
+
+每轮协调完成后检查：
+
+\begin{enumerate}
+  \item 所有 Cell 的 \texttt{open\_qty} 均非负，运行组逻辑持仓总量不超过可分配真实持仓。
+  \item 同一 \texttt{symbol+positionSide} 下，系统管理的开放平仓单与外部平仓预留合计不应超过真实持仓；异常时必须显式标记。
+  \item 已知取消的建仓单最多补一张；状态完全未知的建仓单不得自动补单。
+  \item 订单累计成交量只按增量扣减一次，重复轮询不改变已处理结果。
+  \item 停止、归档和删除组不被自动改写，但其占用和缺失必须在资源池中可见。
+  \item 所有自动修正均写入事件表，能够从订单号、Cell 和 run ID 追溯。
+\end{enumerate}

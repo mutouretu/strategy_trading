@@ -1,0 +1,42 @@
+\section{币安连接、真实订单、手续费与盈亏测试}
+
+\CaseHeader{FT-BIN-001}{公开接口连通与时间}{\OwnerLive}{只读}{\StatusPass}
+
+\textbf{步骤：}读取服务器时间、\texttt{exchangeInfo}、标记价格和 \texttt{1000LUNCUSDT} 过滤器。\par
+\textbf{预期：}HTTPS、DNS 和 JSON 解析正常；价格、tick size、step size、最小数量均大于 0。
+
+\CaseHeader{FT-BIN-002}{签名、权限与持仓模式}{\OwnerLive+\OwnerHuman}{只读/人工确认}{\StatusPass}
+
+Codex 查询账户、持仓模式、持仓与开放订单；人工在币安 API 管理页面确认无提现权限并启用 IP 白名单。预期签名有效、\texttt{canTrade=true}、账户为 Hedge Mode，日志不打印密钥。
+
+\CaseHeader{FT-BIN-003}{测试订单端点}{\OwnerLive}{不成交}{\StatusPass}
+
+使用测试币对 \texttt{1000LUNCUSDT}，分别构造 LONG 和 SHORT 的约 10 USDT 市价单参数。调用 \texttt{/fapi/v1/}\allowbreak\texttt{order/test} 后，预期参数校验成功且仓位、挂单、余额均不改变。
+
+\CaseHeader{FT-BIN-004}{LONG 真实开平仓}{\OwnerLive}{低风险真实资金}{\StatusPass}
+
+\textbf{前置：}该币对无 LONG 仓位、无开放订单；用户明确授权约 10 USDT 实盘动作。\par
+\textbf{步骤：}
+\begin{enumerate}
+  \item BUY/LONG 市价开仓并按订单号确认 \texttt{FILLED}。
+  \item 只按实际成交数量 SELL/LONG 平仓。
+  \item 查询 \texttt{userTrades}，汇总成交均价、\texttt{commission} 和 \texttt{realizedPnl}。
+  \item 回查 LONG 仓位为 0、该币对挂单为 0。
+\end{enumerate}
+\textbf{证据基线：}170 个合约的受控测试已成功完成；后续执行不得依赖旧订单号。
+
+\CaseHeader{FT-BIN-005}{SHORT 真实开平仓}{\OwnerLive}{低风险真实资金}{\StatusPass}
+
+与 FT-BIN-004 对称：SELL/SHORT 开仓，BUY/SHORT 平仓；不得发送 Hedge Mode 不接受的 \texttt{reduceOnly} 参数。结束后 SHORT 仓位和挂单必须为 0。
+
+\CaseHeader{FT-BIN-006}{手续费与净结果核对}{\OwnerLive}{只读}{\StatusPass}
+
+按每个订单的成交明细计算：
+\[
+  \text{净结果}=\sum \text{realizedPnl}-\sum \text{commission}_{\mathrm{USDT}}.
+\]
+若手续费资产不是 USDT，必须分资产展示，禁止直接相加。结果应与币安成交历史在精度允许范围内一致。
+
+\CaseHeader{FT-BIN-007}{实盘清理兜底}{\OwnerLive+\OwnerHuman}{真实资金}{\StatusReady}
+
+脚本异常或平仓请求失败时，Codex 查询测试前后仓位差额，只清理由本次测试新增的数量。若无法确认归属，禁止自动扩大清理范围，由人工在币安页面处理并保存截图。

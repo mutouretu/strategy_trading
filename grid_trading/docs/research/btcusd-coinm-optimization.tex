@@ -1,0 +1,538 @@
+\documentclass[11pt,a4paper,fontset=none]{ctexart}
+
+\setCJKmainfont{Songti SC}
+\setCJKsansfont{PingFang SC}
+\setCJKmonofont{Songti SC}
+
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\usepackage{lastpage}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage[table]{xcolor}
+
+\definecolor{CoinGold}{HTML}{F0B90B}
+\definecolor{CoinDark}{HTML}{1E2329}
+\definecolor{CoinGray}{HTML}{5E6673}
+\definecolor{CoinLight}{HTML}{F5F5F5}
+\definecolor{CoinGreen}{HTML}{0ECB81}
+\definecolor{CoinRed}{HTML}{F6465D}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=CoinDark,
+  urlcolor=CoinGray,
+  pdftitle={BTCUSD 币本位永续合约网格优化方案},
+  pdfauthor={Codex / 项目负责人}
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{BTCUSD COIN-M 网格优化}
+\rhead{研究方案 v0.1}
+\cfoot{第 \thepage\ 页 / 共 \pageref{LastPage} 页}
+\setlength{\headheight}{14pt}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.45em}
+\setlist{nosep,leftmargin=2em}
+\renewcommand{\arraystretch}{1.22}
+
+\newcommand{\ResearchTask}{\textcolor{CoinGold}{\textbf{待计算}}}
+\newcommand{\RiskPoint}{\textcolor{CoinRed}{\textbf{风险重点}}}
+\newcommand{\Candidate}{\textcolor{CoinGreen}{\textbf{候选方案}}}
+
+\begin{document}
+
+\begin{titlepage}
+  \centering
+  \vspace*{3.2cm}
+  {\Huge\bfseries BTCUSD 币本位永续合约\par}
+  \vspace{0.6cm}
+  {\LARGE 长期做多与 BTC 积累优化方案\par}
+  \vspace{1.0cm}
+  {\large 从低位分批建仓、持有增强到大周期顶部退出\par}
+  \vfill
+  \begin{tabular}{rl}
+    文档版本： & v0.2（仅做多专项研究方案） \\
+    编制日期： & 2026-07-20 \\
+    研究对象： & Binance COIN-M \texttt{BTCUSD\_PERP} \\
+    当前阶段： & 明确公式、优化变量、实验和验收标准 \\
+  \end{tabular}
+  \vfill
+  {\small 本文不授权真实下单，也不改变当前 USD-M 测试系统。\par}
+\end{titlepage}
+
+\pagenumbering{roman}
+\tableofcontents
+\clearpage
+\pagenumbering{arabic}
+
+\section{专项研究定位}
+
+BTCUSD 币本位合约与山寨币 USD-M 网格应分开研究。这里采用明确的长期假设：BTC
+当前处于相对低位区域，计划开始分批建仓并跨周期持有；但不假设当前位置就是绝对底部，
+必须允许价格继续下探至 50,000 USD、40,000 USD 或更低的压力路径。策略在持有阶段
+使用 COIN-M 多头合约增加 BTC，最终在大周期顶部区域分批退出。
+
+COIN-M 是反向合约：合约面值以 USD 固定，保证金、手续费、资金费率和盈亏均以 BTC
+结算。因此优化目标不能只写成“赚取多少 USDT”，而应同时观察 BTC 数量、USD 净值、
+保证金安全和大周期退出能力。“相对低位”是待检验的投资前提，不是模型已经证明的结论。
+
+本专项首先限定为：
+
+\begin{itemize}
+  \item 标的为 \texttt{BTCUSD\_PERP}，暂不研究季度交割合约和跨期套利；
+  \item 只研究 BTC 币本位做多，不设计做空、空头对照或方向反转；
+  \item 单组仍采用少量 Cell、移动窗口和长周期可调轮询；
+  \item 多组在 Binance 端共享一个 BTCUSD 方向仓位，软件逻辑组只用于风险分层；
+  \item 优化目标是长期增加可实际持有的 BTC，但必须限制 USD 净值回撤和清算风险；
+  \item 研究范围覆盖分批建仓、长期持有增强和大周期顶部区域分批退出三个阶段。
+\end{itemize}
+
+\section{当前合约规格与动态数据源}
+
+\subsection{2026-07-20 官方接口快照}
+
+根据 Binance COIN-M 官方 \texttt{/dapi/v1/exchangeInfo} 只读响应，当前规格为：
+
+\begin{longtable}{p{4.0cm}p{4.0cm}p{5.6cm}}
+  \toprule
+  项目 & 当前值 & 对策略的影响 \\
+  \midrule
+  \endhead
+  Symbol / Pair & \texttt{BTCUSD\_PERP} / \texttt{BTCUSD} & 永续合约，无到期换月 \\
+  合约状态 & \texttt{TRADING} & 建模时仍需每日检查状态 \\
+  合约面值 $C$ & 100 USD/张 & 一张就是最小 100 USD 名义敞口 \\
+  保证金资产 & BTC & 盈亏、费用和保证金均改变 BTC 余额 \\
+  报价资产 & USD & 网格价格仍使用 BTC/USD \\
+  价格步长 & 0.1 USD & 所有理论价必须按 tick size 舍入 \\
+  限价数量 & 最小 1、步长 1 张 & 不支持 0.2 张等小数数量 \\
+  单 Symbol 普通挂单上限 & 200 张订单 & 多组总挂单需要统一预算 \\
+  百分比价格过滤 & 标记价的 0.95--1.05 & 远端挂单可能被交易所拒绝 \\
+  \bottomrule
+\end{longtable}
+
+这意味着 USD-M 中“每格 20 USDT”的配置不能直接迁移。BTCUSD 币本位最小一格为
+1 张，即 100 USD 合约面值；若使用 5 格，全部建仓后的基础名义敞口至少为 500 USD。
+
+\subsection{禁止硬编码的规则}
+
+面值、精度、过滤器、杠杆档位和维持保证金可能变化。程序与研究数据应分别从以下
+官方端点获取并保留快照：
+
+\begin{itemize}
+  \item 合约和过滤规则：\url{https://dapi.binance.com/dapi/v1/exchangeInfo}；
+  \item 连续永续 K 线：\texttt{/dapi/v1/continuousKlines}，pair 为 BTCUSD；
+  \item 标记价格 K 线：\texttt{/dapi/v1/markPriceKlines}；
+  \item 永续资金费率：\texttt{/dapi/v1/fundingRate}；
+  \item 账户杠杆档位、仓位和清算价：签名账户接口。
+\end{itemize}
+
+具体字段定义见 Binance 官方
+\href{https://developers.binance.com/docs/derivatives/coin-margined-futures/market-data/rest-api/Exchange-Information}
+{COIN-M Exchange Information} 文档。
+
+\section{反向合约的核心公式}
+
+\subsection{合约数量与 BTC 敞口}
+
+设每张合约面值为 $C$ USD、持仓张数为 $n$、BTC/USD 价格为 $P$，则合约代表的
+USD 名义金额和 BTC 数量分别为：
+
+\begin{align}
+  V_{\mathrm{USD}} &= nC,\\
+  V_{\mathrm{BTC}}(P) &= \frac{nC}{P}.
+\end{align}
+
+固定张数意味着 USD 名义敞口固定，但 BTC 敞口随价格下跌自动增加。这与 USD-M
+固定币数量或固定 USDT 下单均不同。
+
+\subsection{LONG 盈亏}
+
+做多开仓价格为 $P_e$、平仓价格为 $P_x$ 时，币本位盈亏为：
+
+\begin{equation}
+  \Pi_{\mathrm{BTC,long}}
+    =nC\left(\frac{1}{P_e}-\frac{1}{P_x}\right).
+\end{equation}
+
+仅当 $P_x>P_e$ 时该轮做多产生正的 BTC 盈亏。系统实现和回测必须以平台成交明细
+核对该公式，并分别保存 BTC 盈亏与按评价时点价格换算的 USD 盈亏。
+
+\subsection{等比一格的闭式收益}
+
+设相邻边界为 $P_b$ 和 $P_s=P_b(1+r)$。在 $P_b$ 做多并于 $P_s$ 平仓时，毛利润为：
+
+\begin{equation}
+  \Pi_{\mathrm{gross,BTC}}
+  =nC\left(\frac{1}{P_b}-\frac{1}{P_s}\right)
+  =\frac{nCr}{P_b(1+r)}.
+\end{equation}
+
+因此固定张数网格在更低价格完成同样比例的一格，会获得更多 BTC 数量；但这些 BTC
+的 USD 价格也更低。只比较 BTC 数量会掩盖 USD 购买力的下降。
+
+做多循环在上边界退出，按退出价格计算的毛利润为 $nCr$ USD。该闭式结果只描述一个
+完整 Cell，不代表长期持仓组合能够在任意时点实现同样收益。
+
+\subsection{手续费后的盈亏平衡比例}
+
+若开、平仓费率分别为 $f_e,f_x$，暂不考虑滑点和资金费率，则近似净 BTC 利润为：
+
+\begin{equation}
+  \Pi_{\mathrm{net,BTC}}
+  =\frac{nC}{P_b(1+r)}
+   \left[r-f_e(1+r)-f_x\right].
+\end{equation}
+
+若两侧费率相同为 $f$，则理论盈亏平衡比例满足：
+
+\begin{equation}
+  r>\frac{2f}{1-f}.
+\end{equation}
+
+\ResearchTask：加入真实 Maker/Taker 组合、资金费率、成交滑点和价格舍入后，重新计算
+实际 $r_{\min}$。手续费和资金费率最终应以 Binance 账户流水为准，不用静态费率猜测。
+
+\section{优化目标：BTC 数量、USD 净值与合约风险三账本}
+
+\subsection{先区分核心持币和合约敞口}
+
+建议把资产分成两个物理隔离的池：核心 BTC 池用于长期持有和最终分批卖出；合约运营池
+只存放愿意承担 COIN-M 风险的 BTC 保证金。合约的 $nC/P$ 是价格风险敞口，不是已经
+买到并可提取的 BTC，不能计入核心持币数量。只有已经实现并从合约账户转入核心池的
+BTC 利润，才记作长期积累成果。
+
+\begin{align}
+  B_{\mathrm{total}}(t)
+  &=B_{\mathrm{core}}(t)+E_{\mathrm{futures,BTC}}(t),\\
+  V_{\mathrm{net,USD}}(t)
+  &=B_{\mathrm{core}}(t)P_t+E_{\mathrm{futures,BTC}}(t)P_t.
+\end{align}
+
+未实现合约盈利只进入合约权益，不提前计作“新增 BTC”；这能避免用高杠杆名义仓位制造
+表面上的积币速度。
+
+\subsection{不能只最大化 BTC 数量}
+
+设期初总 BTC 权益为 $B_0$，研究期末总 BTC 权益为 $B_T$，评价价格为 $P_T$。至少同时
+报告：
+
+\begin{align}
+  R_{\mathrm{BTC}} &= \frac{B_T-B_0}{B_0},\\
+  R_{\mathrm{USD}} &= \frac{B_TP_T-B_0P_0}{B_0P_0},\\
+  \alpha_{\mathrm{BTC}} &= B_T-B_0,\\
+  \alpha_{\mathrm{USD}} &= B_TP_T-B_0P_T.
+\end{align}
+
+$\alpha_{\mathrm{USD}}$ 表示在同一终值价格下，策略相对于单纯持有 $B_0$ BTC 多出的
+价值。正式实验还要加入现金流、买入日期和买入价格完全一致的“分批买入并持有”基准，
+以区分“网格增加 BTC”“分批建仓择时收益”和“BTC 本身上涨”三种来源。
+
+\subsection{建议的三层目标}
+
+\begin{enumerate}
+  \item \textbf{第一目标：}在无清算前提下，提高核心池与总账户的长期 BTC 数量；
+  \item \textbf{第二目标：}相对“同期分批买入并持有 BTC”的基准取得正的终值超额；
+  \item \textbf{风险约束：}在 50,000、40,000 USD 等下跌路径中限制 USD 净值回撤、
+        保证金占用和清算概率；
+  \item \textbf{退出目标：}在大周期顶部区域逐步降低合约和现货风险，不依赖一次性猜顶。
+\end{enumerate}
+
+可采用多目标函数：
+
+\begin{equation}
+  \max_{\theta}\quad
+  w_1\mathbb{E}[R_{\mathrm{BTC}}]
+  +w_2\mathbb{E}[\alpha_{\mathrm{USD}}]
+  -\lambda_1\operatorname{ES}_{\alpha}
+  -\lambda_2\Pr(\text{liquidation}),
+\end{equation}
+其中 $\theta$ 为网格与资金管理参数。
+
+\section{长期做多的三阶段生命周期}
+
+\subsection{阶段一：低位区域分批建仓}
+
+当前开始建仓，但把“还会跌到 50,000 或 40,000 USD”作为正常情景，而不是异常情景。
+核心 BTC 采用预先定义的价格层级、时间间隔或二者结合的方式分批买入；COIN-M 多头组
+也必须分批启用，不能在第一个价格区域耗尽保证金预算。
+
+该阶段重点不是最大成交次数，而是计算每下跌一个压力层级后仍剩余多少现金或 BTC
+保证金，以及继续下跌时是否还能保持足够清算距离。
+
+\subsection{阶段二：长期持有与网格增强}
+
+核心 BTC 不因日常网格信号卖出。COIN-M 多头触发网格在独立风险预算内完成低买高平，
+将已实现的 BTC 利润定期转入核心池。若总多头张数、保证金占用或清算风险达到上限，
+系统只允许平仓和降低风险，暂停新 Cell 与新组。
+
+\subsection{阶段三：大周期顶部区域分批退出}
+
+顶部区域只能用一组可复现的条件定义，例如长期估值、月线趋势、相对历史高点的位置和
+分批价格层级，不能在回测后主观标注最高点。进入退出阶段后按以下顺序处理：
+
+\begin{enumerate}
+  \item 停止创建新多头组和激活新的建仓 Cell；
+  \item 等待或主动收缩已有合约仓位，将合约风险逐步降至零；
+  \item 把合约账户已实现 BTC 利润转入核心池；
+  \item 按预设层级分批卖出核心 BTC，并保留每批数量、价格和剩余比例记录。
+\end{enumerate}
+
+研究中必须分别报告“网格增强收益”和“顶部卖出收益”，避免把 BTC 本身的周期涨幅
+错误归因于合约策略。
+
+\section{币本位做多的特殊风险}
+
+\subsection{价格下跌的双重压力}
+
+币本位 LONG 在 BTC 下跌时同时面对：
+
+\begin{enumerate}
+  \item 多头合约产生负的 BTC 未实现盈亏；
+  \item 作为保证金的 BTC 本身按 USD 计价同步贬值；
+  \item 固定张数合约的 BTC 等价敞口 $nC/P$ 随价格下跌上升；
+  \item 移动网格若继续增加多组，会在账户层累积相同方向的风险。
+\end{enumerate}
+
+对 LONG 而言，当 $P\rightarrow0$ 时，理论负 BTC 盈亏中的 $1/P$ 项快速扩大；实际仓位
+会在此之前触发保证金约束或清算。这是本专项必须优先计算的风险，而不是利润率。
+
+\subsection{账户权益和清算边界}
+
+设分配给合约账户的初始 BTC 为 $M_0$，则简化权益为：
+
+\begin{equation}
+  E_{\mathrm{BTC}}(t)=M_0+\Pi_{\mathrm{realized}}(t)
+  +\Pi_{\mathrm{unrealized}}(t)-C_{\mathrm{fee}}(t)
+  +C_{\mathrm{funding}}(t).
+\end{equation}
+
+正式模型必须接入 Binance 当前杠杆档位和维持保证金规则，并用账户接口返回的清算价
+校准。该字段在仓位接口中名为 \texttt{liquidationPrice}。理论公式用于回测和压力测试，
+平台清算价用于在线风控。
+
+\RiskPoint：设置 2 倍杠杆不等于策略只承担 2 倍风险。对于固定张数，杠杆主要决定
+所需初始保证金；真正的账户风险由总张数、BTC 抵押物和所有组的聚合持仓决定。
+
+\section{单组参数化与三种下单规模方案}
+
+\subsection{基准单组}
+
+建议先以简单基准开始，而不是直接优化所有参数：
+
+\begin{itemize}
+  \item 单组 $N=5$ 个 Cell；
+  \item 每格最小从 $n=1$ 张开始，即 100 USD 面值；
+  \item 等比比例 $r$ 先测试 0.5\%、1\%、2\%、3\%、5\%；
+  \item 轮询周期测试 50 秒、10 分钟、1 小时；
+  \item 杠杆先比较 1、2、3 倍，仓位张数保持相同；
+  \item 移动窗口规则与当前 USD-M 触发式网格一致。
+\end{itemize}
+
+这些只是实验网格，不是推荐交易参数。
+
+\subsection{方案 A：每格固定张数}
+
+每格固定 $n$ 张，优点是 USD 名义金额和最坏总张数清晰，且低价成交可以积累更多
+BTC；缺点是价格下跌时 BTC 等价敞口自然增大。
+
+\Candidate：作为第一版基准和实际实现优先方案，因为它最贴合 COIN-M 的整数合约结构。
+
+\subsection{方案 B：每格固定 BTC 等价数量}
+
+令目标 BTC 数量为 $q_{\mathrm{BTC}}$，在价格 $P_i$ 的张数近似为：
+
+\begin{equation}
+  n_i=\operatorname{round}\left(\frac{q_{\mathrm{BTC}}P_i}{C}\right).
+\end{equation}
+
+它能稳定 BTC 敞口，但会受整数张限制；低资金规模下往往退化成 0 或 1 张，实际不可用。
+
+\subsection{方案 C：按可用保证金比例动态下单}
+
+每格使用可用 BTC 保证金的一定比例。该方案会形成强反馈：盈利后自动放大，亏损时缩小，
+但也容易在高波动和多组并发时造成不可解释的仓位耦合。
+
+\Candidate：只作为后续对照，不作为第一版上线方案。
+
+\section{长期做多的候选优化机制}
+
+\subsection{波动率自适应网格比例}
+
+用实现波动率 $\sigma_t$ 调整比例：
+
+\begin{equation}
+  r_t=\operatorname{clip}(k\sigma_t,r_{\min},r_{\max}).
+\end{equation}
+
+目标是在低波动时避免比例过宽而无成交，高波动时避免比例过窄导致费用密集和仓位迅速
+填满。参数只能在新组创建时确定，已下发组仍保持配置不可变。
+
+\subsection{趋势和筑底门控}
+
+币本位 LONG 不应只因价格下跌就无限新开组。比较以下建组门控：
+
+\begin{itemize}
+  \item 距离历史高点或长期均线的回撤幅度；
+  \item 周线/月线趋势由下降转为横盘或上升；
+  \item 波动率收缩、成交量和长期价格区间；
+  \item 分批建组间的最小价格距离和最小时间距离。
+\end{itemize}
+
+门控不是为了证明绝对底部，而是为了把初始风险预算分散到多个可能的下跌层级。50,000、
+40,000 USD 压力位必须在资金计划中预留容量，不能等价格到达后临时追加无上限保证金。
+
+\subsection{库存感知的触发与暂停}
+
+当聚合 BTCUSD LONG 已达到张数、保证金或风险预算时，只允许已有 Cell 平仓，不再激活
+新 Cell。恢复新增仓位需要同时满足仓位下降和保证金安全阈值。
+
+\subsection{自适应轮询周期}
+
+低波动和远离网格时使用 10 分钟至 1 小时；接近挂单、成交或保证金警戒线时缩短周期。
+需要比较节省请求量与漏掉触发状态之间的影响，而已有平台挂单仍可在轮询间隔内成交。
+
+\subsection{旧组退出规则}
+
+比较三种规则：
+
+\begin{enumerate}
+  \item 只停止旧组新增仓位，等待存量自然平仓；
+  \item 新组已实现利润覆盖旧组浮亏后，人工结算旧组；
+  \item 达到组合风险上限时，按离现价最近或最远的仓位执行风险缩减。
+\end{enumerate}
+
+退出规则必须在账户总权益层验证，不能因删除软件中的策略组而假设真实仓位消失。
+
+\subsection{合约账户与长期储备隔离}
+
+只把计划承担风险的 BTC 转入 COIN-M 合约账户，长期冷储 BTC 不作为全仓兜底资金。
+研究预留比例 $\rho$：
+
+\begin{equation}
+  M_{\mathrm{futures}}=(1-\rho)B_{\mathrm{tradable}}.
+\end{equation}
+
+隔离储备会降低可用保证金，但能给风险损失设置清晰上限。全仓和逐仓需要分别建模。
+
+\section{回测数据与实验设计}
+
+\subsection{历史区间}
+
+BTC 专项应覆盖完整市场状态，而不是只测近期筑底阶段：
+
+\begin{itemize}
+  \item 长期牛市及中途急跌；
+  \item 2020 类快速崩盘；
+  \item 2021--2022 高位转熊和长期下跌；
+  \item 长时间横盘、低波动和资金费率持续偏向一侧；
+  \item 新高突破后持续上涨，检验停止建仓、合约降险和核心 BTC 分批退出规则；
+  \item 从当前建仓区继续跌向 50,000、40,000 USD，并在长期低位停留的确定性压力路径。
+\end{itemize}
+
+\subsection{回测所需序列}
+
+\begin{itemize}
+  \item BTCUSD 永续成交价或连续合约 K 线；
+  \item 标记价格，用于未实现盈亏和清算判断；
+  \item 每次资金费率及结算时刻；
+  \item 合约规格、杠杆和维持保证金档位的历史快照；
+  \item 实际成交手续费、Maker/Taker 身份和滑点假设。
+\end{itemize}
+
+\subsection{严格复现触发式语义}
+
+回测执行器必须沿用当前策略状态机：价格先越过边界才挂建仓单，之后回撤才允许成交；
+Cell 平仓后重新回到未触发；状态只在轮询时更新。使用 OHLC 时必须处理同一根 K 线内
+路径未知问题，至少同时给出保守路径与乐观路径，不能用未来高低价完成不可能的双向成交。
+
+\subsection{训练、验证和样本外}
+
+采用滚动 Walk-Forward，而不是在全历史上一次性选择最优参数：
+
+\begin{enumerate}
+  \item 训练段搜索参数区域；
+  \item 验证段淘汰过拟合规则；
+  \item 完全未参与选择的样本外区间给出最终结果；
+  \item 对历史收益块进行重采样，估计清算和尾部回撤概率。
+\end{enumerate}
+
+最优结果应是对参数扰动不敏感的“平台区域”，而不是单个尖锐最优点。
+
+\section{实验矩阵}
+
+\begin{longtable}{p{3.2cm}p{5.2cm}p{5.4cm}}
+  \toprule
+  实验层级 & 主要变量 & 主要输出 \\
+  \midrule
+  \endhead
+  单 Cell & $r,n$、费率、资金费率、持仓时间 & 每格净 BTC、净 USD、盈亏平衡比例 \\
+  单组静态 & $N,r,n,L$ & 最大张数、浮亏、保证金、清算距离 \\
+  轮询机制 & 50 秒、10 分钟、1 小时、自适应 & 成交次数、漏触发、请求量 \\
+  移动窗口 & 正常趋势、跨多格、异常阻塞 & 窗口上限、额外 Cell、仓位上界 \\
+  多组迁移 & 组间距、最大组数、退出规则 & 聚合仓位、旧组损失、回本周期 \\
+  周期退出 & 停止建仓条件、卖出层级、每批比例 & 合约归零时间、卖出均价、剩余 BTC \\
+  账户压力 & 崩盘、跳空、API 故障、资金费率 & 最低保证金率、清算、风险破产 \\
+  样本外 & 不同年份与市场状态 & 相对分批持有的 BTC/USD 超额、参数稳定性 \\
+  \bottomrule
+\end{longtable}
+
+\section{建议的 HLT 验收门槛}
+
+第一版先定义指标，阈值在基准计算后确定：
+
+\begin{longtable}{p{3.6cm}p{6.4cm}p{3.8cm}}
+  \toprule
+  维度 & 指标 & 状态 \\
+  \midrule
+  \endhead
+  BTC 收益 & 核心池净增 BTC、相对分批持有的 BTC 超额、每张合约净收益 & 待定阈值 \\
+  USD 收益 & 终值 USD 净值、相对同现金流分批持有的超额、利润因子 & 待定阈值 \\
+  回撤 & BTC 数量最大回撤、USD 净值最大回撤、恢复时间 & 待定阈值 \\
+  清算风险 & 历史清算次数、压力路径清算、Monte Carlo 概率 & 原则上为零或极低 \\
+  保证金 & 峰值占用率、最低保证金率、距清算价距离 & 待定阈值 \\
+  交易质量 & Maker 比例、费用/毛利、资金费率/毛利、持仓时间 & 待定阈值 \\
+  稳健性 & 样本外、参数扰动、不同轮询周期、规则变更 & 必须稳定 \\
+  可经营性 & 最大组数、迁移次数、人工干预和最坏在途仓位 & 待定阈值 \\
+  周期退出 & 停止开仓后合约归零时间、卖出层级偏差、顶部回撤保留比例 & 待定阈值 \\
+  \bottomrule
+\end{longtable}
+
+\section{建议实施顺序}
+
+\begin{enumerate}
+  \item \textbf{闭式计算器：}实现反向合约单 Cell 收益、费用、资金费率和清算近似；
+  \item \textbf{确定性路径模拟：}验证触发、移动窗口、最大张数和 BTC 权益曲线；
+  \item \textbf{历史数据层：}下载连续合约、标记价和资金费率，保存规格快照；
+  \item \textbf{单组回测：}先比较固定 1 张、5 Cell 的参数平台；
+  \item \textbf{多组 HLT：}加入分层建仓、组间距、仓位上限和旧组退出规则；
+  \item \textbf{周期 HLT：}贯通分批建仓、持有增强、停止开仓和顶部分批卖出；
+  \item \textbf{账户压力与 Monte Carlo：}确定保证金和 BTC 储备下限；
+  \item \textbf{小额 COIN-M 测试网：}完成独立适配器后再进行真实接口验证；
+  \item \textbf{实盘候选：}只有理论、历史、测试网三层门槛全部通过后才考虑。
+\end{enumerate}
+
+\section{开始计算前需要确认的五项输入}
+
+\begin{enumerate}
+  \item 核心 BTC 的总建仓预算、首批比例，以及向 50,000、40,000 USD 下探时各层预留比例；
+  \item 计划投入 COIN-M 合约运营池的 BTC 数量和永不进入合约账户的核心储备；
+  \item 使用全仓还是逐仓，以及是否禁止手工 BTCUSD 仓位混入策略账户；
+  \item 最大总多头张数、可接受的 USD 净值回撤和最低清算安全距离；
+  \item 大周期顶部区域的识别条件、每批卖出比例，以及合约利润转入核心池的周期。
+\end{enumerate}
+
+\section{官方资料基线}
+
+本提纲依据 2026-07-20 查询的 Binance 官方 COIN-M API 定义。官方文档说明 COIN-M
+支持永续和交割合约，市场数据使用 Binance COIN-M DAPI，当前生产地址为
+\url{https://dapi.binance.com}。
+\texttt{exchangeInfo} 返回 \texttt{contractSize}、保证金资产、价格和数量过滤器。
+所有动态规格在正式计算和上线前都必须再次查询，不以本文快照替代交易所实时规则。
+
+\end{document}

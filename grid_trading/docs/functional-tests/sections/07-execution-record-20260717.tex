@@ -1,0 +1,183 @@
+\section{2026-07-17 无真实订单测试执行记录}
+
+\subsection{执行范围与安全证明}
+
+本轮按前述用例逐项执行，但明确禁止真实币安下单。执行边界如下：
+
+\begin{itemize}
+  \item 自动化、LLT、一致性、恢复和负载测试使用临时 SQLite 与 FakeExchange；测试代码中的订单均为内存模拟对象。
+  \item 币安阶段只执行公开查询、签名只读查询和 \texttt{/fapi/v1/order/test}；LONG、SHORT 均未传入 \texttt{--real-order}。
+  \item Web 运行状态验收使用隔离的 FakeExchange 和临时数据库，端口为 8010/8110。日志中没有 \texttt{/start}，也没有真实交易所下单请求。
+  \item 原 8000/8100 服务只执行健康检查、预览和只读列表；测试结束后策略列表仍为空。
+\end{itemize}
+
+安全结论：\textbf{本轮未创建任何真实币安订单，未改变真实持仓。}
+
+\subsection{执行摘要}
+
+\begin{longtable}{p{4.2cm}p{2.5cm}p{8.1cm}}
+  \toprule
+  范围 & 结果 & 摘要 \\
+  \midrule
+  \endhead
+  自动回归 & \ResultPass & 84/84，7.973 秒；包含新增 9 项前端异常检查，仅有测试框架警告。 \\
+  旧引擎特征基线 & \ResultPass & 5/5，0.003 秒。 \\
+  语法编译 & \ResultPass & \texttt{gridtrader/}、\texttt{scripts/}、\texttt{tests/}、\texttt{legacy\_grid/} 无语法错误。 \\
+  币安非下单检查 & \ResultPass & 1000LUNCUSDT LONG/SHORT 各 170 合约，名义价值约 10.04 USDT；\texttt{order/test=ok}，\texttt{real\_order=skipped}。 \\
+  Web 验收 & \ResultPartial & 核心配置操作通过；累计确认 4 类前端缺陷。 \\
+  真实资金和人工外部操作 & \ResultSkipped & 按用户要求未执行。 \\
+  \bottomrule
+\end{longtable}
+
+\subsection{自动化、数学、API 与数据库}
+
+\begin{longtable}{p{2.8cm}p{2.1cm}p{9.9cm}}
+  \toprule
+  用例 & 判定 & 实际结果与证据 \\
+  \midrule
+  \endhead
+  FT-AUTO-001 & \ResultPass & 自动回归 84/84、旧引擎 5/5、compileall 通过。 \\
+  FT-ENV-001 & \ResultPass & 隔离伪密钥与缺失密钥测试通过；健康响应只返回布尔配置状态；\texttt{.gitignore} 包含 \texttt{.env}。 \\
+  FT-MATH-001 & \ResultPass & 做多锚点、向下等比、价格升序编号和稳定 Cell ID 通过。 \\
+  FT-MATH-002 & \ResultPass & 做空锚点、向上等比、价格顺序和稳定编号通过。 \\
+  FT-MATH-003 & \ResultPass & 1 格和有效 100 格预览通过；空 symbol、零价格/比例/金额、0/101 格、非法杠杆和 0.1 秒轮询均返回 4xx；无模拟订单产生。 \\
+  FT-API-001 & \ResultPass & \texttt{/health}=200、\texttt{/docs}=200，status=ok。 \\
+  FT-API-002 & \ResultPass & 1000LUNCUSDT 做多/做空各 5 格预览返回 200，symbol 自动大写；预览前后策略数均为 0。 \\
+  FT-API-003 & \ResultPass & 草稿创建、编辑、多组同币对唯一 strategy ID 和非法输入拒绝通过。 \\
+  FT-API-004 & \ResultPass & has\_started 后编辑返回 409；停止/失败后配置锁仍保留。 \\
+  FT-API-005 & \ResultPass & 模拟 Supervisor 验证多策略复用 PID 43210，停止一组不终止共享进程。 \\
+  FT-API-006 & \ResultPass & strategies、cells、events、position-pools 均返回 200；Decimal 和事件顺序测试通过。 \\
+  FT-DB-001 & \ResultPass & 重开 SQLite 后 Cell 数量、部分成交量、成交时间、事件和软删除审计记录保留。 \\
+  \bottomrule
+\end{longtable}
+
+\subsection{币安连接与订单安全}
+
+\begin{longtable}{p{2.8cm}p{2.1cm}p{9.9cm}}
+  \toprule
+  用例 & 判定 & 实际结果与证据 \\
+  \midrule
+  \endhead
+  FT-BIN-001 & \ResultPass & exchangeInfo、标记价格和交易规则读取成功，网络与 JSON 正常。 \\
+  FT-BIN-002 & \ResultPartial & 签名只读、Hedge Mode、指定币对两方向零仓位和零开放订单前置检查通过；提现权限和 IP 白名单未由人工重新确认。 \\
+  FT-BIN-003 & \ResultPass & LONG/SHORT 均执行 \texttt{/order/test} 成功；quantity=170，未创建真实订单。 \\
+  FT-BIN-004 & \ResultSkipped & 用户要求禁止真实下单，未执行 LONG 开平仓。 \\
+  FT-BIN-005 & \ResultSkipped & 用户要求禁止真实下单，未执行 SHORT 开平仓。 \\
+  FT-BIN-006 & \ResultSkipped & 本轮无新真实成交，未生成新的手续费和 PnL 样本。 \\
+  FT-BIN-007 & \ResultSkipped & 无真实订单，无需执行资金清理。 \\
+  \bottomrule
+\end{longtable}
+
+\subsection{订单与持仓一致性矩阵}
+
+以下 23 项均在 FakeExchange 与临时 SQLite 中执行，不访问真实币安订单接口。
+
+\begin{longtable}{p{2.8cm}p{2.1cm}p{9.9cm}}
+  \toprule
+  用例 & 判定 & 覆盖结果 \\
+  \midrule
+  \endhead
+  FT-CON-001 & \ResultPass & NEW 建仓单重复轮询保持订单 ID，不撤不补。 \\
+  FT-CON-002 & \ResultPass & 已知取消建仓单只补一次，价格越过后不重新触发判断。 \\
+  FT-CON-003 & \ResultPass & 完全查不到的建仓单进入 manual\_review，真实持仓记为 unassigned。 \\
+  FT-CON-004 & \ResultPass & 开放部分成交建仓单撤销余量，仅保护实际成交量。 \\
+  FT-CON-005 & \ResultPass & 部分成交后取消不补足原数量，只建立已成交量的退出保护。 \\
+  FT-CON-006 & \ResultPass & NEW 平仓单保持不变，不重复挂单。 \\
+  FT-CON-007 & \ResultPass & 取消/缺失平仓单在真实持仓足够时按资源池恢复。 \\
+  FT-CON-008 & \ResultPass & 同币对全部模拟订单取消后，多组建仓/平仓分类恢复且 ID 唯一。 \\
+  FT-CON-009 & \ResultPass & 平仓部分成交增量只扣一次，取消后按剩余量进入修复。 \\
+  FT-CON-010 & \ResultPass & 手工部分平仓模拟后，超额退出单缩量，保留有效订单优先。 \\
+  FT-CON-011 & \ResultPass & 真实仓位归零模拟后释放 Cell，下一轮运行组重新待建仓。 \\
+  FT-CON-012 & \ResultPass & 外部平仓挂单只预留覆盖量，不提前减少 Cell 所有权。 \\
+  FT-CON-013 & \ResultPass & 外部平仓单取消后，网格退出容量自动扩回。 \\
+  FT-CON-014 & \ResultPass & 外部平仓部分成交只按已成交量缩减，剩余开放量继续预留。 \\
+  FT-CON-015 & \ResultPass & 外部退出量大于真实持仓时不修改外部单，资源池标记 order\_excess。 \\
+  FT-CON-016 & \ResultPass & 停止组退出单缺失时不补单，资源池标记 manual\_review。 \\
+  FT-CON-017 & \ResultPass & 多组持仓不足时保留有效退出单，末端 Cell 缩量并释放后续 Cell。 \\
+  FT-CON-018 & \ResultPass & 同币对 LONG/SHORT 资源池独立，退出方向分别正确。 \\
+  FT-CON-019 & \ResultPass & 撤单竞争期间模拟部分成交后，用新持仓快照重新分配。 \\
+  FT-CON-020 & \ResultPass & 低于最小数量不发模拟订单，Cell 和资源池进入人工检查。 \\
+  FT-CON-021 & \ResultPass & 持仓快照失败时不重写；恢复后下一轮修正成功。 \\
+  FT-CON-022 & \ResultPass & 平仓修复失败标记 error/manual\_review，下一轮恢复后重试成功。 \\
+  FT-CON-023 & \ResultPass & 连续一致轮询幂等，订单 ID、数量和 Cell 不变化。 \\
+  FT-CON-L01--L06 & \ResultSkipped & 需要真实挂单、人工删单或人工平仓；按本轮安全约束未执行。 \\
+  \bottomrule
+\end{longtable}
+
+\subsection{恢复、故障注入与负载}
+
+\begin{longtable}{p{2.8cm}p{2.1cm}p{9.9cm}}
+  \toprule
+  用例 & 判定 & 实际结果与缺口 \\
+  \midrule
+  \endhead
+  FT-REC-001 & \ResultPartial & Supervisor 单 PID 与配置锁通过，开放建仓单幂等通过；未执行真实子进程强制终止后的完整 PID/heartbeat 恢复。 \\
+  FT-REC-002 & \ResultPass & 开放退出单重启恢复、持久化 open\_qty 缺失退出单补建均通过。 \\
+  FT-REC-003 & \ResultPartial & 已成交但订单不可查询时禁止重复建仓并标记 unassigned 已通过；“交易所接受且开放、响应丢失后按 client ID 恢复”尚无专门注入测试。 \\
+  FT-REC-004 & \ResultSkipped & 尚无 SQLite 写入前后故障注入点，本轮未执行；列为迁移前覆盖缺口。 \\
+  FT-REC-005 & \ResultPartial & 持仓快照失败、市场同步失败和下一轮恢复已通过；429/5xx 退避节奏尚未单独验证。 \\
+  FT-REC-006 & \ResultSkipped & 需要测试服务器/整机操作，本地未执行。 \\
+  FT-LOAD-001 & \ResultPass & 50 组乘 5 Cell 单币对：250 个唯一 client ID；测试 0.630 秒，最大 RSS 36,667,392 字节（约 35.0 MiB）。 \\
+  FT-LOAD-002 & \ResultPass & 50 币对乘 5 Cell：每币对每轮一次价格和开放订单快照；测试 0.610 秒，最大 RSS 36,552,704 字节（约 34.9 MiB）。 \\
+  FT-LOAD-003 & \ResultSkipped & 需要 2U2GB 服务器连续 24 小时资源观察。 \\
+  FT-SOAK-001 & \ResultSkipped & 需要真实小额策略连续运行，按本轮约束未执行。 \\
+  \bottomrule
+\end{longtable}
+
+\subsection{Web 验收}
+
+Web 视觉测试使用临时数据库和 FakeExchange，在 8010/8110 端口执行；完成后隔离服务已关闭，浏览器恢复到原 8000 页面。
+
+\begin{longtable}{p{2.8cm}p{2.1cm}p{9.9cm}}
+  \toprule
+  用例 & 判定 & 实际结果与证据 \\
+  \midrule
+  \endhead
+  FT-WEB-001 & \ResultPass & 总览 14 列完整展示；页面根宽度与滚动宽度均为 1102，无页面横向滚动；做多 rgb(34,197,94)，做空 rgb(239,68,68)，未启动为白色。 \\
+  FT-WEB-002 & \ResultPass & 空表单提示正确；SOLUSDT 做多 0.5\%、5 格预览范围 97.5100--100.0000；创建后为未启动且订单数为 0。 \\
+  FT-WEB-003 & \ResultPartial & 草稿比例由 0.50\% 编辑为 0.75\% 成功；预置 has\_started 的多空策略编辑按钮禁用，停止后仍禁用；真实首次启动按要求未执行。 \\
+  FT-WEB-004 & \ResultPass & 隔离策略停止后另一组继续运行；草稿归档和永久删除成功；停止后 Cell 与模拟订单 ID 未被清除。 \\
+  FT-WEB-005 & \ResultFail & 详情下拉、颜色、3小时19分格式和实时价格插入位置正确；但总览币对链接点击后 URL 不变，且当前价格行文字在第一列被截断。 \\
+  FT-WEB-006 & \ResultFail & AppTest 验证买入/卖出文案和成交次数数据正确；但 1102 像素视口只显示到“买入”列，“卖出”和“成交次数”不可见，未满足全表展示要求。 \\
+  FT-E2E-001 & \ResultSkipped & 涉及 Web 启动真实策略、真实挂单和成交闭环，按本轮安全约束未执行。 \\
+  \bottomrule
+\end{longtable}
+
+\subsection{前端异常场景补测}
+
+本组 9 项使用 AppTest 与进程内本地 HTTP Stub。所有请求都指向随机本地端口；未加载币安密钥，未连接真实后端。启动失败场景只向 Stub 发送一次 \texttt{/start} 并得到预设 503，Stub 不含交易所客户端。
+
+\begin{longtable}{p{3.2cm}p{2.1cm}p{9.5cm}}
+  \toprule
+  用例 & 判定 & 实际结果 \\
+  \midrule
+  \endhead
+  FT-WEB-ERR-001 & \ResultPass & 后端端口不可连接时显示“无法连接后端服务”和 FastAPI 启动指引，无未捕获异常。 \\
+  FT-WEB-ERR-002 & \ResultPass & Cell 接口返回 503 后页面保留，显示 \texttt{cells unavailable}。 \\
+  FT-WEB-ERR-003 & \ResultPass & 刷新价格返回 503 后显示 \texttt{refresh unavailable}，请求只发送一次。 \\
+  FT-WEB-ERR-004 & \ResultPass & 本地 Stub 拒绝启动后，运行开关恢复为关闭并显示 \texttt{start rejected}。 \\
+  FT-WEB-ERR-005 & \ResultPass & 无效 strategy query 自动替换为第一条现存 strategy ID，详情可继续访问。 \\
+  FT-WEB-ERR-006 & \ResultPass & 50 组策略总览在测试时限内完成，50 个运行开关和筛选开关均无 Widget Key 冲突。 \\
+  FT-WEB-ERR-007 & \ResultFail & 策略数据缺少 \texttt{mode} 时 \texttt{normalize\_strategy} 抛出 KeyError，页面出现未捕获异常。 \\
+  FT-WEB-ERR-008 & \ResultFail & \texttt{/strategies} 返回 200 HTML 时 requests JSONDecodeError 未转换为 GridApiError，页面出现未捕获异常。 \\
+  FT-WEB-ERR-009 & \ResultFail & 会话中残留旧 preview/payload 后重新打开新增对话框，新表单为空但仍显示旧范围和“确认创建”按钮。 \\
+  \bottomrule
+\end{longtable}
+
+\subsection{缺陷与后续门槛}
+
+\begin{longtable}{p{2.8cm}p{2.2cm}p{9.8cm}}
+  \toprule
+  缺陷编号 & 严重度 & 描述与建议 \\
+  \midrule
+  \endhead
+  WEB-DEF-001 & 中 & 总览币对链接包含正确 \texttt{?strategy=} href，但 Playwright 点击后不导航；直接访问同一 URL 可正常打开详情。应改为 Streamlit 原生导航或按钮回调设置 query params，并补浏览器回归。 \\
+  WEB-DEF-002 & 中 & 详情 DataFrame 总宽度超过可视区域，当前价格文本被截断，“卖出”和“成交次数”列不可见。应压缩列宽或改用可控 HTML 表格，保证不依赖横向滚动。 \\
+  WEB-DEF-003 & 高 & 新增对话框的 preview/payload 保存在全局 session state，关闭对话框时未清理；再次打开空白表单仍可确认旧配置。应给预览绑定配置摘要或版本，每次打开、字段变化及预览失败时使旧确认失效。 \\
+  WEB-DEF-004 & 中 & 2xx 非 JSON 或策略对象缺字段会产生未捕获异常。Web client 应统一转换响应解析错误，前端规范化前应校验结构，并保留可重试页面。 \\
+  REC-GAP-001 & 高 & 缺少 SQLite 写入失败前后和订单响应丢失但交易所已接受的专门故障注入。进入旧数据迁移前应补测试。 \\
+  REC-GAP-002 & 中 & 缺少 429/5xx 退避节奏与上限验证。 \\
+  \bottomrule
+\end{longtable}
+
+本轮结论：P1 自动回归、P2 API、本地一致性矩阵和模拟负载可作为通过基线；P3 的非下单部分通过。由于 Web 存在 FAIL、恢复故障注入仍有缺口，且 P4/P5/P7 实盘与长时间观察未执行，\textbf{当前不满足旧 CSV 数据迁移的最终准入条件}。

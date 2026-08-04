@@ -1,0 +1,152 @@
+{
+  "fixture_id": "binance-coinm-authenticated-aaveusd_perp-long-2026-07-28",
+  "source_kind": "authenticated_account_capture",
+  "captured_at": "2026-07-28T12:46:33.673487+00:00",
+  "api_product": "Binance COIN-M Futures",
+  "api_versions": {
+    "account": "dapi-v1",
+    "position_risk": "dapi-v1",
+    "leverage_bracket": "dapi-v2",
+    "exchange_info": "dapi-v1"
+  },
+  "source_origin": "https://testnet.binancefuture.com",
+  "request_window": {
+    "server_time_start": 1785242792467,
+    "server_time_end": 1785242793736,
+    "duration_ms": 1269,
+    "request_order": [
+      "exchangeInfo",
+      "account",
+      "positionRisk",
+      "leverageBracket"
+    ]
+  },
+  "capture_validation": {
+    "settlement_field_precision": "1E-8",
+    "derived_balance_tolerance": "2E-8",
+    "margin_balance_identity_delta": "0E-8",
+    "available_balance_identity_delta": "0E-8"
+  },
+  "limitations": [
+    "Responses are sequential, not an atomic exchange snapshot.",
+    "The fixture is valid only for the captured symbol, margin mode, maintenance schedule, and API versions.",
+    "Higher maintenance tiers require a separately reviewed unit conversion before they are loaded into the Runtime."
+  ],
+  "instrument": "AAVEUSD_PERP",
+  "position_side": "LONG",
+  "contract_size": "10",
+  "margin_asset": "AAVE",
+  "notional_asset": "USD",
+  "symbol_metadata": {
+    "symbol": "AAVEUSD_PERP",
+    "pair": "AAVEUSD",
+    "contractType": "PERPETUAL",
+    "contractSize": 10,
+    "baseAsset": "AAVE",
+    "quoteAsset": "USD",
+    "marginAsset": "AAVE",
+    "pricePrecision": 3,
+    "quantityPrecision": 0
+  },
+  "platform_account_asset": {
+    "asset": "AAVE",
+    "walletBalance": "1.00000000",
+    "unrealizedProfit": "0.00103516",
+    "marginBalance": "1.00103516",
+    "maintMargin": "0.00255649",
+    "initialMargin": "0.01022600",
+    "positionInitialMargin": "0.01022600",
+    "openOrderInitialMargin": "0.00000000",
+    "availableBalance": "0.99080916",
+    "crossWalletBalance": "1.00000000",
+    "crossUnPnl": "0.00103516"
+  },
+  "platform_account_position": {
+    "symbol": "AAVEUSD_PERP",
+    "positionSide": "LONG",
+    "positionAmt": "1",
+    "entryPrice": "96.81000000",
+    "unrealizedProfit": "0.00103516",
+    "initialMargin": "0.01022600",
+    "positionInitialMargin": "0.01022600",
+    "openOrderInitialMargin": "0",
+    "maintMargin": "0.00255649",
+    "leverage": "10",
+    "isolated": false,
+    "updateTime": 1785242090940
+  },
+  "platform_position_risk": {
+    "symbol": "AAVEUSD_PERP",
+    "positionSide": "LONG",
+    "positionAmt": "1",
+    "entryPrice": "96.81000000",
+    "markPrice": "97.78000000",
+    "unRealizedProfit": "0.00102471",
+    "liquidationPrice": "9.29035203",
+    "leverage": "10",
+    "maxQty": "750.0",
+    "marginType": "cross",
+    "isolatedMargin": "0.00000000",
+    "isAutoAddMargin": "false",
+    "updateTime": 1785242090940
+  },
+  "maintenance_schedule": {
+    "symbol": "AAVEUSD_PERP",
+    "notional_coef": "1",
+    "raw_brackets": [
+      {
+        "bracket": 1,
+        "initialLeverage": 20,
+        "qtyCap": 500,
+        "qtyFloor": 0,
+        "maintMarginRatio": 0.025,
+        "cum": 0.0
+      },
+      {
+        "bracket": 2,
+        "initialLeverage": 10,
+        "qtyCap": 750,
+        "qtyFloor": 500,
+        "maintMarginRatio": 0.05,
+        "cum": 12.5
+      },
+      {
+        "bracket": 3,
+        "initialLeverage": 5,
+        "qtyCap": 1500,
+        "qtyFloor": 750,
+        "maintMarginRatio": 0.1,
+        "cum": 50.0
+      },
+      {
+        "bracket": 4,
+        "initialLeverage": 4,
+        "qtyCap": 3000,
+        "qtyFloor": 1500,
+        "maintMarginRatio": 0.125,
+        "cum": 87.5
+      },
+      {
+        "bracket": 5,
+        "initialLeverage": 2,
+        "qtyCap": 5000,
+        "qtyFloor": 3000,
+        "maintMarginRatio": 0.25,
+        "cum": 462.5
+      },
+      {
+        "bracket": 6,
+        "initialLeverage": 1,
+        "qtyCap": 100000,
+        "qtyFloor": 5000,
+        "maintMarginRatio": 0.5,
+        "cum": 1712.5
+      }
+    ]
+  },
+  "absolute_tolerances": {
+    "AAVE": "0.00000001",
+    "USD": "0.01",
+    "PRICE": "0.010"
+  }
+}

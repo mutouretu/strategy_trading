@@ -1,0 +1,42 @@
+\section{2026-07-17 Binance Testnet 单链业务验收记录}
+
+\subsection{范围与隔离边界}
+
+本轮只验收单策略、单方向、单 Cell、单次建仓和平仓闭环，不包含多组耦合、故障注入、服务器性能或经营层 HLT。全部真实订单均发往 \texttt{testnet.binancefuture.com}，交易对为 UNIUSDT；生产环境未连接。
+
+最终验收使用全新 SQLite \texttt{/tmp/grid-e2e-final.6i2BSZ/e2e.sqlite3}、隔离 FastAPI 端口 8110 和 Streamlit 端口 8010。最终策略参数为：做多、1 Cell、15 USDT、3 倍杠杆、0.01\% 间距、\texttt{move\_grid=false}、1 秒策略轮询和 5 秒资源池校验。
+
+\subsection{最终闭环结果}
+
+\begin{longtable}{p{3.2cm}p{2.1cm}p{9.5cm}}
+  \toprule
+  检查项 & 判定 & 实际结果与证据 \\
+  \midrule
+  \endhead
+  Web/API 配置链路 & \ResultPass & 页面已验证新增、预览、启动和详情；最终交易链为避免价格在 UI 操作期间漂移，由同一隔离 API 连续创建并启动。 \\
+  建仓 & \ResultPass & BUY \#362555609，价格 3.4730，数量 4 UNI；事件依次记录 \texttt{ENTRY\_PLACED} 和 \texttt{ENTRY\_FILLED}。 \\
+  自动平仓 & \ResultPass & 建仓确认后自动创建 SELL \#362555658，价格 3.4740，数量 4 UNI；平台成交后记录 \texttt{CYCLE\_CLOSED}。 \\
+  SQLite 状态 & \ResultPass & Cell \texttt{cycle\_count=1}，平仓后 \texttt{open\_qty=0}；事件序列中没有 \texttt{POSITION\_RESOURCE\_RELEASED}。 \\
+  资源池一致性 & \ResultPass & 平仓等待超过 48 秒期间保持 \texttt{actual=4}、\texttt{logical=4}、\texttt{status=consistent}，保护性平仓单未被误撤。 \\
+  停止语义 & \ResultPass & 首次闭环后立即停止，2 秒后状态仍为 \texttt{stopped}；在途 tick 未把策略恢复为 running。 \\
+  下一轮行为 & \ResultPass & 闭环后按连续网格语义正常创建下一轮建仓单 \#362558654；停止后由验收清场撤销。 \\
+  最终清场 & \ResultPass & UNIUSDT 开放订单为 0，LONG/SHORT 非零仓位为 0。 \\
+  自动回归 & \ResultPass & 共发现 106 项；93 项离线执行全部通过，13 项真实测试网用例由安全开关默认跳过。 \\
+  \bottomrule
+\end{longtable}
+
+\subsection{端到端过程中发现并修复的问题}
+
+\begin{longtable}{p{3.0cm}p{2.1cm}p{9.7cm}}
+  \toprule
+  编号 & 结果 & 问题与修复 \\
+  \midrule
+  \endhead
+  E2E-DEF-001 & \ResultPass & 停止或软删除与调度 tick 并发时，旧快照可能二次写状态，甚至使共享调度器退出。现已增加活动状态条件写和 tick 前后复检；停止状态不可被 heartbeat 复活，删除不影响其他组。 \\
+  E2E-DEF-002 & \ResultPass & 软删除策略为保留审计而留下的 Cell 曾继续占用逻辑仓位，污染新策略资源池。现已将软删除 Cell 排除；停止和归档组仍按设计保留资源。 \\
+  E2E-SAFE-001 & \ResultPass & 新建仓订单成交与持仓快照可能跨周期可见。新增 \texttt{GRID\_POSITION\_SETTLEMENT\_GRACE\_SEC}，默认 15 秒；结算期只记录 \texttt{settling}，不做破坏性缩量或释放。 \\
+  E2E-OBS-001 & \ResultPass & 1 Cell 且 \texttt{move\_grid=true} 时，价格持续上移、旧 Cell 已持仓会使移动窗口新增 Cell。这是移动网格语义，不适合作为单链夹具，因此最终验收显式使用 \texttt{move\_grid=false}。 \\
+  \bottomrule
+\end{longtable}
+
+本轮结论：\textbf{UNIUSDT 做多单链业务已从 API、SQLite、共享调度器到 Binance Testnet 完成一次真实建仓和平仓闭环，满足进入多组合耦合测试的前置条件。}

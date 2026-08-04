@@ -1,0 +1,74 @@
+\section{目标、范围与责任边界}
+
+\subsection{测试目标}
+
+本方案用于在迁移旧 CSV 数据之前，验证以下链路能够稳定收敛：
+
+\begin{center}
+前端操作 $\rightarrow$ FastAPI $\rightarrow$ SQLite $\rightarrow$ 共享调度器
+$\rightarrow$ Binance USD-M $\rightarrow$ 订单/持仓回写 $\rightarrow$ 前端展示
+\end{center}
+
+核心验收目标：
+
+\begin{enumerate}
+  \item 做多、做空触发式网格的配置、预览、启动、停止与不可逆锁定正确。
+  \item 建仓单、平仓单与真实持仓在轮询后自动收敛，不能重复建仓或超额平仓。
+  \item 平台手动删单、手动平仓、外部平仓单和服务重启后，系统行为安全且可解释。
+  \item 50 组、每组约 5 个 Cell 时，单进程调度在 2U2GB 服务器目标下保持轻量。
+  \item 所有实盘用例均有前置检查、最小金额、停止条件和清理步骤。
+\end{enumerate}
+
+\subsection{本轮范围}
+
+\begin{itemize}
+  \item Binance USD-M Futures，双向持仓模式（Hedge Mode）。
+  \item 做多和做空，不包含双向策略组合，不包含 COIN-M。
+  \item SQLite、单共享调度器、FastAPI 与现有 Streamlit 原型。
+  \item 测试币对默认使用 \texttt{1000LUNCUSDT}，实盘单笔名义价值约 10 USDT。
+  \item 当前旧程序的 CSV、运行中策略和订单映射不在本轮导入。
+\end{itemize}
+
+\subsection{不在本轮范围}
+
+\begin{itemize}
+  \item 旧 CSV 到 SQLite 的正式迁移及历史利润统计。
+  \item COIN-M、跨账户、多交易所、资金划转、提现功能。
+  \item 对账户现存旧策略仓位执行全账户自动纠偏。
+  \item 极端行情下的收益保证；本方案只验证功能与一致性，不验证策略盈利能力。
+\end{itemize}
+
+\subsection{执行责任标识}
+
+\begin{longtable}{p{2.4cm}p{3.2cm}p{8.5cm}}
+  \toprule
+  标识 & 执行者 & 说明 \\
+  \midrule
+  \endhead
+  \OwnerAuto & Codex 自动完成 & 临时数据库、FakeExchange、UT/LLT、API TestClient、编译、静态检查和非破坏性本地进程测试。无需人工点击。 \\
+  \OwnerLive & Codex 受控实盘 & Codex 可调用币安 API 完成只读查询、\texttt{/order/test} 和已明确授权的小额开平仓。每次真实资金动作必须有用户明确授权。 \\
+  \OwnerHuman & 人工完成 & 必须在币安网页、服务器控制台或浏览器中完成的操作，例如确认 API 权限、手动删单、人工平仓、视觉验收和 24/72 小时观察。 \\
+  \OwnerJoint & 人机联合 & 人工制造外部状态变化，Codex 监控 API、SQLite、事件和轮询结果并判定是否收敛。 \\
+  \bottomrule
+\end{longtable}
+
+\subsection{环境与安全前置条件}
+
+\begin{enumerate}
+  \item 使用独立测试数据库，例如 \texttt{runtime/functional-test.sqlite3}，不得直接使用迁移后的生产数据库。
+  \item 运行前确认测试币对在 LONG 和 SHORT 方向均无既有仓位、无既有挂单；否则停止测试。
+  \item API Key 只保留下单和读取权限，禁止提现权限；IP 白名单由人工在币安页面确认。
+  \item \texttt{.env} 必须被 Git 忽略，日志和测试证据不得包含 API Key、Secret 或完整账户余额。
+  \item 实盘用例默认 10 USDT 名义价值，测试结束必须回查持仓和挂单均为 0。
+  \item 发现不明仓位、重复订单、无法撤单、API 连续超时或资源池状态为 \texttt{error/order\_excess} 时立即停止后续实盘步骤。
+\end{enumerate}
+
+\subsection{当前打通状态}
+
+\begin{enumerate}
+  \item Streamlit 的总览、详情、预览、新增、编辑、启停、刷新、归档和删除均已改为调用 FastAPI，不再保存会话内模拟策略；同币对多组策略按 \texttt{strategy\_id} 区分。
+  \item FastAPI、共享调度器、单策略 Worker 和币安测试脚本已使用同一个 \texttt{.env} 加载入口；shell 已导出的变量优先，错误和健康检查不返回密钥值。
+  \item 使用隔离 SQLite 和 FakeExchange 的本地 HTTP 链路已验证列表、预览、创建、编辑、刷新、Cell 详情和删除；Streamlit 页面测试已验证总览、详情导航及同币对多组切换。
+\end{enumerate}
+
+2026-07-17 已使用 Codex App 内置浏览器和 Playwright 完成无真实订单的页面验收，并在隔离 FakeExchange 环境验证运行中多空展示、停止、归档和删除；随后补充 9 项本地 Stub 前端异常场景，自动回归总数增至 84 项。当前剩余工作包括修复页面显示、旧预览残留和异常响应崩溃，补齐部分恢复故障注入，以及经用户单独授权后执行的真实策略和人工一致性用例。未实际执行的实盘用例仍不能视为通过。
