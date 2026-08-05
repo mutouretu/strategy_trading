@@ -1,0 +1,36 @@
+{
+  "schema_version": "market-scenario/v1",
+  "scenario_id": "eth-delayed-bull-v1",
+  "name": "ETH 延迟牛市",
+  "description": "前两年保持宽幅震荡，最后一年才快速突破历史高位",
+  "origin": "SYNTHETIC",
+  "asset_profile_id": "eth-24x7/v1",
+  "instrument": "ETHUSD_PERP",
+  "horizon": {"start": "2026-08-01", "end": "2029-08-01"},
+  "interval": "1h",
+  "model": {
+    "type": "anchored-regime-bridge/v1",
+    "price_quantum": "0.01",
+    "periods_per_year": 365,
+    "substeps_per_bar": 6
+  },
+  "anchors": [
+    {"date": "2026-08-01", "target": {"type": "HARD", "price": "1859.83"}},
+    {"date": "2027-08-01", "target": {"type": "BAND", "minimum": "1200", "maximum": "2400"}},
+    {"date": "2028-08-01", "target": {"type": "BAND", "minimum": "1400", "maximum": "2800"}},
+    {"date": "2029-04-01", "target": {"type": "BAND", "minimum": "5500", "maximum": "9000"}},
+    {"date": "2029-08-01", "target": {"type": "BAND", "minimum": "4500", "maximum": "7500"}}
+  ],
+  "volatility_regimes": [
+    {"start": "2026-08-01", "end_exclusive": "2027-08-01", "annual_volatility": {"minimum": "0.60", "maximum": "0.90"}},
+    {"start": "2027-08-01", "end_exclusive": "2028-08-01", "annual_volatility": {"minimum": "0.60", "maximum": "0.90"}},
+    {"start": "2028-08-01", "end_exclusive": "2029-04-01", "annual_volatility": {"minimum": "0.80", "maximum": "1.20"}},
+    {"start": "2029-04-01", "end_exclusive": "2029-08-01", "annual_volatility": {"minimum": "0.70", "maximum": "1.05"}}
+  ],
+  "status": "LOCKED",
+  "metadata": {
+    "family": "DELAYED_BULL",
+    "thesis": "研究假设，不是价格预测",
+    "starting_price_source": "Binance ETHUSD_PERP 2026-07-31 23:59 UTC close"
+  }
+}

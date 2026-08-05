@@ -1,0 +1,38 @@
+{
+  "schema_version": "market-scenario/v1",
+  "scenario_id": "eth-early-bull-crash-v1",
+  "name": "ETH 提前牛市后暴跌",
+  "description": "较早突破历史高位，随后发生高贝塔暴跌并部分恢复",
+  "origin": "SYNTHETIC",
+  "asset_profile_id": "eth-24x7/v1",
+  "instrument": "ETHUSD_PERP",
+  "horizon": {"start": "2026-08-01", "end": "2029-08-01"},
+  "interval": "1h",
+  "model": {
+    "type": "anchored-regime-bridge/v1",
+    "price_quantum": "0.01",
+    "periods_per_year": 365,
+    "substeps_per_bar": 6
+  },
+  "anchors": [
+    {"date": "2026-08-01", "target": {"type": "HARD", "price": "1859.83"}},
+    {"date": "2027-04-01", "target": {"type": "BAND", "minimum": "4500", "maximum": "7500"}},
+    {"date": "2027-10-01", "target": {"type": "BAND", "minimum": "6500", "maximum": "10000"}},
+    {"date": "2028-04-01", "target": {"type": "BAND", "minimum": "1400", "maximum": "2500"}},
+    {"date": "2029-02-01", "target": {"type": "BAND", "minimum": "3000", "maximum": "5500"}},
+    {"date": "2029-08-01", "target": {"type": "BAND", "minimum": "2500", "maximum": "4500"}}
+  ],
+  "volatility_regimes": [
+    {"start": "2026-08-01", "end_exclusive": "2027-04-01", "annual_volatility": {"minimum": "0.80", "maximum": "1.20"}},
+    {"start": "2027-04-01", "end_exclusive": "2027-10-01", "annual_volatility": {"minimum": "0.90", "maximum": "1.30"}},
+    {"start": "2027-10-01", "end_exclusive": "2028-04-01", "annual_volatility": {"minimum": "1.00", "maximum": "1.45"}},
+    {"start": "2028-04-01", "end_exclusive": "2029-02-01", "annual_volatility": {"minimum": "0.70", "maximum": "1.05"}},
+    {"start": "2029-02-01", "end_exclusive": "2029-08-01", "annual_volatility": {"minimum": "0.65", "maximum": "1.00"}}
+  ],
+  "status": "LOCKED",
+  "metadata": {
+    "family": "EARLY_BULL_CRASH",
+    "thesis": "研究假设，不是价格预测",
+    "starting_price_source": "Binance ETHUSD_PERP 2026-07-31 23:59 UTC close"
+  }
+}

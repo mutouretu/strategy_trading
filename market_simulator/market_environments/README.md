@@ -14,6 +14,11 @@ generated/       # 由配置重建的 Parquet，本地生成且不进入 Git
 BTC 美元价格，包含 6 个场景和 96 条小时路径。真实起点 `62,794.3` 来自 Binance
 COIN-M `BTCUSD_PERP` 2026-07-31 23:59 UTC 分钟收盘价。
 
+`eth-three-year-market-baseline-v1` 使用相同三年边界和角色数量，另有 6 个 ETH 场景
+与 96 条小时路径。真实起点 `1,859.83` 来自 Binance COIN-M `ETHUSD_PERP`
+2026-07-31 23:59 UTC 分钟收盘价；其 Anchor 和波动率按 ETH 自身尺度定义，不是把
+BTC 路径按价格比例缩放。
+
 在仓库根目录执行：
 
 ```bash
@@ -22,6 +27,9 @@ packages/market_simulator/src:\
 packages/simulation_runtime/src:\
 packages/experiment_system/src \
 python3 scripts/materialize_market_path_set.py
+
+python3 scripts/materialize_market_path_set.py \
+  market_environments/path_sets/eth-three-year-market-baseline-v1.json
 ```
 
 相同配置、模型版本和 Seed 会得到相同身份。脚本发现已有相同内容锁时保持幂等；内容

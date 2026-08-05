@@ -1,0 +1,20 @@
+{
+  "schema_version": "market-path-set/v1",
+  "path_set_id": "eth-three-year-market-baseline-v1",
+  "description": "ETH 三年长期市场基线：六类宏观场景与分离的 TRAIN、VALIDATION、HOLDOUT Seed",
+  "asset_profile_path": "../asset_profiles/eth-24x7-v1.json",
+  "scenarios": [
+    {"scenario_id": "eth-base-bull-v1", "path": "../scenarios/eth-base-bull-v1.json"},
+    {"scenario_id": "eth-delayed-bull-v1", "path": "../scenarios/eth-delayed-bull-v1.json"},
+    {"scenario_id": "eth-deep-bear-then-bull-v1", "path": "../scenarios/eth-deep-bear-then-bull-v1.json"},
+    {"scenario_id": "eth-early-bull-crash-v1", "path": "../scenarios/eth-early-bull-crash-v1.json"},
+    {"scenario_id": "eth-long-range-v1", "path": "../scenarios/eth-long-range-v1.json"},
+    {"scenario_id": "eth-thesis-failure-v1", "path": "../scenarios/eth-thesis-failure-v1.json"}
+  ],
+  "roles": {
+    "TRAIN": [1201, 1202, 1203, 1204, 1205, 1206, 1207, 1208],
+    "VALIDATION": [2201, 2202, 2203, 2204],
+    "HOLDOUT": [3201, 3202, 3203, 3204]
+  },
+  "status": "LOCKED"
+}

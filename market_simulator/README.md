@@ -48,10 +48,11 @@ market_protocol
 分段波动率和时间范围，`anchored-regime-bridge/v1` 再按固定 Seed 生成连续的小时
 OHLC。策略只能逐 Bar 读取 `MarketFrame`，不会获得未来 Anchor 或场景阶段。
 
-首版 `btc-three-year-market-baseline-v1` 已锁定 6 类三年 BTC 场景，并为每类场景
-生成 8 个 TRAIN、4 个 VALIDATION、4 个 HOLDOUT Seed，共 96 条路径。正式定义和
-内容锁位于 `market_environments/`，可复现 Parquet 位于被 Git 忽略的 `generated/`。
-生成方式与目录边界见 [market_environments/README.md](market_environments/README.md)。
+`btc-three-year-market-baseline-v1` 和 `eth-three-year-market-baseline-v1` 分别定义
+6 类三年 BTC/ETH 场景，并为每类场景生成 8 个 TRAIN、4 个 VALIDATION、4 个
+HOLDOUT Seed；两个 PathSet 共 192 条路径。正式定义和内容锁位于
+`market_environments/`，可复现 Parquet 位于被 Git 忽略的 `generated/`。生成方式与
+目录边界见 [market_environments/README.md](market_environments/README.md)。
 
 ## 当前执行语义
 

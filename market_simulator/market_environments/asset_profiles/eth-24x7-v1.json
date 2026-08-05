@@ -1,0 +1,19 @@
+{
+  "schema_version": "asset-profile/v1",
+  "profile_id": "eth-24x7/v1",
+  "name": "ETH 24×7 市场",
+  "calendar": "24x7",
+  "periods_per_year": 365,
+  "price_quantum": "0.01",
+  "default_interval": "1h",
+  "metadata": {
+    "asset": "ETH",
+    "timezone": "UTC",
+    "description": "连续交易的 ETH 价格参考，不包含交易所订单簿和资金费",
+    "reference_price": "1859.83",
+    "reference_timestamp": "2026-07-31T23:59:00Z",
+    "reference_source": "Binance COIN-M ETHUSD_PERP 1m monthly archive",
+    "reference_archive": "ETHUSD_PERP-1m-2026-07.zip",
+    "reference_archive_sha256": "d71f014b80f59b8146c1c3a89934a88c63db1c32aab051850f4be8e6c87c59f5"
+  }
+}

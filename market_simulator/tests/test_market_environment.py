@@ -91,30 +91,68 @@ def scenario(*, volatility: str = "0.6") -> MarketScenario:
 
 
 class MarketEnvironmentSchemaTests(unittest.TestCase):
-    def test_locked_catalog_contains_six_scenarios_and_ninety_six_paths(self) -> None:
-        path_set_path = (
-            ENVIRONMENTS
-            / "path_sets"
-            / "btc-three-year-market-baseline-v1.json"
+    def test_locked_catalog_contains_btc_and_eth_path_sets(self) -> None:
+        definitions = (
+            (
+                "btc-three-year-market-baseline-v1.json",
+                "btc-24x7/v1",
+                "BTCUSD_PERP",
+                Decimal("62794.3"),
+            ),
+            (
+                "eth-three-year-market-baseline-v1.json",
+                "eth-24x7/v1",
+                "ETHUSD_PERP",
+                Decimal("1859.83"),
+            ),
         )
-        path_set = load_market_path_set(path_set_path)
-        profile = load_asset_profile(
-            (path_set_path.parent / path_set.asset_profile_path).resolve()
-        )
-        self.assertEqual(profile.profile_id, "btc-24x7/v1")
-        self.assertEqual(len(path_set.scenarios), 6)
-        self.assertEqual(path_set.path_count, 96)
-        self.assertEqual(len(path_set.role_seeds[MarketPathRole.TRAIN]), 8)
-        self.assertEqual(len(path_set.role_seeds[MarketPathRole.VALIDATION]), 4)
-        self.assertEqual(len(path_set.role_seeds[MarketPathRole.HOLDOUT]), 4)
-        for reference in path_set.scenarios:
-            loaded = load_market_scenario(
-                (path_set_path.parent / reference.path).resolve()
+        all_seeds: set[int] = set()
+        for filename, profile_id, instrument, initial_price in definitions:
+            path_set_path = ENVIRONMENTS / "path_sets" / filename
+            path_set = load_market_path_set(path_set_path)
+            profile = load_asset_profile(
+                (path_set_path.parent / path_set.asset_profile_path).resolve()
             )
-            self.assertEqual(loaded.scenario_id, reference.scenario_id)
-            self.assertEqual(loaded.asset_profile_id, profile.profile_id)
-            self.assertEqual((loaded.end - loaded.start).days, 1096)
-            self.assertEqual(loaded.anchors[0].target.price, Decimal("62794.3"))
+            self.assertEqual(profile.profile_id, profile_id)
+            self.assertEqual(len(path_set.scenarios), 6)
+            self.assertEqual(path_set.path_count, 96)
+            self.assertEqual(len(path_set.role_seeds[MarketPathRole.TRAIN]), 8)
+            self.assertEqual(
+                len(path_set.role_seeds[MarketPathRole.VALIDATION]),
+                4,
+            )
+            self.assertEqual(
+                len(path_set.role_seeds[MarketPathRole.HOLDOUT]),
+                4,
+            )
+            seeds = {
+                seed
+                for role_seeds in path_set.role_seeds.values()
+                for seed in role_seeds
+            }
+            self.assertTrue(all_seeds.isdisjoint(seeds))
+            all_seeds.update(seeds)
+            for reference in path_set.scenarios:
+                loaded = load_market_scenario(
+                    (path_set_path.parent / reference.path).resolve()
+                )
+                self.assertEqual(loaded.scenario_id, reference.scenario_id)
+                self.assertEqual(loaded.asset_profile_id, profile.profile_id)
+                self.assertEqual(loaded.instrument, instrument)
+                self.assertEqual((loaded.end - loaded.start).days, 1096)
+                self.assertEqual(
+                    loaded.anchors[0].target.price,
+                    initial_price,
+                )
+
+        eth_profile = load_asset_profile(
+            ENVIRONMENTS / "asset_profiles" / "eth-24x7-v1.json"
+        )
+        self.assertEqual(eth_profile.metadata["reference_price"], "1859.83")
+        self.assertEqual(
+            eth_profile.metadata["reference_archive_sha256"],
+            "d71f014b80f59b8146c1c3a89934a88c63db1c32aab051850f4be8e6c87c59f5",
+        )
 
     def test_unknown_fields_and_strategy_content_are_rejected(self) -> None:
         document = scenario().to_document()
