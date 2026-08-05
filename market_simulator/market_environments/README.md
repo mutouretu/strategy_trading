@@ -28,3 +28,23 @@ python3 scripts/materialize_market_path_set.py
 变化时拒绝静默覆盖。需要改变市场判断时应建立新版本，不能直接刷新已用于研究的锁。
 
 HOLDOUT 会随 Path Set 一起物化，但在策略研究阶段禁止展示完整路径或运行策略。
+
+## 查看路径
+
+PathSet 不需要先运行策略实验即可进入 Viewer。统一仓库中从策略系统启动只读结果服务：
+
+```bash
+cd ../../strategies_system
+PYTHONPATH=src python3 -m strategy_simulation \
+  serve-results experiments/experiment_results \
+  --viewer-root ../market_simulator/viewer \
+  --port 8088
+```
+
+打开 `http://127.0.0.1:8088/experiments.html?page=market-overview`。页面按六个
+Scenario 展示 PathSet，可分别切换 TRAIN、VALIDATION、Seed、周线和月线，并显示
+期初/期末价格、区间高低点、最大回撤及实现波动率。
+
+服务端从 Manifest 解析路径身份，读取时再次校验 Parquet 的文件哈希和内容哈希，再在
+内存中聚合周线或月线。HOLDOUT 只返回场景、Seed、路径 ID 和锁定状态；价格、画像及
+Parquet 内容接口在最终样本外验收前统一返回 `403`。

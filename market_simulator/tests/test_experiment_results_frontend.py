@@ -65,6 +65,8 @@ class ExperimentResultsFrontendTests(unittest.TestCase):
             self.assertIn(f'data-page="{page}"', html)
             self.assertIn(f'data-page-panel="{page}"', html)
         self.assertIn('id="market-chart"', html)
+        self.assertIn('id="market-role-select"', html)
+        self.assertIn('id="market-profile-facts"', html)
         self.assertIn('data-interval="1w"', html)
         self.assertIn('data-interval="1m"', html)
         self.assertIn('id="detail-scenario-select"', html)
@@ -93,6 +95,9 @@ class ExperimentResultsFrontendTests(unittest.TestCase):
         self.assertIn('request("/api/components")', script)
         self.assertIn("Model.scenarioRows(record)", script)
         self.assertIn("Model.aggregateBars(", script)
+        self.assertIn("Model.pathSetMarkets(state.pathSets)", script)
+        self.assertIn('request("/api/market-path-sets")', script)
+        self.assertIn("HOLDOUT 路径已经物化并锁定", script)
         self.assertIn("renderExperimentOverview()", script)
         self.assertIn("loadSelectedRun()", script)
         self.assertIn('make(\n        "details",', script)
@@ -109,6 +114,7 @@ class ExperimentResultsFrontendTests(unittest.TestCase):
         )
         self.assertIn("strategyDescriptors.forEach", model)
         self.assertIn("runs: []", model)
+        self.assertIn("function pathSetMarkets(pathSets)", model)
 
 
 if __name__ == "__main__":

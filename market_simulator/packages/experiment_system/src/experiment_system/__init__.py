@@ -4,6 +4,7 @@ from .errors import (
     DuplicateProviderError,
     ExperimentConfigError,
     ExperimentError,
+    ExperimentAccessError,
     ExperimentRepositoryConflictError,
     ExperimentRepositoryError,
     ExperimentRepositoryIntegrityError,
@@ -69,6 +70,7 @@ from .market_data import (
     ParquetMarketStore,
     market_content_hash,
 )
+from .market_path_catalog import MarketPathSetCatalog
 from .metric_storage import ExperimentMetricStore
 from .payloads import (
     TRACE_COMPRESSION,
@@ -107,6 +109,7 @@ __all__ = [
     "ComponentSpec",
     "DuplicateProviderError",
     "ExperimentConfigError",
+    "ExperimentAccessError",
     "ExperimentControls",
     "ExperimentError",
     "ExperimentManifest",
@@ -126,6 +129,7 @@ __all__ = [
     "OutputSpec",
     "MARKET_DATASET_SCHEMA_VERSION",
     "MarketReference",
+    "MarketPathSetCatalog",
     "ParameterAxis",
     "PreparedRun",
     "ProviderRegistry",

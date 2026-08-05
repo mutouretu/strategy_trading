@@ -13,6 +13,10 @@ class ExperimentValidationError(ExperimentError, ValueError):
     """A structurally valid experiment cannot be planned safely."""
 
 
+class ExperimentAccessError(ExperimentError, PermissionError):
+    """A read-only resource exists but its disclosure is forbidden."""
+
+
 class UnknownProviderError(ExperimentValidationError, LookupError):
     """The experiment references a provider that was not registered."""
 

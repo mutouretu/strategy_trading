@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .comparison import ExperimentCatalog, RunQuery
 from .errors import (
+    ExperimentAccessError,
     ExperimentRepositoryError,
     ExperimentValidationError,
 )
@@ -21,6 +22,7 @@ from .exports import (
     comparison_table,
     viewer_document,
 )
+from .market_path_catalog import MarketPathSetCatalog
 
 
 def default_viewer_root() -> Path:
@@ -93,11 +95,13 @@ class ExperimentReadHandler(SimpleHTTPRequestHandler):
         self,
         *args,
         catalog: ExperimentCatalog,
+        market_path_catalog: MarketPathSetCatalog,
         component_descriptors: tuple[dict[str, object], ...],
         directory: str,
         **kwargs,
     ) -> None:
         self.catalog = catalog
+        self.market_path_catalog = market_path_catalog
         self.component_descriptors = component_descriptors
         super().__init__(*args, directory=directory, **kwargs)
 
@@ -166,6 +170,8 @@ class ExperimentReadHandler(SimpleHTTPRequestHandler):
                 ),
                 parse_qs(parsed.query, keep_blank_values=True),
             )
+        except ExperimentAccessError as exc:
+            self._send_error_json(403, str(exc))
         except ExperimentRepositoryError as exc:
             self._send_error_json(404, str(exc))
         except ExperimentValidationError as exc:
@@ -198,6 +204,30 @@ class ExperimentReadHandler(SimpleHTTPRequestHandler):
                     "items": self.component_descriptors,
                     "total": len(self.component_descriptors),
                 },
+            )
+            return
+        if parts == ("api", "market-path-sets"):
+            path_sets = self.market_path_catalog.path_sets()
+            self._send_json(
+                200,
+                {
+                    "items": path_sets,
+                    "total": len(path_sets),
+                },
+            )
+            return
+        if (
+            len(parts) == 5
+            and parts[:2] == ("api", "market-path-sets")
+            and parts[3] == "paths"
+        ):
+            self._send_json(
+                200,
+                self.market_path_catalog.path_document(
+                    parts[2],
+                    parts[4],
+                    interval=_single(query, "interval") or "1w",
+                ),
             )
             return
         if len(parts) < 3 or parts[:2] != ("api", "experiments"):
@@ -307,6 +337,7 @@ def create_read_server(
     result_root: str | Path,
     *,
     viewer_root: str | Path | None = None,
+    market_environment_root: str | Path | None = None,
     component_descriptors: tuple[dict[str, object], ...] = (),
     host: str = "127.0.0.1",
     port: int = 8088,
@@ -317,9 +348,11 @@ def create_read_server(
             f"Viewer root does not exist: {root}"
         )
     catalog = ExperimentCatalog(result_root)
+    market_path_catalog = MarketPathSetCatalog(market_environment_root)
     handler = partial(
         ExperimentReadHandler,
         catalog=catalog,
+        market_path_catalog=market_path_catalog,
         component_descriptors=component_descriptors,
         directory=str(root),
     )
@@ -330,6 +363,7 @@ def serve_results(
     result_root: str | Path,
     *,
     viewer_root: str | Path | None = None,
+    market_environment_root: str | Path | None = None,
     component_descriptors: tuple[dict[str, object], ...] = (),
     host: str = "127.0.0.1",
     port: int = 8088,
@@ -337,6 +371,7 @@ def serve_results(
     server = create_read_server(
         result_root,
         viewer_root=viewer_root,
+        market_environment_root=market_environment_root,
         component_descriptors=component_descriptors,
         host=host,
         port=port,

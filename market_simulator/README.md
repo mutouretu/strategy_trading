@@ -185,13 +185,16 @@ python -m experiment_system purge-traces experiment.sqlite3 --confirm
 
 ```bash
 python -m experiment_system serve-results experiment_results \
-  --viewer-root viewer --port 8088
+  --viewer-root viewer \
+  --market-environment-root market_environments \
+  --port 8088
 ```
 
 访问 `http://127.0.0.1:8088/`。结果页可以查看 ExperimentSpec、代码版本、
 RunSpec、状态、参数、Trace/归档状态，并从数据库动态展开任意 Provider 的原始
 Summary 标量和已经持久化的指标。页面自身不实现指标公式，也不提供创建、运行、
-重跑、归档或清理操作。
+重跑、归档或清理操作。配置 `--market-environment-root` 后，市场环境页还会直接读取
+已锁定 PathSet；该入口不要求路径已经参与实验。
 
 显式导出比较表或某个 Run 的标准 Viewer JSON：
 

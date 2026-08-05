@@ -183,6 +183,10 @@ PYTHONPATH=src python3 -m strategy_simulation \
 
 浏览器打开 `http://127.0.0.1:8088/experiments.html`。
 
+`strategy_simulation serve-results` 会自动注册统一仓库中的
+`market_simulator/market_environments`。因此市场环境页可以在未运行策略实验时直接浏览
+TRAIN、VALIDATION 的长期 PathSet；HOLDOUT 只显示锁定身份，不披露价格路径。
+
 ## 明确不在 v1 内的内容
 
 - 不修改实盘 `server`；

@@ -25,7 +25,7 @@ from strategy_simulation.registry import (
     SimulationStrategyBuildContext,
     SimulationStrategyRegistry,
 )
-from strategy_simulation.cli import participating_code_revisions
+from strategy_simulation.cli import main, participating_code_revisions
 
 
 def account():
@@ -80,6 +80,20 @@ def component() -> ComponentSpec:
 
 
 class StrategySimulationTests(unittest.TestCase):
+    def test_result_server_registers_monorepo_market_environment_root(self):
+        with patch(
+            "strategy_simulation.cli.experiment_main",
+            return_value=0,
+        ) as experiment_main:
+            self.assertEqual(main(["serve-results", "results"]), 0)
+        arguments = experiment_main.call_args.args[0]
+        option_index = arguments.index("--market-environment-root")
+        self.assertTrue(
+            arguments[option_index + 1].endswith(
+                "market_simulator/market_environments"
+            )
+        )
+
     def test_provenance_uses_one_monorepo_revision(self):
         expected = {"strategy_trading": object()}
         with patch(

@@ -181,7 +181,7 @@
           <div class="page-intro">
             <div>
               <h2>市场环境</h2>
-              <p>市场配置定义大势与生成模型，Seed 对应一条确定的价格路径。</p>
+              <p>直接浏览已锁定 PathSet；实验记录只说明哪些策略使用过这些路径。</p>
             </div>
             <div class="interval-switch" id="market-interval-switch">
               <button data-interval="1w" class="active" type="button">周线</button>
@@ -198,12 +198,19 @@
                   <h2 id="market-chart-title">选择一个市场环境</h2>
                   <p id="market-chart-description">—</p>
                 </div>
-                <label>
-                  价格路径
-                  <select id="market-path-select"></select>
-                </label>
+                <div class="market-path-controls">
+                  <label>
+                    数据角色
+                    <select id="market-role-select"></select>
+                  </label>
+                  <label>
+                    价格路径
+                    <select id="market-path-select"></select>
+                  </label>
+                </div>
               </div>
               <div id="market-parameter-chips" class="parameter-chips"></div>
+              <div id="market-profile-facts" class="market-profile-facts"></div>
               <div class="overview-chart-wrap">
                 <svg id="market-chart" viewBox="0 0 1200 520" role="img" aria-label="市场环境整体 K 线"></svg>
                 <div id="market-chart-empty" class="chart-empty">选择价格路径后载入 K 线</div>

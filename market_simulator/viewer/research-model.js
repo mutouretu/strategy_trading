@@ -165,6 +165,7 @@
         if (!marketMap.has(marketId)) {
           marketMap.set(marketId, {
             id: marketId,
+            source: "EXPERIMENT",
             key: market.key,
             type: market.type,
             parameters: market.parameters,
@@ -181,6 +182,7 @@
         const pathKey = run.market_path_id || `${run.seed}:${run.run_id}`;
         if (!marketEntry.paths.has(pathKey)) {
           marketEntry.paths.set(pathKey, {
+            source: "EXPERIMENT",
             market_path_id: run.market_path_id,
             seed: run.seed,
             experiment_id: record.experiment.experiment_id,
@@ -215,6 +217,44 @@
       left.key.localeCompare(right.key) || left.type.localeCompare(right.type),
     );
     return {records, strategies, markets};
+  }
+
+  function pathSetMarkets(pathSets) {
+    return (pathSets || []).flatMap((pathSet) =>
+      (pathSet.scenarios || []).map((scenario) => ({
+        id: `path-set:${pathSet.path_set_id}:${scenario.scenario_id}`,
+        source: "PATH_SET",
+        key: scenario.name || scenario.scenario_id,
+        type: `PathSet · ${pathSet.path_set_id}`,
+        description: scenario.description || pathSet.description || "",
+        parameters: {
+          instrument: scenario.instrument,
+          interval: scenario.interval,
+          model_type: scenario.model?.type,
+          horizon_start: scenario.horizon?.start,
+          horizon_end: scenario.horizon?.end,
+          status: pathSet.status,
+        },
+        role_counts: scenario.role_counts || {},
+        definition: scenario,
+        path_set: {
+          path_set_id: pathSet.path_set_id,
+          status: pathSet.status,
+          reproducible: pathSet.reproducible,
+          lock_fingerprint: pathSet.lock_fingerprint,
+          holdout_policy: pathSet.holdout_policy,
+        },
+        paths: (scenario.paths || []).map((path) => ({
+          ...path,
+          source: "PATH_SET",
+          seed: path.market_seed,
+          path_set_id: pathSet.path_set_id,
+        })),
+        experiments: [],
+        strategies: [],
+        runs: [],
+      })),
+    );
   }
 
   function scenarioRows(record) {
@@ -283,6 +323,7 @@
     aggregateBars,
     buildCatalog,
     decorateRecord,
+    pathSetMarkets,
     resolvedParameters,
     scenarioRows,
     stableJson,

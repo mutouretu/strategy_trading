@@ -96,6 +96,7 @@ def _parser() -> argparse.ArgumentParser:
     serve = subparsers.add_parser("serve-results")
     serve.add_argument("result_root", type=Path)
     serve.add_argument("--viewer-root", type=Path)
+    serve.add_argument("--market-environment-root", type=Path)
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8088)
     return parser
@@ -257,6 +258,7 @@ def main(
             serve_results(
                 arguments.result_root,
                 viewer_root=arguments.viewer_root,
+                market_environment_root=arguments.market_environment_root,
                 component_descriptors=providers.component_descriptors,
                 host=arguments.host,
                 port=arguments.port,

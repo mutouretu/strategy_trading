@@ -16,9 +16,11 @@
     records: [],
     strategies: [],
     markets: [],
+    pathSets: [],
     page: "strategy-overview",
     strategyId: null,
     marketId: null,
+    marketRole: null,
     marketInterval: "1w",
     marketDocument: null,
     detailExperimentId: null,
@@ -52,8 +54,10 @@
     marketIntervalSwitch: byId("market-interval-switch"),
     marketTitle: byId("market-chart-title"),
     marketDescription: byId("market-chart-description"),
+    marketRoleSelect: byId("market-role-select"),
     marketPathSelect: byId("market-path-select"),
     marketChips: byId("market-parameter-chips"),
+    marketProfileFacts: byId("market-profile-facts"),
     marketChart: byId("market-chart"),
     marketChartEmpty: byId("market-chart-empty"),
     experimentGroups: byId("experiment-groups"),
@@ -438,6 +442,17 @@
   }
 
   function marketDescription(market) {
+    if (market.source === "PATH_SET") {
+      const roles = market.role_counts || {};
+      return [
+        market.parameters?.instrument || "未指定标的",
+        market.parameters?.interval || "原始周期",
+        market.parameters?.model_type || "未指定模型",
+        `TRAIN ${roles.TRAIN || 0}`,
+        `VALIDATION ${roles.VALIDATION || 0}`,
+        `HOLDOUT ${roles.HOLDOUT || 0}`,
+      ].join(" · ");
+    }
     const instrument = market.parameters?.instrument || "未指定标的";
     const interval = market.parameters?.interval || "原始周期";
     const anchors = Array.isArray(market.parameters?.anchors)
@@ -454,7 +469,11 @@
       button.classList.toggle("active", market.id === state.marketId);
       button.append(
         make("strong", "", market.key),
-        make("span", "", market.type),
+        make(
+          "span",
+          market.source === "PATH_SET" ? "source-path-set" : "",
+          market.type,
+        ),
         make("span", "", marketDescription(market)),
       );
       button.addEventListener("click", () => selectMarket(market.id));
@@ -462,7 +481,7 @@
     });
     if (!state.markets.length) {
       elements.marketList.append(
-        make("div", "empty-cell", "结果目录中还没有市场环境"),
+        make("div", "empty-cell", "尚未发现 PathSet 或实验市场环境"),
       );
     }
   }
@@ -475,6 +494,104 @@
         make("span", "parameter-chip", `${key}: ${simpleValue(value)}`),
       );
     });
+    if (market.source === "PATH_SET") {
+      elements.marketChips.prepend(
+        make(
+          "span",
+          "parameter-chip path-set-chip",
+          `PathSet: ${market.path_set.path_set_id}`,
+        ),
+      );
+    }
+  }
+
+  function roleLabel(role) {
+    if (role === "TRAIN") return "TRAIN · 训练研究";
+    if (role === "VALIDATION") return "VALIDATION · 参数验证";
+    if (role === "HOLDOUT") return "HOLDOUT · 最终样本外锁定";
+    return "EXPERIMENT · 已运行实验";
+  }
+
+  function marketRoles(market) {
+    const order = ["TRAIN", "VALIDATION", "HOLDOUT", "EXPERIMENT"];
+    return [...new Set((market.paths || []).map(
+      (path) => path.role || "EXPERIMENT",
+    ))].sort((left, right) => order.indexOf(left) - order.indexOf(right));
+  }
+
+  function pathsForSelectedRole(market) {
+    return (market?.paths || []).filter(
+      (path) => (path.role || "EXPERIMENT") === state.marketRole,
+    );
+  }
+
+  function marketPathValue(path) {
+    return path.source === "PATH_SET"
+      ? path.market_path_id
+      : `${path.experiment_id}:${path.run_id}`;
+  }
+
+  function selectedMarketPath() {
+    return pathsForSelectedRole(selectedMarket()).find(
+      (path) => marketPathValue(path) === elements.marketPathSelect.value,
+    );
+  }
+
+  function renderMarketPathOptions(market, selectedValue = null) {
+    const paths = pathsForSelectedRole(market);
+    replaceOptions(
+      elements.marketPathSelect,
+      paths.map((path) => option(
+        marketPathValue(path),
+        path.availability === "LOCKED"
+          ? `Seed ${path.seed} · 已锁定 · ${shortId(path.market_path_id)}`
+          : `Seed ${path.seed} · ${shortId(path.market_path_id)}`,
+      )),
+      selectedValue,
+    );
+    elements.marketPathSelect.disabled = !paths.length;
+  }
+
+  function profileStat(label, value, detail = "") {
+    const card = make("div", "market-profile-stat");
+    card.append(make("span", "", label), make("strong", "", value));
+    if (detail) card.append(make("small", "", detail));
+    return card;
+  }
+
+  function renderMarketProfile(path) {
+    elements.marketProfileFacts.replaceChildren();
+    if (!path) return;
+    if (path.availability === "LOCKED") {
+      elements.marketProfileFacts.append(
+        profileStat("数据角色", "HOLDOUT", "仅保留身份与数量"),
+        profileStat("Seed", path.seed, shortId(path.market_path_id)),
+        profileStat("价格走势", "已锁定", "最终样本外验收前不可读取"),
+        profileStat("策略运行", "禁止", "不参与研究和调参"),
+      );
+      return;
+    }
+    if (!path.market_profile) {
+      elements.marketProfileFacts.append(
+        profileStat("Seed", path.seed, shortId(path.market_path_id)),
+        profileStat("数据来源", "实验 Trace", path.experiment_id || "—"),
+        profileStat("Trace", path.trace_state || "—", path.run_id || "—"),
+      );
+      return;
+    }
+    const profile = path.market_profile || {};
+    elements.marketProfileFacts.append(
+      profileStat("Seed", path.seed, shortId(path.market_path_id)),
+      profileStat("期初价格", formatNumber(profile.initial_price, 1)),
+      profileStat("期末价格", formatNumber(profile.final_price, 1)),
+      profileStat("区间最低", formatNumber(profile.minimum_low, 1)),
+      profileStat("区间最高", formatNumber(profile.maximum_high, 1)),
+      profileStat("最大回撤", formatRatio(profile.max_drawdown_rate)),
+      profileStat(
+        "实现波动率",
+        formatRatio(profile.annualized_realized_volatility),
+      ),
+    );
   }
 
   async function selectMarket(marketId, {load = true} = {}) {
@@ -484,39 +601,66 @@
     renderMarketList();
     if (!market) return;
     elements.marketTitle.textContent = market.key;
-    elements.marketDescription.textContent = `${market.type} · ${marketDescription(market)}`;
+    elements.marketDescription.textContent = market.description
+      || `${market.type} · ${marketDescription(market)}`;
     renderMarketParameters(market);
+    const roles = marketRoles(market);
+    state.marketRole = roles.includes(state.marketRole)
+      ? state.marketRole
+      : roles[0] || null;
     replaceOptions(
-      elements.marketPathSelect,
-      market.paths.map((path) =>
-        option(
-          `${path.experiment_id}:${path.run_id}`,
-          `Seed ${path.seed} · ${shortId(path.market_path_id)}`,
-        ),
-      ),
+      elements.marketRoleSelect,
+      roles.map((role) => option(role, roleLabel(role))),
+      state.marketRole,
     );
+    elements.marketRoleSelect.disabled = !roles.length;
+    renderMarketPathOptions(market);
+    renderMarketProfile(selectedMarketPath());
     if (load && market.paths.length) await loadMarketPath();
   }
 
   async function loadMarketPath() {
     const market = selectedMarket();
     if (!market) return;
-    const [experimentId, runId] = elements.marketPathSelect.value.split(":");
-    const path = market.paths.find(
-      (item) => item.experiment_id === experimentId && item.run_id === runId,
-    );
+    const path = selectedMarketPath();
     if (!path) return;
+    renderMarketProfile(path);
     elements.marketChartEmpty.hidden = false;
-    elements.marketChartEmpty.textContent = "正在载入价格路径…";
     elements.marketChart.replaceChildren();
+    if (path.availability === "LOCKED") {
+      state.marketDocument = null;
+      elements.marketChartEmpty.textContent =
+        "HOLDOUT 路径已经物化并锁定；最终样本外验收前不展示价格走势，也不允许运行策略。";
+      elements.marketDescription.textContent =
+        `${market.key} · HOLDOUT · Seed ${path.seed} · 内容已锁定`;
+      return;
+    }
+    elements.marketChartEmpty.textContent = "正在校验并载入价格路径…";
     try {
-      state.marketDocument = await request(
-        apiPath("experiments", experimentId, "runs", runId, "viewer"),
-      );
+      if (path.source === "PATH_SET") {
+        state.marketDocument = await request(
+          `${apiPath(
+            "market-path-sets",
+            path.path_set_id,
+            "paths",
+            path.market_path_id,
+          )}?interval=${encodeURIComponent(state.marketInterval)}`,
+        );
+      } else {
+        state.marketDocument = await request(
+          apiPath(
+            "experiments",
+            path.experiment_id,
+            "runs",
+            path.run_id,
+            "viewer",
+          ),
+        );
+      }
       renderMarketChart();
     } catch (error) {
       elements.marketChartEmpty.textContent =
-        path.trace_state === "STORED"
+        path.source === "PATH_SET" || path.trace_state === "STORED"
           ? `价格路径载入失败：${error.message}`
           : "该 Run 的 Trace 已清理，当前不能读取价格路径";
     }
@@ -532,10 +676,15 @@
 
   function renderMarketChart() {
     if (!state.marketDocument?.market?.length) return;
-    const bars = Model.aggregateBars(
-      state.marketDocument.market,
-      state.marketInterval,
+    const preAggregated = Boolean(
+      state.marketDocument.aggregation_interval,
     );
+    const bars = preAggregated
+      ? state.marketDocument.market
+      : Model.aggregateBars(
+          state.marketDocument.market,
+          state.marketInterval,
+        );
     const width = 1200;
     const height = 520;
     const margin = {left: 18, right: 82, top: 24, bottom: 42};
@@ -577,11 +726,16 @@
     elements.marketChart.innerHTML = horizontal + vertical + candles;
     elements.marketChartEmpty.hidden = true;
     const manifest = state.marketDocument.manifest || {};
+    const sourceCount = state.marketDocument.source_frame_count
+      || state.marketDocument.market.length;
+    const sourceLabel = preAggregated
+      ? `${sourceCount} 根小时 K 线`
+      : `${sourceCount} 根日线`;
     elements.marketDescription.textContent = [
-      manifest.instrument,
-      `${state.marketDocument.market.length} 根日线`,
+      manifest.instrument || bars[0].instrument,
+      sourceLabel,
       `${bars.length} 根${state.marketInterval === "1w" ? "周线" : "月线"}`,
-      `${state.marketDocument.market[0].date} — ${state.marketDocument.market.at(-1).date}`,
+      `${bars[0].date} — ${bars.at(-1).date}`,
     ].filter(Boolean).join(" · ");
   }
 
@@ -1101,9 +1255,10 @@
   async function loadCatalog() {
     elements.catalogStatus.textContent = "正在载入研究目录…";
     try {
-      const [catalog, components] = await Promise.all([
+      const [catalog, components, pathSets] = await Promise.all([
         request("/api/experiments"),
         request("/api/components"),
+        request("/api/market-path-sets"),
       ]);
       const rawRecords = await Promise.all(
         catalog.items.map(async (experiment) => {
@@ -1126,7 +1281,11 @@
       state.experiments = catalog.items;
       state.records = research.records;
       state.strategies = research.strategies;
-      state.markets = research.markets;
+      state.pathSets = pathSets.items || [];
+      state.markets = [
+        ...Model.pathSetMarkets(state.pathSets),
+        ...research.markets,
+      ];
       state.strategyId = state.strategies.some(
         (item) => item.id === state.strategyId,
       ) ? state.strategyId : state.strategies[0]?.id;
@@ -1150,7 +1309,7 @@
         0,
       );
       elements.catalogStatus.textContent =
-        `${state.strategies.length} 策略 · ${state.markets.length} 市场 · ${state.experiments.length} 实验 · ${runCount} Runs`;
+        `${state.strategies.length} 策略 · ${state.pathSets.length} PathSet / ${state.markets.length} 市场 · ${state.experiments.length} 实验 · ${runCount} Runs`;
       elements.updatedAt.textContent = `更新于 ${new Date().toLocaleTimeString("zh-CN")}`;
     } catch (error) {
       elements.catalogStatus.textContent = "研究目录载入失败";
@@ -1171,6 +1330,13 @@
       showMessage(`价格路径载入失败：${error.message}`, true),
     );
   });
+  elements.marketRoleSelect.addEventListener("change", () => {
+    state.marketRole = elements.marketRoleSelect.value;
+    renderMarketPathOptions(selectedMarket());
+    loadMarketPath().catch((error) =>
+      showMessage(`价格路径载入失败：${error.message}`, true),
+    );
+  });
   elements.marketIntervalSwitch.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-interval]");
     if (!button) return;
@@ -1178,7 +1344,14 @@
     elements.marketIntervalSwitch.querySelectorAll("button").forEach((item) =>
       item.classList.toggle("active", item === button),
     );
-    renderMarketChart();
+    const path = selectedMarketPath();
+    if (path?.source === "PATH_SET" && path.availability !== "LOCKED") {
+      loadMarketPath().catch((error) =>
+        showMessage(`价格路径载入失败：${error.message}`, true),
+      );
+    } else {
+      renderMarketChart();
+    }
   });
   elements.detailExperimentSelect.addEventListener("change", () => {
     state.detailExperimentId = elements.detailExperimentSelect.value;

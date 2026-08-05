@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from experiment_system import CodeRevision, collect_code_revisions
 from experiment_system.cli import main as experiment_main
 
-from ._bootstrap import WORKSPACE_ROOT
+from ._bootstrap import SIMULATOR_ROOT, WORKSPACE_ROOT
 from .experiment_provider import build_provider_registry
 
 
@@ -27,6 +27,16 @@ def main(
 ) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     command = arguments[0] if arguments else None
+    if (
+        command == "serve-results"
+        and "--market-environment-root" not in arguments
+    ):
+        arguments.extend(
+            [
+                "--market-environment-root",
+                str(SIMULATOR_ROOT / "market_environments"),
+            ]
+        )
     revisions = code_revisions
     if revisions is None and command in {"plan", "run"}:
         revisions = participating_code_revisions()
