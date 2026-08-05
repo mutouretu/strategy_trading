@@ -19,6 +19,9 @@ from experiment_system import (
 from market_protocol import MarketFrame
 
 
+REAL_ENVIRONMENTS = Path(__file__).resolve().parents[1] / "market_environments"
+
+
 def _timestamp(value: str) -> int:
     return int(datetime.fromisoformat(value).replace(tzinfo=UTC).timestamp() * 1000)
 
@@ -154,6 +157,36 @@ class MarketPathCatalogTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def test_repository_catalog_contains_locked_btc_and_eth_sets(self) -> None:
+        path_sets = {
+            item["path_set_id"]: item
+            for item in MarketPathSetCatalog(REAL_ENVIRONMENTS).path_sets()
+        }
+        self.assertEqual(
+            set(path_sets),
+            {
+                "btc-three-year-market-baseline-v1",
+                "eth-three-year-market-baseline-v1",
+            },
+        )
+        eth = path_sets["eth-three-year-market-baseline-v1"]
+        self.assertTrue(eth["reproducible"])
+        self.assertEqual(eth["scenario_count"], 6)
+        self.assertEqual(eth["path_count"], 96)
+        self.assertEqual(
+            eth["role_counts"],
+            {"TRAIN": 48, "VALIDATION": 24, "HOLDOUT": 24},
+        )
+        first_scenario = eth["scenarios"][0]
+        self.assertEqual(first_scenario["instrument"], "ETHUSD_PERP")
+        holdout = next(
+            path
+            for path in first_scenario["paths"]
+            if path["role"] == "HOLDOUT"
+        )
+        self.assertEqual(holdout["availability"], "LOCKED")
+        self.assertNotIn("market_profile", holdout)
 
     def test_catalog_redacts_holdout_and_aggregates_visible_paths(self) -> None:
         catalog = MarketPathSetCatalog(self.environment_root)
