@@ -13,6 +13,7 @@ from experiment_system import load_experiment_spec
 from .errors import StudyConfigError
 from .models import (
     DATASET_SPLIT_SCHEMA_VERSION,
+    MARKET_PATH_SELECTION_SCHEMA_VERSION,
     OBJECTIVE_PROFILE_SCHEMA_VERSION,
     STUDY_SCHEMA_VERSION,
     ComparisonMode,
@@ -23,6 +24,7 @@ from .models import (
     DatasetWindow,
     EligibilityConstraint,
     MetricSelector,
+    MarketPathSelectionSpec,
     ObjectiveDirection,
     ObjectiveProfile,
     ObjectiveSpec,
@@ -353,6 +355,112 @@ def load_dataset_split(path: str | Path) -> DatasetSplitSpec:
     return parse_dataset_split(_read_json(Path(path)))
 
 
+def parse_market_path_selection(
+    document: Any,
+    *,
+    source_path: str | Path | None = None,
+) -> MarketPathSelectionSpec:
+    root = _object(document, path="$market_path_selection")
+    _fields(
+        root,
+        required={
+            "schema_version",
+            "selection_id",
+            "market_environment_root",
+            "path_set_id",
+            "scenario_ids",
+            "roles",
+        },
+        optional={"description"},
+        path="$market_path_selection",
+    )
+    version = _string(
+        root["schema_version"],
+        path="$market_path_selection.schema_version",
+    )
+    if version != MARKET_PATH_SELECTION_SCHEMA_VERSION:
+        raise StudyConfigError(
+            "$market_path_selection.schema_version must be "
+            f"{MARKET_PATH_SELECTION_SCHEMA_VERSION!r}"
+        )
+    raw_scenarios = _array(
+        root["scenario_ids"],
+        path="$market_path_selection.scenario_ids",
+    )
+    raw_roles = _object(
+        root["roles"],
+        path="$market_path_selection.roles",
+    )
+    role_seeds: dict[DatasetRole, tuple[int, ...]] = {}
+    for raw_role, raw_seeds in raw_roles.items():
+        role = _enum(
+            DatasetRole,
+            raw_role,
+            path=f"$market_path_selection.roles.{raw_role}",
+        )
+        seeds = _array(
+            raw_seeds,
+            path=f"$market_path_selection.roles.{raw_role}",
+        )
+        parsed: list[int] = []
+        for index, seed in enumerate(seeds):
+            if isinstance(seed, bool) or not isinstance(seed, int):
+                raise StudyConfigError(
+                    "$market_path_selection.roles."
+                    f"{raw_role}[{index}] must be an integer"
+                )
+            parsed.append(seed)
+        role_seeds[role] = tuple(parsed)
+    raw_environment_root = _string(
+        root["market_environment_root"],
+        path="$market_path_selection.market_environment_root",
+    )
+    resolved_environment_root: Path | None = None
+    if source_path is not None:
+        source = Path(source_path).resolve()
+        candidate = Path(raw_environment_root)
+        resolved_environment_root = (
+            candidate.resolve()
+            if candidate.is_absolute()
+            else (source.parent / candidate).resolve()
+        )
+    return MarketPathSelectionSpec(
+        schema_version=version,
+        selection_id=_string(
+            root["selection_id"],
+            path="$market_path_selection.selection_id",
+        ),
+        description=_string(
+            root.get("description", ""),
+            path="$market_path_selection.description",
+        ),
+        market_environment_root=raw_environment_root,
+        path_set_id=_string(
+            root["path_set_id"],
+            path="$market_path_selection.path_set_id",
+        ),
+        scenario_ids=tuple(
+            _string(
+                value,
+                path=f"$market_path_selection.scenario_ids[{index}]",
+            )
+            for index, value in enumerate(raw_scenarios)
+        ),
+        role_seeds=role_seeds,
+        resolved_environment_root=resolved_environment_root,
+    )
+
+
+def load_market_path_selection(
+    path: str | Path,
+) -> MarketPathSelectionSpec:
+    source = Path(path).resolve()
+    return parse_market_path_selection(
+        _read_json(source),
+        source_path=source,
+    )
+
+
 def parse_study_spec(document: Any) -> StudySpec:
     root = _object(document, path="$study")
     _fields(
@@ -363,11 +471,15 @@ def parse_study_spec(document: Any) -> StudySpec:
             "strategy_family",
             "baseline_ids",
             "objective_profile",
-            "dataset_split",
             "experiment_spec_path",
             "selection_policy",
         },
-        optional={"description", "metadata"},
+        optional={
+            "description",
+            "metadata",
+            "dataset_split",
+            "market_path_selection",
+        },
         path="$study",
     )
     version = _string(root["schema_version"], path="$study.schema_version")
@@ -379,13 +491,23 @@ def parse_study_spec(document: Any) -> StudySpec:
         root["objective_profile"],
         path="$study.objective_profile",
     )
-    dataset = _object(
-        root["dataset_split"],
-        path="$study.dataset_split",
+    has_dataset = "dataset_split" in root
+    has_path_selection = "market_path_selection" in root
+    if has_dataset == has_path_selection:
+        raise StudyConfigError(
+            "$study requires exactly one of dataset_split or "
+            "market_path_selection"
+        )
+    market_reference_key = (
+        "dataset_split" if has_dataset else "market_path_selection"
+    )
+    market_reference = _object(
+        root[market_reference_key],
+        path=f"$study.{market_reference_key}",
     )
     for value, path in (
         (objective, "$study.objective_profile"),
-        (dataset, "$study.dataset_split"),
+        (market_reference, f"$study.{market_reference_key}"),
     ):
         _fields(value, required={"id", "path"}, optional=set(), path=path)
     baseline_ids = _array(root["baseline_ids"], path="$study.baseline_ids")
@@ -413,13 +535,37 @@ def parse_study_spec(document: Any) -> StudySpec:
             objective["path"],
             path="$study.objective_profile.path",
         ),
-        dataset_split_id=_string(
-            dataset["id"],
-            path="$study.dataset_split.id",
+        dataset_split_id=(
+            _string(
+                market_reference["id"],
+                path="$study.dataset_split.id",
+            )
+            if has_dataset
+            else None
         ),
-        dataset_split_path=_string(
-            dataset["path"],
-            path="$study.dataset_split.path",
+        dataset_split_path=(
+            _string(
+                market_reference["path"],
+                path="$study.dataset_split.path",
+            )
+            if has_dataset
+            else None
+        ),
+        market_path_selection_id=(
+            _string(
+                market_reference["id"],
+                path="$study.market_path_selection.id",
+            )
+            if has_path_selection
+            else None
+        ),
+        market_path_selection_path=(
+            _string(
+                market_reference["path"],
+                path="$study.market_path_selection.path",
+            )
+            if has_path_selection
+            else None
         ),
         experiment_spec_path=_string(
             root["experiment_spec_path"],
@@ -438,19 +584,37 @@ def load_study_bundle(path: str | Path) -> StudyBundle:
     study = parse_study_spec(_read_json(source))
     root = source.parent
     objective = load_objective_profile(root / study.objective_profile_path)
-    dataset = load_dataset_split(root / study.dataset_split_path)
+    dataset = (
+        load_dataset_split(root / study.dataset_split_path)
+        if study.dataset_split_path is not None
+        else None
+    )
+    market_path_selection = (
+        load_market_path_selection(root / study.market_path_selection_path)
+        if study.market_path_selection_path is not None
+        else None
+    )
     experiment = load_experiment_spec(root / study.experiment_spec_path)
     if objective.profile_id != study.objective_profile_id:
         raise StudyConfigError(
             "objective profile reference id does not match loaded profile"
         )
-    if dataset.split_id != study.dataset_split_id:
+    if dataset is not None and dataset.split_id != study.dataset_split_id:
         raise StudyConfigError(
             "dataset split reference id does not match loaded split"
+        )
+    if (
+        market_path_selection is not None
+        and market_path_selection.selection_id
+        != study.market_path_selection_id
+    ):
+        raise StudyConfigError(
+            "market path selection reference id does not match loaded selection"
         )
     return StudyBundle(
         study=study,
         objective_profile=objective,
         dataset_split=dataset,
+        market_path_selection=market_path_selection,
         experiment=experiment,
     )

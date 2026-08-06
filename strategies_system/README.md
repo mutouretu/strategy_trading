@@ -114,6 +114,27 @@ PYTHONPATH=src python3 -m strategy_optimization \
 最后两个开关只允许当前开发工作树和生成行情做调用链验收。正式研究必须使用 clean
 代码版本和 `CONTENT_LOCKED` 数据集，不能通过开关把 development 结果升级为正式结论。
 
+第四部分的锁定 PathSet 通过独立选择协议进入 Study。选择协议声明 PathSet、Scenario、
+TRAIN / VALIDATION 和 Market Seed；编译器将每条路径展开为明确的
+`locked-market-path/v1` market component。Experiment 只保留一个 Run Seed，不会再次
+生成或扰动市场路径。4E 最小烟雾实验可按以下方式复现：
+
+```bash
+PYTHONPATH=src python3 -m strategy_optimization \
+  validate research/scenario_studies/coinm_btc_long_term_pathset_smoke_v1.json
+
+PYTHONPATH=src python3 -m strategy_optimization \
+  plan research/scenario_studies/coinm_btc_long_term_pathset_smoke_v1.json
+
+PYTHONPATH=src python3 -m strategy_optimization \
+  run research/scenario_studies/coinm_btc_long_term_pathset_smoke_v1.json
+```
+
+该配置选取 `btc-long-range-v1` 的 TRAIN 1101 和 VALIDATION 2101，两条路径分别运行
+HODL 与单组跟随网格，共 4 个 Run。只有在本地已经按 Manifest 物化对应 Parquet 且
+工作树 clean 时，最后一条命令才构成可复现执行。HOLDOUT 不能写入选择协议，也会在
+编译器和市场 Provider 中再次拒绝。
+
 首个目标协议位于
 `research/protocols/coinm_btc_accumulation_v1.json`：以 BTC 权益及相对 HODL 的
 超额 BTC 为主目标。真实 `BTCUSD_PERP` 1 分钟数据的训练、验证和最终样本外边界已在

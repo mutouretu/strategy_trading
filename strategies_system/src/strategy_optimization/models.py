@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import StrEnum
+from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
@@ -17,6 +18,7 @@ from .errors import StudyConfigError
 STUDY_SCHEMA_VERSION = "strategy-study/v1"
 OBJECTIVE_PROFILE_SCHEMA_VERSION = "objective-profile/v1"
 DATASET_SPLIT_SCHEMA_VERSION = "dataset-split/v1"
+MARKET_PATH_SELECTION_SCHEMA_VERSION = "market-path-selection/v1"
 _IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -69,6 +71,99 @@ class DatasetRole(StrEnum):
     TRAIN = "TRAIN"
     VALIDATION = "VALIDATION"
     HOLDOUT = "HOLDOUT"
+
+
+@dataclass(frozen=True, slots=True)
+class MarketPathSelectionSpec:
+    """Exact, research-safe subset selected from one locked PathSet."""
+
+    selection_id: str
+    path_set_id: str
+    market_environment_root: str
+    scenario_ids: tuple[str, ...]
+    role_seeds: Mapping[DatasetRole, tuple[int, ...]]
+    description: str = ""
+    schema_version: str = MARKET_PATH_SELECTION_SCHEMA_VERSION
+    resolved_environment_root: Path | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+
+    def __post_init__(self) -> None:
+        require_identifier(self.selection_id, name="market path selection_id")
+        require_identifier(self.path_set_id, name="market path path_set_id")
+        require_text(
+            self.market_environment_root,
+            name="market_environment_root",
+        )
+        if self.schema_version != MARKET_PATH_SELECTION_SCHEMA_VERSION:
+            raise StudyConfigError(
+                "market path selection schema_version must be "
+                f"{MARKET_PATH_SELECTION_SCHEMA_VERSION!r}"
+            )
+        if not self.scenario_ids:
+            raise StudyConfigError(
+                "market path selection requires at least one scenario_id"
+            )
+        if len(self.scenario_ids) != len(set(self.scenario_ids)):
+            raise StudyConfigError(
+                "market path selection scenario_ids must be unique"
+            )
+        for scenario_id in self.scenario_ids:
+            require_identifier(scenario_id, name="market path scenario_id")
+        normalized = {
+            role: tuple(seeds)
+            for role, seeds in self.role_seeds.items()
+        }
+        allowed = {DatasetRole.TRAIN, DatasetRole.VALIDATION}
+        if not normalized or not set(normalized) <= allowed:
+            raise StudyConfigError(
+                "market path selection roles may contain only TRAIN and "
+                "VALIDATION; HOLDOUT cannot enter a development Study"
+            )
+        for role, seeds in normalized.items():
+            if not seeds:
+                raise StudyConfigError(
+                    f"market path selection {role.value} seeds must not be empty"
+                )
+            if any(
+                isinstance(seed, bool) or not isinstance(seed, int) or seed < 0
+                for seed in seeds
+            ):
+                raise StudyConfigError(
+                    f"market path selection {role.value} seeds must be "
+                    "integers >= 0"
+                )
+            if len(seeds) != len(set(seeds)):
+                raise StudyConfigError(
+                    f"market path selection {role.value} seeds must be unique"
+                )
+        object.__setattr__(
+            self,
+            "role_seeds",
+            MappingProxyType(normalized),
+        )
+        if self.resolved_environment_root is not None:
+            object.__setattr__(
+                self,
+                "resolved_environment_root",
+                self.resolved_environment_root.resolve(),
+            )
+
+    def to_document(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "selection_id": self.selection_id,
+            "description": self.description,
+            "market_environment_root": self.market_environment_root,
+            "path_set_id": self.path_set_id,
+            "scenario_ids": list(self.scenario_ids),
+            "roles": {
+                role.value: list(self.role_seeds[role])
+                for role in sorted(self.role_seeds, key=lambda item: item.value)
+            },
+        }
 
 
 class ObjectiveDirection(StrEnum):
@@ -321,8 +416,10 @@ class StudySpec:
     baseline_ids: tuple[str, ...]
     objective_profile_id: str
     objective_profile_path: str
-    dataset_split_id: str
-    dataset_split_path: str
+    dataset_split_id: str | None
+    dataset_split_path: str | None
+    market_path_selection_id: str | None
+    market_path_selection_path: str | None
     experiment_spec_path: str
     selection_policy: str
     description: str = ""
@@ -333,9 +430,36 @@ class StudySpec:
         require_identifier(self.study_id, name="study_id")
         require_text(self.strategy_family, name="strategy_family")
         require_identifier(self.objective_profile_id, name="objective_profile_id")
-        require_identifier(self.dataset_split_id, name="dataset_split_id")
         require_text(self.objective_profile_path, name="objective_profile_path")
-        require_text(self.dataset_split_path, name="dataset_split_path")
+        has_dataset = (
+            self.dataset_split_id is not None
+            or self.dataset_split_path is not None
+        )
+        has_path_selection = (
+            self.market_path_selection_id is not None
+            or self.market_path_selection_path is not None
+        )
+        if has_dataset == has_path_selection:
+            raise StudyConfigError(
+                "Study requires exactly one of dataset_split or "
+                "market_path_selection"
+            )
+        if has_dataset:
+            assert self.dataset_split_id is not None
+            assert self.dataset_split_path is not None
+            require_identifier(self.dataset_split_id, name="dataset_split_id")
+            require_text(self.dataset_split_path, name="dataset_split_path")
+        else:
+            assert self.market_path_selection_id is not None
+            assert self.market_path_selection_path is not None
+            require_identifier(
+                self.market_path_selection_id,
+                name="market_path_selection_id",
+            )
+            require_text(
+                self.market_path_selection_path,
+                name="market_path_selection_path",
+            )
         require_text(self.experiment_spec_path, name="experiment_spec_path")
         require_text(self.selection_policy, name="selection_policy")
         if self.schema_version != STUDY_SCHEMA_VERSION:
@@ -355,7 +479,7 @@ class StudySpec:
         )
 
     def to_document(self) -> dict[str, object]:
-        return {
+        document: dict[str, object] = {
             "schema_version": self.schema_version,
             "study_id": self.study_id,
             "description": self.description,
@@ -365,22 +489,73 @@ class StudySpec:
                 "id": self.objective_profile_id,
                 "path": self.objective_profile_path,
             },
-            "dataset_split": {
-                "id": self.dataset_split_id,
-                "path": self.dataset_split_path,
-            },
             "experiment_spec_path": self.experiment_spec_path,
             "selection_policy": self.selection_policy,
             "metadata": dict(self.metadata),
         }
+        if self.dataset_split_id is not None:
+            document["dataset_split"] = {
+                "id": self.dataset_split_id,
+                "path": self.dataset_split_path,
+            }
+        else:
+            document["market_path_selection"] = {
+                "id": self.market_path_selection_id,
+                "path": self.market_path_selection_path,
+            }
+        return document
 
 
 @dataclass(frozen=True, slots=True)
 class StudyBundle:
     study: StudySpec
     objective_profile: ObjectiveProfile
-    dataset_split: DatasetSplitSpec
+    dataset_split: DatasetSplitSpec | None
+    market_path_selection: MarketPathSelectionSpec | None
     experiment: ExperimentSpec
+
+    def __post_init__(self) -> None:
+        if (self.dataset_split is None) == (
+            self.market_path_selection is None
+        ):
+            raise StudyConfigError(
+                "StudyBundle requires exactly one market input protocol"
+            )
+
+    @property
+    def formal_ready(self) -> bool:
+        if self.dataset_split is not None:
+            return self.dataset_split.formal_ready
+        return True
+
+    @property
+    def market_input_id(self) -> str:
+        if self.dataset_split is not None:
+            return self.dataset_split.split_id
+        assert self.market_path_selection is not None
+        return self.market_path_selection.selection_id
+
+    @property
+    def market_input_type(self) -> str:
+        return (
+            "DATASET_SPLIT"
+            if self.dataset_split is not None
+            else "MARKET_PATH_SET"
+        )
+
+    @property
+    def market_input_status(self) -> str:
+        if self.dataset_split is not None:
+            return self.dataset_split.status.value
+        return DatasetStatus.CONTENT_LOCKED.value
+
+    def market_input_document(self) -> dict[str, object]:
+        if self.dataset_split is not None:
+            return {"dataset_split": self.dataset_split.to_document()}
+        assert self.market_path_selection is not None
+        return {
+            "market_path_selection": self.market_path_selection.to_document()
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -392,7 +567,7 @@ class CompiledStudy:
 
     @property
     def formal_ready(self) -> bool:
-        return self.bundle.dataset_split.formal_ready
+        return self.bundle.formal_ready
 
 
 @dataclass(frozen=True, slots=True)

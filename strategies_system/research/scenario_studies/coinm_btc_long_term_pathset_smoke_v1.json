@@ -1,0 +1,26 @@
+{
+  "schema_version": "strategy-study/v1",
+  "study_id": "coinm-btc-long-term-pathset-smoke-v1",
+  "description": "4E 锁定三年 PathSet 到 Experiment / Study 的最小 HODL 与单组跟随网格验收",
+  "strategy_family": "single-following-grid/v1",
+  "baseline_ids": [
+    "hold-btc/v1",
+    "single-following-grid/v1"
+  ],
+  "objective_profile": {
+    "id": "coinm-btc-accumulation-v1",
+    "path": "../protocols/coinm_btc_accumulation_v1.json"
+  },
+  "market_path_selection": {
+    "id": "btc-three-year-long-range-smoke-v1",
+    "path": "../protocols/btc_three_year_long_range_smoke_v1.json"
+  },
+  "experiment_spec_path": "../../experiments/coinm_btc_long_term_pathset_smoke_v1.json",
+  "selection_policy": "pathset-smoke-only/v1",
+  "metadata": {
+    "phase": "4E",
+    "owner": "market-environment",
+    "formal_conclusion_allowed": false,
+    "holdout_executed": false
+  }
+}

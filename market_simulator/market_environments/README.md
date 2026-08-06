@@ -37,6 +37,23 @@ python3 scripts/materialize_market_path_set.py \
 
 HOLDOUT 会随 Path Set 一起物化，但在策略研究阶段禁止展示完整路径或运行策略。
 
+## 接入 Study
+
+PathSet 自身不包含策略。`strategies_system` 通过
+`market-path-selection/v1` 协议选择 Scenario、TRAIN / VALIDATION 和 Market Seed，
+再把 Manifest 中的锁定身份编译为 `locked-market-path/v1` market component。每个
+Run 保存 `path_set_id`、Scenario、role、Market Seed、origin、内容哈希和文件哈希；
+同一路径可被 HODL、网格或其他策略复用。Experiment 使用单一 Run Seed，不重新生成
+行情。HOLDOUT 在选择协议、Study 编译器和 Provider 三层禁止执行。
+
+最小调用链配置位于：
+
+```text
+strategies_system/research/protocols/btc_three_year_long_range_smoke_v1.json
+strategies_system/research/scenario_studies/coinm_btc_long_term_pathset_smoke_v1.json
+strategies_system/experiments/coinm_btc_long_term_pathset_smoke_v1.json
+```
+
 ## 查看路径
 
 PathSet 不需要先运行策略实验即可进入 Viewer。统一仓库中从策略系统启动只读结果服务：

@@ -12,6 +12,7 @@ from experiment_system import (
 from metric_system import MetricRegistry, MetricValueType
 
 from .errors import StudyConfigError
+from .market_paths import LockedPathSetBinding, expand_path_set_markets
 from .models import (
     CompiledStudy,
     DatasetRole,
@@ -82,26 +83,30 @@ def validate_objective_profile(
             )
 
 
-def _component_strategy_types(bundle: StudyBundle) -> set[str]:
+def _component_strategy_types(experiment: ExperimentSpec) -> set[str]:
     return {
         component.type
-        for group in bundle.experiment.scenario_groups
+        for group in experiment.scenario_groups
         for component in group.strategies
     }
 
 
-def _component_market_keys(bundle: StudyBundle) -> set[str]:
+def _component_market_keys(experiment: ExperimentSpec) -> set[str]:
     return {
         component.key
-        for group in bundle.experiment.scenario_groups
+        for group in experiment.scenario_groups
         for component in group.markets
     }
 
 
-def _validate_bundle(bundle: StudyBundle, registry: MetricRegistry) -> None:
+def _validate_bundle(
+    bundle: StudyBundle,
+    experiment: ExperimentSpec,
+    registry: MetricRegistry,
+) -> None:
     study = bundle.study
     profile = bundle.objective_profile
-    strategy_types = _component_strategy_types(bundle)
+    strategy_types = _component_strategy_types(experiment)
     if study.strategy_family not in strategy_types:
         raise StudyConfigError(
             f"strategy_family {study.strategy_family!r} is not present in "
@@ -118,59 +123,86 @@ def _validate_bundle(bundle: StudyBundle, registry: MetricRegistry) -> None:
             "objective profile baseline_strategy_type must be included in "
             "Study baseline_ids"
         )
-    market_keys = _component_market_keys(bundle)
+    market_keys = _component_market_keys(experiment)
     markets_by_key = {
         component.key: component
-        for group in bundle.experiment.scenario_groups
+        for group in experiment.scenario_groups
         for component in group.markets
     }
-    for role in (DatasetRole.TRAIN, DatasetRole.VALIDATION):
-        window = bundle.dataset_split.window(role)
-        required_key = window.market_key
-        if required_key not in market_keys:
-            raise StudyConfigError(
-                f"ExperimentSpec is missing {role.value} market "
-                f"{required_key!r}"
-            )
-        if bundle.dataset_split.formal_ready:
-            actual_content_hash = markets_by_key[
-                required_key
-            ].parameters.get("content_sha256")
-            if actual_content_hash != window.content_sha256:
+    if bundle.dataset_split is not None:
+        for role in (DatasetRole.TRAIN, DatasetRole.VALIDATION):
+            window = bundle.dataset_split.window(role)
+            required_key = window.market_key
+            if required_key not in market_keys:
                 raise StudyConfigError(
-                    f"Experiment market {required_key!r} content_sha256 "
-                    "does not match its CONTENT_LOCKED dataset window"
+                    f"ExperimentSpec is missing {role.value} market "
+                    f"{required_key!r}"
                 )
-    holdout_key = bundle.dataset_split.window(DatasetRole.HOLDOUT).market_key
-    if holdout_key in market_keys:
-        raise StudyConfigError(
-            f"final HOLDOUT market {holdout_key!r} must not be present in "
-            "a parameter-development Study"
-        )
-    for group in bundle.experiment.scenario_groups:
+            if bundle.dataset_split.formal_ready:
+                actual_content_hash = markets_by_key[
+                    required_key
+                ].parameters.get("content_sha256")
+                if actual_content_hash != window.content_sha256:
+                    raise StudyConfigError(
+                        f"Experiment market {required_key!r} content_sha256 "
+                        "does not match its CONTENT_LOCKED dataset window"
+                    )
+        holdout_key = bundle.dataset_split.window(
+            DatasetRole.HOLDOUT
+        ).market_key
+        if holdout_key in market_keys:
+            raise StudyConfigError(
+                f"final HOLDOUT market {holdout_key!r} must not be present in "
+                "a parameter-development Study"
+            )
+        expected_instrument = bundle.dataset_split.instrument
+    else:
+        if any(
+            component.parameters.get("role") == DatasetRole.HOLDOUT.value
+            for component in markets_by_key.values()
+        ):
+            raise StudyConfigError(
+                "HOLDOUT market paths cannot enter a parameter-development Study"
+            )
+        instruments = {
+            str(component.parameters.get("instrument"))
+            for component in markets_by_key.values()
+        }
+        if len(instruments) != 1:
+            raise StudyConfigError(
+                "one PathSet Study must resolve to exactly one instrument"
+            )
+        expected_instrument = next(iter(instruments))
+    for group in experiment.scenario_groups:
         for component in group.markets:
             instrument = component.parameters.get("instrument")
             if (
                 instrument is not None
-                and str(instrument) != bundle.dataset_split.instrument
+                and str(instrument) != expected_instrument
             ):
                 raise StudyConfigError(
                     f"market {component.key!r} instrument {instrument!r} "
-                    f"does not match dataset instrument "
-                    f"{bundle.dataset_split.instrument!r}"
+                    f"does not match Study instrument "
+                    f"{expected_instrument!r}"
                 )
     validate_objective_profile(bundle, registry)
 
 
-def _bundle_documents(bundle: StudyBundle) -> tuple[dict[str, object], dict[str, object]]:
+def _bundle_documents(
+    bundle: StudyBundle,
+    experiment: ExperimentSpec,
+    path_binding: LockedPathSetBinding | None,
+) -> tuple[dict[str, object], dict[str, object]]:
     study_document = {
         "study": bundle.study.to_document(),
-        "experiment": experiment_spec_to_document(bundle.experiment),
+        "experiment": experiment_spec_to_document(experiment),
     }
     protocol_document = {
         "objective_profile": bundle.objective_profile.to_document(),
-        "dataset_split": bundle.dataset_split.to_document(),
+        **bundle.market_input_document(),
     }
+    if path_binding is not None:
+        protocol_document["locked_path_set_binding"] = path_binding.to_document()
     return study_document, protocol_document
 
 
@@ -208,8 +240,19 @@ def compile_study(
 ) -> CompiledStudy:
     """Validate research semantics and enrich an existing ExperimentSpec."""
 
-    _validate_bundle(bundle, metric_registry)
-    study_document, protocol_document = _bundle_documents(bundle)
+    template = bundle.experiment
+    path_binding: LockedPathSetBinding | None = None
+    if bundle.market_path_selection is not None:
+        template, path_binding = expand_path_set_markets(
+            template,
+            bundle.market_path_selection,
+        )
+    _validate_bundle(bundle, template, metric_registry)
+    study_document, protocol_document = _bundle_documents(
+        bundle,
+        template,
+        path_binding,
+    )
     metric_bindings = _metric_definition_bindings(bundle, metric_registry)
     protocol_document["metric_definition_bindings"] = metric_bindings
     study_fingerprint = sha256_document(study_document)
@@ -224,13 +267,33 @@ def compile_study(
         "study_fingerprint": study_fingerprint,
         "protocol_fingerprint": protocol_fingerprint,
         "objective_profile_id": bundle.objective_profile.profile_id,
-        "dataset_split_id": bundle.dataset_split.split_id,
-        "dataset_status": bundle.dataset_split.status.value,
-        "formal_ready": bundle.dataset_split.formal_ready,
+        "market_input_type": bundle.market_input_type,
+        "market_input_id": bundle.market_input_id,
+        "market_input_status": bundle.market_input_status,
+        "formal_ready": bundle.formal_ready,
         "selection_policy": bundle.study.selection_policy,
         "metric_definition_bindings": metric_bindings,
     }
-    template = bundle.experiment
+    if bundle.dataset_split is not None:
+        metadata["strategy_study"]["dataset_split_id"] = (
+            bundle.dataset_split.split_id
+        )
+        metadata["strategy_study"]["dataset_status"] = (
+            bundle.dataset_split.status.value
+        )
+    else:
+        assert bundle.market_path_selection is not None
+        assert path_binding is not None
+        metadata["strategy_study"]["market_path_selection_id"] = (
+            bundle.market_path_selection.selection_id
+        )
+        metadata["strategy_study"]["path_set_id"] = path_binding.path_set_id
+        metadata["strategy_study"]["path_set_lock_fingerprint"] = (
+            path_binding.lock_fingerprint
+        )
+        metadata["strategy_study"]["selected_path_count"] = len(
+            path_binding.components
+        )
     experiment = ExperimentSpec(
         experiment_id=template.experiment_id,
         scenario_groups=template.scenario_groups,

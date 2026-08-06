@@ -1,0 +1,14 @@
+{
+  "schema_version": "market-path-selection/v1",
+  "selection_id": "btc-three-year-long-range-smoke-v1",
+  "description": "4E 最小长期烟雾选择：长期宽幅震荡场景各取一条 TRAIN 和 VALIDATION 路径",
+  "market_environment_root": "../../../market_simulator/market_environments",
+  "path_set_id": "btc-three-year-market-baseline-v1",
+  "scenario_ids": [
+    "btc-long-range-v1"
+  ],
+  "roles": {
+    "TRAIN": [1101],
+    "VALIDATION": [2101]
+  }
+}

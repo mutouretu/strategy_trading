@@ -12,6 +12,7 @@ import strategy_optimization  # noqa: F401 - activates local checkout imports
 
 from experiment_system import (
     CodeRevision,
+    ComponentSpec,
     ExperimentMetricStore,
     ExperimentManifest,
     ParquetMarketStore,
@@ -28,12 +29,14 @@ from strategy_optimization import (
     StudyRepositoryConflictError,
     build_baseline_report,
     load_dataset_split,
+    parse_market_path_selection,
     load_study_bundle,
     plan_study,
     validate_study,
 )
 from strategy_optimization.compiler import compile_study
 from strategy_simulation.experiment_provider import build_provider_registry
+from strategy_simulation.components import build_market_source
 from strategy_simulation.metrics.registry import build_metric_registry
 
 
@@ -56,6 +59,26 @@ FORMAL_STUDY_PATH = (
     / "scenario_studies"
     / "coinm_btc_formal_baseline_v1.json"
 )
+PATHSET_STUDY_PATH = (
+    PROJECT_ROOT
+    / "research"
+    / "scenario_studies"
+    / "coinm_btc_long_term_pathset_smoke_v1.json"
+)
+PATHSET_MARKET_PATHS = (
+    PROJECT_ROOT.parent
+    / "market_simulator"
+    / "market_environments"
+    / "generated"
+    / "btc-three-year-market-baseline-v1"
+    / "5d60fc7a3439f467d33c.parquet",
+    PROJECT_ROOT.parent
+    / "market_simulator"
+    / "market_environments"
+    / "generated"
+    / "btc-three-year-market-baseline-v1"
+    / "1f26deaa84d6ae10f420.parquet",
+)
 FORMAL_MARKET_PATHS = (
     PROJECT_ROOT / "experiments" / "market_data" / "dd600d70d192eed7e7b2.parquet",
     PROJECT_ROOT / "experiments" / "market_data" / "f03afa63d9c3bc9d400e.parquet",
@@ -77,6 +100,116 @@ def build_plan():
 
 
 class StudySchemaAndPlanningTests(unittest.TestCase):
+    def test_4e_pathset_selection_compiles_explicit_locked_markets(self) -> None:
+        bundle = load_study_bundle(PATHSET_STUDY_PATH)
+        compiled = compile_study(
+            bundle,
+            metric_registry=build_metric_registry(),
+        )
+        self.assertIsNone(bundle.dataset_split)
+        self.assertIsNotNone(bundle.market_path_selection)
+        self.assertTrue(compiled.formal_ready)
+        markets = compiled.experiment.scenario_groups[0].markets
+        self.assertEqual(len(markets), 2)
+        self.assertEqual(
+            {market.type for market in markets},
+            {"locked-market-path/v1"},
+        )
+        self.assertEqual(
+            {market.parameters["role"] for market in markets},
+            {"TRAIN", "VALIDATION"},
+        )
+        self.assertEqual(
+            {market.parameters["origin"] for market in markets},
+            {"SYNTHETIC"},
+        )
+        self.assertEqual(
+            {market.parameters["market_seed"] for market in markets},
+            {1101, 2101},
+        )
+        self.assertEqual(compiled.experiment.seeds, (0,))
+        metadata = compiled.experiment.metadata["strategy_study"]
+        self.assertEqual(metadata["market_input_type"], "MARKET_PATH_SET")
+        self.assertEqual(
+            metadata["path_set_id"],
+            "btc-three-year-market-baseline-v1",
+        )
+        self.assertEqual(metadata["selected_path_count"], 2)
+        self.assertEqual(len(metadata["path_set_lock_fingerprint"]), 64)
+
+    def test_pathset_selection_schema_rejects_holdout(self) -> None:
+        with self.assertRaisesRegex(ValueError, "HOLDOUT"):
+            parse_market_path_selection(
+                {
+                    "schema_version": "market-path-selection/v1",
+                    "selection_id": "bad-holdout-selection",
+                    "market_environment_root": "market_environments",
+                    "path_set_id": "btc-three-year-market-baseline-v1",
+                    "scenario_ids": ["btc-long-range-v1"],
+                    "roles": {"HOLDOUT": [3101]},
+                }
+            )
+
+    def test_pathset_selection_cannot_relabel_a_holdout_seed_as_train(self) -> None:
+        bundle = load_study_bundle(PATHSET_STUDY_PATH)
+        selection = bundle.market_path_selection
+        assert selection is not None
+        bad_bundle = replace(
+            bundle,
+            market_path_selection=replace(
+                selection,
+                role_seeds={DatasetRole.TRAIN: (3101,)},
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "TRAIN does not contain seeds"):
+            compile_study(
+                bad_bundle,
+                metric_registry=build_metric_registry(),
+            )
+
+    def test_locked_market_component_rechecks_manifest_identity(self) -> None:
+        compiled = compile_study(
+            load_study_bundle(PATHSET_STUDY_PATH),
+            metric_registry=build_metric_registry(),
+        )
+        market = compiled.experiment.scenario_groups[0].markets[0]
+        tampered = ComponentSpec(
+            key=market.key,
+            type=market.type,
+            parameters={
+                **dict(market.parameters),
+                "manifest_sha256": "0" * 64,
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "manifest SHA-256 mismatch"):
+            build_market_source(tampered)
+
+    @unittest.skipUnless(
+        all(path.is_file() for path in PATHSET_MARKET_PATHS),
+        "materialize the ignored 4E PathSet Parquet files first",
+    )
+    def test_4e_pathset_study_plans_four_runs_without_reseeding_market(self) -> None:
+        plan = plan_study(
+            load_study_bundle(PATHSET_STUDY_PATH),
+            provider_registry=build_provider_registry(),
+            metric_registry=build_metric_registry(),
+            code_revisions=REVISIONS,
+        )
+        self.assertEqual(plan.run_count, 4)
+        self.assertEqual({run.seed for run in plan.experiment_plan.runs}, {0})
+        path_ids = [
+            run.configuration.market.parameters["market_path_id"]
+            for run in plan.experiment_plan.runs
+        ]
+        self.assertEqual(len(set(path_ids)), 2)
+        self.assertTrue(all(path_ids.count(path_id) == 2 for path_id in set(path_ids)))
+        self.assertFalse(
+            any(
+                run.configuration.market.parameters["role"] == "HOLDOUT"
+                for run in plan.experiment_plan.runs
+            )
+        )
+
     def test_6a_scaffold_is_eight_runs_and_excludes_holdout(self) -> None:
         bundle = load_study_bundle(STUDY_PATH)
         report = validate_study(

@@ -28,6 +28,8 @@ class StudyValidationReport:
     protocol_fingerprint: str
     dataset_status: str
     formal_ready: bool
+    market_input_type: str
+    market_input_id: str
 
 
 def validate_study(
@@ -45,8 +47,10 @@ def validate_study(
         run_count=report.run_count,
         study_fingerprint=compiled.study_fingerprint,
         protocol_fingerprint=compiled.protocol_fingerprint,
-        dataset_status=bundle.dataset_split.status.value,
+        dataset_status=bundle.market_input_status,
         formal_ready=compiled.formal_ready,
+        market_input_type=bundle.market_input_type,
+        market_input_id=bundle.market_input_id,
     )
 
 
@@ -71,7 +75,9 @@ def study_plan_to_document(plan: StudyPlan) -> dict[str, object]:
         "study_id": plan.compiled.bundle.study.study_id,
         "study_fingerprint": plan.compiled.study_fingerprint,
         "protocol_fingerprint": plan.compiled.protocol_fingerprint,
-        "dataset_status": plan.compiled.bundle.dataset_split.status.value,
+        "dataset_status": plan.compiled.bundle.market_input_status,
+        "market_input_type": plan.compiled.bundle.market_input_type,
+        "market_input_id": plan.compiled.bundle.market_input_id,
         "formal_ready": plan.compiled.formal_ready,
         "candidate_count": plan.candidate_count,
         **plan_to_document(plan.experiment_plan),

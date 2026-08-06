@@ -245,8 +245,9 @@ def build_baseline_report(
         "study_id": bundle.study.study_id,
         "experiment_id": bundle.experiment.experiment_id,
         "objective_profile_id": bundle.objective_profile.profile_id,
-        "dataset_split_id": bundle.dataset_split.split_id,
-        "dataset_status": bundle.dataset_split.status.value,
+        "market_input_type": bundle.market_input_type,
+        "market_input_id": bundle.market_input_id,
+        "market_input_status": bundle.market_input_status,
         "baseline_strategy_type": (
             bundle.objective_profile.baseline_strategy_type
         ),
@@ -257,9 +258,23 @@ def build_baseline_report(
             "资金费固定为零，不代表真实历史资金费路径",
             "未模拟订单簿、排队、滑点和网络延迟",
             "Maker/Taker 费率固定，不包含交易所等级变化",
-            "训练与验证窗口较短，不能外推为长期稳定收益",
             "HOLDOUT 已内容锁定但未在第六部分运行",
         ],
     }
+    if bundle.dataset_split is not None:
+        report["dataset_split_id"] = bundle.dataset_split.split_id
+        report["dataset_status"] = bundle.dataset_split.status.value
+        report["known_limitations"].append(
+            "训练与验证窗口较短，不能外推为长期稳定收益"
+        )
+    else:
+        assert bundle.market_path_selection is not None
+        report["market_path_selection_id"] = (
+            bundle.market_path_selection.selection_id
+        )
+        report["path_set_id"] = bundle.market_path_selection.path_set_id
+        report["known_limitations"].append(
+            "Synthetic PathSet 是条件市场假设，不是价格预测或历史回测"
+        )
     report["report_fingerprint"] = sha256_document(report)
     return report

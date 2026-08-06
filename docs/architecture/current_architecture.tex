@@ -99,7 +99,7 @@
 
 \title{\bfseries 策略交易与仿真研究平台\\当前软件架构}
 \author{基于 \code{strategy_trading} 工作区现状整理}
-\date{2026年8月4日\\架构基线：4A--4D 内容锁与单体仓库迁移后}
+\date{2026年8月7日\\架构基线：第四部分市场环境 v1.0 冻结后}
 
 \begin{document}
 
@@ -770,7 +770,7 @@ Simulator 不依赖具体策略 & \yes & 通用 Provider Registry 由宿主注�
 Study 建立第二套 Experiment Runner & \no & 编译到现有 ExperimentSpec \\
 优化层可以产生 Fill 或修改账本 & \no & 只读取结果并保存研究状态 \\
 COIN-M 与 U 本位使用同一收益目标 & \no & 按目标协议隔离 \\
-HOLDOUT 可以进入第六部分调参 & \no & Study 编译阶段禁止包含最终样本外 market key \\
+HOLDOUT 可以进入第六部分调参 & \no & 选择协议、Study 编译器和市场 Provider 三层拒绝 \\
 Viewer 计算官方指标 & \no & Viewer 只读数据库与 Read API \\
 实盘服务当前已复用所有新策略 & \no & Live Adapter 尚未实施，当前不改 grid\_server \\
 \bottomrule
@@ -785,19 +785,19 @@ Viewer 计算官方指标 & \no & Viewer 只读数据库与 Read API \\
 1. 仿真执行 & 已完成 & 主动/被动成交、账本、费用、资金费、杠杆、保证金和强平已形成通用执行机器 \\
 2. 实验系统 & 已完成 & 多组件、多 Seed、参数轴、SQLite、Parquet 与 Viewer 调用链可用 \\
 3. 评价指标 & 已完成 & 通用指标、策略指标、多 Run 聚合和只读展示可用 \\
-4. 市场环境 & 4A--4D 已完成 & 六类三年 BTC 场景、分段随机桥、96 条 1h 路径、市场画像和内容锁已落地；4E Experiment / Study 接入为下一步 \\
+4. 市场环境 & v1.0 已冻结 & BTC / ETH 各六类三年场景、共 192 条 1h 路径已锁定；PathSet 可编译为 Experiment market component 并在 Viewer 浏览；4G 后置到候选策略高保真复核 \\
 5. 策略体系 & 已完成 v1 & HODL、阶梯止盈、固定/单组/分层网格及插件注册已落地 \\
 6A. 研究骨架 & 已完成 & Study、目标协议、数据划分、指纹和同库状态表已贯通 \\
-6B. 正式基线 & 技术验收通过 & BTCUSD\_PERP 真实分钟数据已内容锁定，8 个 Run、三套指标与 HODL 对比报告均成功；clean/tag 正式复跑待版本冻结 \\
-6C. 人工规则改进 & 等待 4E 接入 & 长期市场输入已锁定；待 Experiment / Study 引用路径后，再从真实基线和长期场景事实提出少量可解释规则变体 \\
+6B. 正式基线 & 技术验收通过 & BTCUSD\_PERP 真实分钟数据已内容锁定，8 个 Run、三套指标与 HODL 对比报告均成功 \\
+6C. 人工规则改进 & 可以开始 & 第四部分已冻结；从真实基线和长期 TRAIN / VALIDATION 场景事实提出少量可解释规则变体 \\
 \bottomrule
 \end{tabularx}
 
 \subsection{第四部分与 6C 的衔接}
 
 6B 没有调整总体架构，而是沿现有链路补齐了正式数据准备、语义哈希校验、基线运行和
-不可变对比报告。由于该真实区间不足以表达未来数年的大势判断，6C 之前先由第四部分
-补齐长期市场研究输入，仍不改变策略或执行边界：
+不可变对比报告。由于该真实区间不足以表达未来数年的大势判断，第四部分已在 6C 前
+补齐并冻结长期市场研究输入，仍不改变策略或执行边界：
 
 \begin{enumerate}
   \item 在 \code{market_simulator} 定义长期 Scenario、分段波动率和多 Seed Path Set；
@@ -805,8 +805,8 @@ Viewer 计算官方指标 & \no & Viewer 只读数据库与 Read API \\
   \item Strategy 仍只逐帧读取当前市场，不获得未来 Anchor 或 Scenario 阶段；
   \item 第四部分只发布市场画像，不读取策略结果挑选路径；
   \item 6C 只运行长期 TRAIN 与 VALIDATION，HOLDOUT 留给第七部分；
-  \item 在开始 6C 正式比较前，用 clean/tag 版本复跑一次 6B，使 provenance 中
-        \code{reproducible=true}。
+  \item 第四部分冻结提交已经完成 clean worktree 复现和三个工程全量回归；
+  \item 4G 高频复核只面向 6C / 6D 形成的少量候选，不阻塞 6C。
 \end{enumerate}
 
 \section{结论}

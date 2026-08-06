@@ -5,7 +5,9 @@
 本文定义策略仿真研究平台第四部分“市场环境”的 v1.0 目标、语义、架构、
 场景协议、长期市场基线、开发批次和验收标准。
 
-当前状态：4A—4D 已实现并完成首批内容锁定；4E Experiment / Study 接入为下一步。
+当前状态：4A—4F 与 4H 已完成。BTC、ETH 两个三年 PathSet 已完成内容锁定并可在
+Viewer 浏览；锁定路径已经接入 Experiment / Study，第四部分 v1.0 已冻结。
+4G 调整为第六部分筛出候选策略后的可选高保真复核，不再阻塞 v1.0 冻结。
 
 2026-08-04 已一次性生成首版完整路径集：6 个场景 ×（8 个 TRAIN + 4 个
 VALIDATION + 4 个 HOLDOUT）= 96 条三年 `1h` 路径，共 2,525,280 根 K 线。
@@ -1051,6 +1053,8 @@ Viewer 只读取已保存的定义、Manifest 和市场画像：
 
 ### 16.5 4E：Experiment / Study 接入
 
+状态：已完成（2026-08-06）。
+
 开发内容：
 
 - 将锁定路径注册为市场组件；
@@ -1069,6 +1073,8 @@ Viewer 只读取已保存的定义、Manifest 和市场画像：
 
 ### 16.6 4F：Viewer 与市场目录
 
+状态：已完成。Viewer 可直接发现锁定 BTC / ETH PathSet，无需路径先参与实验。
+
 开发内容：
 
 - 完成市场环境总览；
@@ -1086,7 +1092,13 @@ Viewer 只读取已保存的定义、Manifest 和市场画像：
 - 页面不执行正式计算；
 - 不暴露 HOLDOUT 完整走势。
 
-### 16.7 4G：高保真与现实校准
+### 16.7 4G：候选策略高保真与现实校准（后置可选）
+
+状态：后置到 6C / 6D 筛出少量候选策略之后，不属于第四部分 v1.0 的冻结门槛。
+
+4G 不是为整个市场路径库提前构造一套更重的数据，而是在候选策略已经出现、且
+`1h` Bar 内成交顺序可能 materially 影响结论时，才启动的敏感性复核。未进入候选集的
+策略不生成 `5m` 路径，也不因为缺少 `5m` 结果阻塞 6C。
 
 开发内容：
 
@@ -1106,6 +1118,9 @@ Viewer 只读取已保存的定义、Manifest 和市场画像：
 
 ### 16.8 4H：总体验收与版本冻结
 
+状态：已完成（2026-08-07）。冻结标签为 `market-environment-v1.0.0`，详细记录见
+《第 4 部分：市场环境系统 v1.0 验收记录》[^4h-acceptance]。
+
 开发内容：
 
 - 运行单体仓库三个工程的全量回归；
@@ -1116,7 +1131,7 @@ Viewer 只读取已保存的定义、Manifest 和市场画像：
 
 验收条件：
 
-- 4A—4G 的必选项全部通过；
+- 4A—4F 的必选项全部通过，4G 后置边界已记录；
 - 现有 6B 历史基线仍可读取；
 - 固定行情和 Anchored GBM v1 回归不变；
 - 96 条首版三年路径身份稳定；
@@ -1256,7 +1271,7 @@ HOLDOUT 分离。
 11. Strategy 和 simulation runtime 未引入 Scenario 特殊逻辑；
 12. Viewer 可以查看场景、周/月线和市场画像；
 13. 至少一个 HODL 和一个网格策略完成长期烟雾实验；
-14. 至少一个候选路径完成 `1h` / `5m` 分辨率差异复核；
+14. `1h` / `5m` 分辨率差异复核已明确后置到候选策略阶段，不阻塞 v1.0；
 15. 6B 真实历史基线仍然可复现；
 16. 单体仓库三个工程的完整回归测试通过；
 17. clean/tag 版本可以重新生成相同身份路径；
@@ -1296,6 +1311,12 @@ HOLDOUT 分离。
   小时 OHLC 和 Bar 内 6 个子步；
 - 4C：六类 BTC 场景及 8/4/4 Seed 角色已经配置为 `LOCKED`；
 - 4D：96 条路径已经物化为内容寻址 Parquet，完成市场画像、双哈希和 Manifest 内容锁。
+- ETH 扩展：按相同协议新增六类 ETH 场景和 96 条独立路径；BTC 与 ETH Seed 不复用，
+  不暗示二者已经形成联合相关路径；
+- 4E：新增 `market-path-selection/v1` Study 协议、PathSet 编译器和
+  `locked-market-path/v1` 市场组件；
+- 4F：市场环境总览、Scenario 展开、TRAIN / VALIDATION 周月线预览和 HOLDOUT 隐藏
+  已接入现有 Viewer。
 
 实现位置：
 
@@ -1313,11 +1334,12 @@ market_simulator/
 
 ### 22.2 数据验收结果
 
-- 路径数：96，角色分布为 TRAIN 48、VALIDATION 24、HOLDOUT 24；
+- BTC、ETH 各 96 条路径，总计 192 条；每个 PathSet 的角色分布均为 TRAIN 48、
+  VALIDATION 24、HOLDOUT 24；
 - 每条路径：26,305 根 `1h` K 线，覆盖 1,096 天并包含 2028 闰年；
-- 总 K 线数：2,525,280；本地 Parquet 约 65 MB；
-- 96 个语义内容哈希和 96 个文件哈希均唯一；
-- 所有路径起点为 `62,794.3`，所有 HARD Anchor 偏差为 0；
+- 总 K 线数：5,050,560；BTC 本地 Parquet 约 65 MB，ETH 约 62 MB；
+- 每个 PathSet 内 96 个语义内容哈希和 96 个文件哈希均唯一；
+- BTC 路径起点为 `62,794.3`，ETH 路径起点为 `1,859.83`，所有 HARD Anchor 偏差为 0；
 - 各场景终点均落入其 BAND，HOLDOUT 已物化但禁止策略执行；
 - 九项新增单元与物化测试通过。
 
@@ -1326,8 +1348,27 @@ market_simulator/
 厚尾结果，不影响 Anchor 和内容锁正确性，但在 4G 真实历史校准时应明确判断是否需要
 收窄波动率或增加软边界。不得为了提高某个策略的收益而挑选或删除这些 Seed。
 
-4E—4H 尚未完成，因此此时只表示“长期行情输入已经生成并锁定”，不表示第四部分
-整体已经验收，也不表示这些路径已经可以从 Experiment、Study 或 Viewer 中选择。
+### 22.3 4E 接入验收结果
+
+4E 最小 Study 选择 `btc-long-range-v1` 的 TRAIN Seed 1101 与 VALIDATION Seed 2101，
+分别运行 HODL 和单组跟随网格：
+
+- 编译得到 2 条明确 market component 和 4 个 Run；
+- Market Seed 保持 1101 / 2101，Experiment Run Seed 固定为 0，不发生二次随机化；
+- 4 个 Run 全部成功，`core/v1`、`btc-accumulation/v1`、`grid/v2` 均为 4/4 成功；
+- SQLite 中只有 2 个 `market_path_id`，各被两个策略复用；
+- Run 配置保留 `SYNTHETIC`、PathSet、Scenario、role、Market Seed、内容哈希和文件哈希；
+- TRAIN 与 VALIDATION 均未强平或破产；HOLDOUT 没有进入编译计划；
+- 技术烟雾实验在 dirty worktree 使用 `--allow-dirty`，因此
+  `reproducible=false`，不作为策略收益结论。
+
+烟雾实验中，单组跟随网格在 TRAIN / VALIDATION 分别完成 119 / 106 个循环，最终相对
+HODL 多 `0.02433519` / `0.02702143 BTC`。这些数值只证明长期 PathSet、执行、记账、
+指标和 HODL 对比的调用关系成立，不构成策略优劣结论。
+
+4H 已在 clean worktree 完成正式复跑并冻结为 `market-environment-v1.0.0`。4G 的 5m
+高保真复核后置到第六部分筛出的少量候选，不为全部 192 条路径提前生成 5m 数据。
+正式复跑结果与命令记录见独立验收记录。
 
 ---
 
@@ -1346,11 +1387,11 @@ market_simulator/
     ↓
 4F Viewer 市场环境页面
     ↓
-4G 5m 高保真与真实历史校准
-    ↓
 4H 总体验收和版本冻结
     ↓
 返回 6C 人工规则改进
+    ↓
+6C / 6D 形成候选后，按需执行 4G 高保真复核
 ```
 
 第四部分完成后的产物不是一个市场预测模型，而是一套明确回答以下问题的研究输入：
@@ -1360,3 +1401,5 @@ market_simulator/
 但具体路径、波动和到达顺序存在不确定性，
 策略的 BTC 积累、收益、回撤和强平风险会怎样？
 ```
+
+[^4h-acceptance]: [04_market_environment_v1_acceptance.md](04_market_environment_v1_acceptance.md)

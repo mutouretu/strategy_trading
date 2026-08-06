@@ -83,7 +83,7 @@ def _bundle_document(plan: StudyPlan) -> dict[str, object]:
     return {
         "study": bundle.study.to_document(),
         "objective_profile": bundle.objective_profile.to_document(),
-        "dataset_split": bundle.dataset_split.to_document(),
+        **bundle.market_input_document(),
         "compiled_experiment": experiment_spec_to_document(
             plan.compiled.experiment
         ),

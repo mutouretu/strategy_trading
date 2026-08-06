@@ -66,6 +66,8 @@ def _validation_document(report) -> dict[str, object]:
         "protocol_fingerprint": report.protocol_fingerprint,
         "dataset_status": report.dataset_status,
         "formal_ready": report.formal_ready,
+        "market_input_type": report.market_input_type,
+        "market_input_id": report.market_input_id,
     }
 
 
@@ -144,7 +146,7 @@ def main(
             )
         if not plan.compiled.formal_ready and not arguments.allow_development_data:
             raise StudyError(
-                "dataset content is not locked; use --allow-development-data "
+                "market input content is not locked; use --allow-development-data "
                 "only for an exploratory 6A scaffold Run"
             )
         study_source = arguments.study.resolve()

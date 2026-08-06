@@ -1,6 +1,6 @@
 # 当前架构文档
 
-`current_architecture.tex` 描述第 6 部分 6B 技术验收、第四部分 4A—4D 内容锁定后的
+`current_architecture.tex` 描述第 6 部分 6B 技术验收、第四部分市场环境 v1.0 冻结后的
 实际软件架构，包括：
 
 - 单体仓库中的三个并列工程及其职责；
@@ -11,7 +11,7 @@
 - Study、Experiment、Metric 和 SQLite 数据流；
 - COIN-M / USD-M（U 本位）隔离；
 - 未来 Live Adapter 位置；
-- 当前完成度、第四部分长期市场环境和 6C 的衔接点。
+- 当前完成度、已冻结的长期市场环境和 6C 的衔接点。
 
 使用 XeLaTeX 编译：
 
