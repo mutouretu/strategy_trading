@@ -233,7 +233,10 @@ class ExperimentReadHandler(SimpleHTTPRequestHandler):
         if len(parts) < 3 or parts[:2] != ("api", "experiments"):
             raise ExperimentRepositoryError("API route not found")
         experiment_id = parts[2]
-        reader = self.catalog.reader(experiment_id)
+        reader = self.catalog.reader(
+            experiment_id,
+            database_name=_single(query, "database"),
+        )
         if len(parts) == 3:
             self._send_json(
                 200,

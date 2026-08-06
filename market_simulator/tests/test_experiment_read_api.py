@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 import threading
 import unittest
@@ -174,6 +175,37 @@ class ExperimentReadApiTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as context:
             urlopen(request, timeout=5)
         self.assertEqual(context.exception.code, 405)
+
+    def test_duplicate_experiment_ids_are_selected_by_database_name(self) -> None:
+        duplicate = self.database.with_name("probe-copy.sqlite3")
+        shutil.copyfile(self.database, duplicate)
+
+        with self.assertRaises(HTTPError) as context:
+            self._get("/api/experiments/read-api-probe")
+        self.assertEqual(context.exception.code, 400)
+        error = json.loads(context.exception.read())
+        self.assertIn("ambiguous", error["error"]["message"])
+
+        _, _, body = self._get(
+            "/api/experiments/read-api-probe?database=probe.sqlite3"
+        )
+        detail = json.loads(body)
+        self.assertEqual(detail["experiment_id"], "read-api-probe")
+
+        _, _, body = self._get(
+            "/api/experiments/read-api-probe/runs"
+            "?database=probe-copy.sqlite3&limit=1"
+        )
+        runs = json.loads(body)
+        self.assertEqual(runs["total"], 2)
+        self.assertEqual(len(runs["items"]), 1)
+
+        with self.assertRaises(HTTPError) as context:
+            self._get(
+                "/api/experiments/read-api-probe"
+                "?database=missing.sqlite3"
+            )
+        self.assertEqual(context.exception.code, 404)
 
 
 if __name__ == "__main__":

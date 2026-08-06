@@ -101,8 +101,17 @@ class ExperimentResultsFrontendTests(unittest.TestCase):
         self.assertIn("renderExperimentOverview()", script)
         self.assertIn("loadSelectedRun()", script)
         self.assertIn('make(\n        "details",', script)
-        self.assertIn('url.searchParams.set("experiment", experimentId)', script)
+        self.assertIn(
+            'url.searchParams.set("experiment", experiment.experiment_id)',
+            script,
+        )
+        self.assertIn(
+            'url.searchParams.set("database", experiment.database_name)',
+            script,
+        )
+        self.assertIn("experimentApiPath(experiment", script)
         self.assertIn('requestedParams.get("experiment")', script)
+        self.assertIn('requestedParams.get("database")', script)
         self.assertIn('"experiment-detail-link"', script)
         self.assertIn("scenarioLiquidationRate(scenario)", script)
         self.assertIn('label = "强平状态"', script)

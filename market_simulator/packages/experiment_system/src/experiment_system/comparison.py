@@ -755,15 +755,29 @@ class ExperimentCatalog:
         )
         return tuple(experiments)
 
-    def reader(self, experiment_id: str) -> ExperimentReader:
+    def reader(
+        self,
+        experiment_id: str,
+        *,
+        database_name: str | None = None,
+    ) -> ExperimentReader:
         matches = [
             item
             for item in self.experiments()
             if item["experiment_id"] == experiment_id
+            and (
+                database_name is None
+                or item["database_name"] == database_name
+            )
         ]
         if not matches:
+            location = (
+                f" in database {database_name!r}"
+                if database_name is not None
+                else ""
+            )
             raise ExperimentRepositoryError(
-                f"Experiment {experiment_id!r} not found"
+                f"Experiment {experiment_id!r}{location} not found"
             )
         if len(matches) != 1:
             raise ExperimentValidationError(

@@ -24,6 +24,7 @@
     marketInterval: "1w",
     marketDocument: null,
     detailExperimentId: null,
+    detailDatabaseName: null,
     detailScenarioId: null,
     detailRunId: null,
     runDetail: null,
@@ -88,6 +89,16 @@
 
   function apiPath(...parts) {
     return `/api/${parts.map((part) => encodeURIComponent(part)).join("/")}`;
+  }
+
+  function experimentApiPath(experiment, parts = [], query = {}) {
+    const search = new URLSearchParams(query);
+    search.set("database", experiment.database_name);
+    return `${apiPath(
+      "experiments",
+      experiment.experiment_id,
+      ...parts,
+    )}?${search.toString()}`;
   }
 
   function make(tag, className, text) {
@@ -167,11 +178,12 @@
     return cell;
   }
 
-  function experimentDetailHref(experimentId) {
+  function experimentDetailHref(experiment) {
     const url = new URL(window.location.href);
     url.search = "";
     url.searchParams.set("page", "experiment-detail");
-    url.searchParams.set("experiment", experimentId);
+    url.searchParams.set("experiment", experiment.experiment_id);
+    url.searchParams.set("database", experiment.database_name);
     return url.toString();
   }
 
@@ -183,7 +195,7 @@
       "experiment-detail-link",
       experiment.experiment_id,
     );
-    link.href = experimentDetailHref(experiment.experiment_id);
+    link.href = experimentDetailHref(experiment);
     title.append(link);
     cell.append(
       title,
@@ -237,9 +249,11 @@
     }
   }
 
-  function recordById(experimentId) {
+  function recordById(experimentId, databaseName = null) {
     return state.records.find(
-      (record) => record.experiment.experiment_id === experimentId,
+      (record) =>
+        record.experiment.experiment_id === experimentId &&
+        (!databaseName || record.experiment.database_name === databaseName),
     );
   }
 
@@ -776,6 +790,7 @@
 
   function openScenarioDetail(record, scenario, seed = null) {
     state.detailExperimentId = record.experiment.experiment_id;
+    state.detailDatabaseName = record.experiment.database_name;
     state.detailScenarioId = scenario.scenario_id;
     state.detailRunId = scenario.runs.find(
       (run) => seed === null || run.seed === seed,
@@ -938,15 +953,22 @@
   }
 
   function renderDetailSelectors() {
-    const record = recordById(state.detailExperimentId) || state.records[0];
+    const record = recordById(
+      state.detailExperimentId,
+      state.detailDatabaseName,
+    ) || state.records[0];
     if (!record) return;
     state.detailExperimentId = record.experiment.experiment_id;
+    state.detailDatabaseName = record.experiment.database_name;
     replaceOptions(
       elements.detailExperimentSelect,
       state.records.map((item) =>
-        option(item.experiment.experiment_id, item.experiment.experiment_id),
+        option(
+          item.experiment.database_name,
+          `${item.experiment.experiment_id} · ${item.experiment.database_name}`,
+        ),
       ),
-      state.detailExperimentId,
+      state.detailDatabaseName,
     );
     const scenarios = Model.scenarioRows(record);
     const scenario = scenarios.find(
@@ -1202,14 +1224,15 @@
   }
 
   async function loadSelectedRun() {
-    const record = recordById(state.detailExperimentId);
+    const record = recordById(
+      state.detailExperimentId,
+      state.detailDatabaseName,
+    );
     if (!record || !state.detailRunId) return;
     state.runDetail = await request(
-      apiPath(
-        "experiments",
-        state.detailExperimentId,
-        "runs",
-        state.detailRunId,
+      experimentApiPath(
+        record.experiment,
+        ["runs", state.detailRunId],
       ),
     );
     renderRunHero(state.runDetail);
@@ -1224,12 +1247,14 @@
 
   function playbackUrls() {
     if (!state.detailExperimentId || !state.detailRunId) return null;
-    const runApi = apiPath(
-      "experiments",
+    const record = recordById(
       state.detailExperimentId,
-      "runs",
-      state.detailRunId,
-      "viewer",
+      state.detailDatabaseName,
+    );
+    if (!record) return null;
+    const runApi = experimentApiPath(
+      record.experiment,
+      ["runs", state.detailRunId, "viewer"],
     );
     return {
       embedded: `./index.html?embedded=1&run_api=${encodeURIComponent(runApi)}`,
@@ -1263,11 +1288,15 @@
       const rawRecords = await Promise.all(
         catalog.items.map(async (experiment) => {
           const [detail, runs, metrics] = await Promise.all([
-            request(apiPath("experiments", experiment.experiment_id)),
             request(
-              `${apiPath("experiments", experiment.experiment_id, "runs")}?limit=10000`,
+              experimentApiPath(experiment),
             ),
-            request(apiPath("experiments", experiment.experiment_id, "metrics")),
+            request(
+              experimentApiPath(experiment, ["runs"], {limit: "10000"}),
+            ),
+            request(
+              experimentApiPath(experiment, ["metrics"]),
+            ),
           ]);
           return {
             experiment,
@@ -1292,9 +1321,12 @@
       state.marketId = state.markets.some((item) => item.id === state.marketId)
         ? state.marketId
         : state.markets[0]?.id;
-      state.detailExperimentId = recordById(state.detailExperimentId)
-        ? state.detailExperimentId
-        : state.records[0]?.experiment.experiment_id;
+      const selectedRecord = recordById(
+        state.detailExperimentId,
+        state.detailDatabaseName,
+      ) || state.records[0];
+      state.detailExperimentId = selectedRecord?.experiment.experiment_id;
+      state.detailDatabaseName = selectedRecord?.experiment.database_name;
 
       renderStrategyOverview();
       renderStrategyDetail();
@@ -1354,7 +1386,12 @@
     }
   });
   elements.detailExperimentSelect.addEventListener("change", () => {
-    state.detailExperimentId = elements.detailExperimentSelect.value;
+    const record = state.records.find(
+      (item) =>
+        item.experiment.database_name === elements.detailExperimentSelect.value,
+    );
+    state.detailExperimentId = record?.experiment.experiment_id || null;
+    state.detailDatabaseName = record?.experiment.database_name || null;
     state.detailScenarioId = null;
     state.detailRunId = null;
     renderDetailSelectors();
@@ -1384,6 +1421,7 @@
   const requestedParams = new URLSearchParams(window.location.search);
   const requestedPage = requestedParams.get("page");
   state.detailExperimentId = requestedParams.get("experiment");
+  state.detailDatabaseName = requestedParams.get("database");
   setPage(PAGE_META[requestedPage] ? requestedPage : "strategy-overview", {
     updateUrl: false,
   });
