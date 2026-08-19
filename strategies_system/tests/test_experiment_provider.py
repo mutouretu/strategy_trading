@@ -6,7 +6,13 @@ from pathlib import Path
 
 import strategy_simulation  # noqa: F401 - activates local checkout imports
 
-from experiment_system import ComponentSpec, load_experiment_spec, validate_experiment
+from experiment_system import (
+    CodeRevision,
+    ComponentSpec,
+    load_experiment_spec,
+    plan_experiment,
+    validate_experiment,
+)
 
 from strategy_simulation.components import build_market_source
 
@@ -53,6 +59,75 @@ class StrategyExperimentProviderTests(unittest.TestCase):
         self.assertEqual(report.scenario_count, 3)
         self.assertEqual(report.run_count, 6)
 
+    def test_btc_hold_coinm_ladder_baseline_is_exactly_one_run(self) -> None:
+        spec = load_experiment_spec(
+            Path(__file__).parents[1]
+            / "experiments"
+            / "btc_hold_coinm_ladder_baseline_v1.json"
+        )
+        registry = build_provider_registry()
+        report = validate_experiment(spec, registry)
+        plan = plan_experiment(
+            spec,
+            registry,
+            code_revisions={
+                "strategy_trading": CodeRevision(commit="a" * 40)
+            },
+        )
+
+        self.assertEqual(report.scenario_count, 1)
+        self.assertEqual(report.run_count, 1)
+        self.assertEqual(len(plan.runs), 1)
+        run = plan.runs[0]
+        self.assertEqual(run.seed, 0)
+        self.assertEqual(
+            run.configuration.market.type,
+            "locked-market-path/v1",
+        )
+        self.assertEqual(
+            run.configuration.strategy.type,
+            "coinm-long-take-profit-ladder/v1",
+        )
+        self.assertEqual(
+            run.configuration.account.parameters["futures_wallet_btc"],
+            "1.1",
+        )
+
+    def test_effective_leverage_scan_is_six_positions_and_one_seed(self) -> None:
+        spec = load_experiment_spec(
+            Path(__file__).parents[1]
+            / "experiments"
+            / "btc_coinm_effective_leverage_scan_v1.json"
+        )
+        registry = build_provider_registry()
+        report = validate_experiment(spec, registry)
+        plan = plan_experiment(
+            spec,
+            registry,
+            code_revisions={
+                "strategy_trading": CodeRevision(commit="a" * 40)
+            },
+        )
+
+        self.assertEqual(report.scenario_count, 6)
+        self.assertEqual(report.run_count, 6)
+        self.assertEqual({run.seed for run in plan.runs}, {0})
+        self.assertEqual(
+            {
+                run.configuration.strategy.parameters[
+                    "entry_effective_leverage"
+                ]
+                for run in plan.runs
+            },
+            {"0.5", "1.0", "1.5", "2.0", "2.5", "3.0"},
+        )
+        self.assertTrue(
+            all(
+                run.configuration.account.parameters["leverage"] == "10"
+                for run in plan.runs
+            )
+        )
+
     def test_generic_provider_has_no_concrete_strategy_type_branch(self) -> None:
         source = inspect.getsource(StrategiesSimulationProvider._build_components)
         self.assertNotIn("strategy_type ==", source)
@@ -61,8 +136,32 @@ class StrategyExperimentProviderTests(unittest.TestCase):
             inspect.getmodule(StrategiesSimulationProvider)
         ))
         descriptors = build_provider_registry().component_descriptors
-        self.assertEqual(len(descriptors), 5)
-        self.assertTrue(all(item.get("formulae") for item in descriptors))
+        self.assertEqual(len(descriptors), 8)
+        self.assertEqual(
+            {
+                item["type"]
+                for item in descriptors
+                if item["kind"] == "strategy-definition"
+            },
+            {"entry-then-ladder-exit/v1"},
+        )
+        self.assertEqual(
+            {item["type"] for item in descriptors if item["kind"] == "trading-rule"},
+            {"initial-entry/v1", "ladder-take-profit/v1"},
+        )
+        self.assertTrue(
+            all(
+                item.get("formulae")
+                for item in descriptors
+                if item["kind"] != "strategy-definition"
+            )
+        )
+        strategy_definition = next(
+            item
+            for item in descriptors
+            if item["kind"] == "strategy-definition"
+        )
+        self.assertEqual(len(strategy_definition["rule_composition"]), 2)
 
 
 if __name__ == "__main__":

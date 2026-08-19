@@ -567,7 +567,7 @@ COIN-M 首批基线建议固定：
 hold-btc/v1
     不交易，回答持币本身的结果
 
-target-liquidation-ladder-long/v1
+coinm-long-take-profit-ladder/v1
     一次性建仓和分批止盈的简单主动策略
 
 single-following-grid/v1

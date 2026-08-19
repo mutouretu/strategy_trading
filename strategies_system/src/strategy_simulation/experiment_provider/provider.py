@@ -7,6 +7,8 @@ from dataclasses import dataclass, replace
 from experiment_system import ProviderRegistry, RunSpec, ScenarioConfiguration
 from market_protocol import MarketSource
 from simulation_runtime import SimulationResult, SimulationRunner
+from trading_strategies.catalog import build_strategy_definition_registry
+from trading_strategies.rules import build_trading_rule_registry
 
 from ..components import (
     AccountRuntime,
@@ -20,11 +22,11 @@ from ..components import (
 )
 
 from ..plugins import (
+    CoinMLongTakeProfitLadderSimulationPlugin,
     FixedGridSimulationPlugin,
     HoldBtcSimulationPlugin,
     LayeredFollowingGridSimulationPlugin,
     SingleFollowingGridSimulationPlugin,
-    TargetLiquidationLadderSimulationPlugin,
 )
 from ..registry import (
     SimulationStrategyBinding,
@@ -84,7 +86,19 @@ class StrategiesSimulationProvider:
         self.strategies = strategies
 
     def component_descriptors(self) -> tuple[dict[str, object], ...]:
-        return self.strategies.descriptors
+        strategy_definition_descriptors = tuple(
+            definition.to_document()
+            for definition in build_strategy_definition_registry().definitions
+        )
+        rule_descriptors = tuple(
+            definition.to_document()
+            for definition in build_trading_rule_registry().definitions
+        )
+        return (
+            *self.strategies.descriptors,
+            *strategy_definition_descriptors,
+            *rule_descriptors,
+        )
 
     def resolve(
         self,
@@ -145,7 +159,7 @@ def build_strategy_registry() -> SimulationStrategyRegistry:
     registry = SimulationStrategyRegistry()
     registry.register(FixedGridSimulationPlugin())
     registry.register(HoldBtcSimulationPlugin())
-    registry.register(TargetLiquidationLadderSimulationPlugin())
+    registry.register(CoinMLongTakeProfitLadderSimulationPlugin())
     registry.register(SingleFollowingGridSimulationPlugin())
     registry.register(LayeredFollowingGridSimulationPlugin())
     return registry

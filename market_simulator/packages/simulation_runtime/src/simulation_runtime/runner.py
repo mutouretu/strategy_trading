@@ -299,6 +299,7 @@ class SimulationRunner:
                 break
 
             bar_fills: list[SimFill] = []
+            funding: FundingSettlement | None = None
             latest_margin: MarginSnapshot | None = None
             margin_evaluated = False
             for instruction in instructions:
@@ -448,18 +449,26 @@ class SimulationRunner:
                     )
                     account_events.append(liquidation_event)
 
+            batch = tuple(bar_fills)
+            on_accounting = getattr(self.trade_port, "on_accounting", None)
+            accounting_notified = callable(on_accounting) and bool(
+                batch or funding is not None
+            )
+            if accounting_notified:
+                on_accounting(batch, funding)
+
             if liquidation_event is not None:
-                if bar_fills:
-                    fills.extend(bar_fills)
+                if batch:
+                    fills.extend(batch)
                 equity_curve.append(
                     self._snapshot(current, marks, ledger)
                 )
                 break
 
-            if bar_fills:
-                batch = tuple(bar_fills)
+            if batch:
                 fills.extend(batch)
-                self.trade_port.on_fills(batch)
+                if not accounting_notified:
+                    self.trade_port.on_fills(batch)
                 if self.trace_port is not None:
                     active_intents = self._synchronize_intents(
                         active_intents,
@@ -471,6 +480,10 @@ class SimulationRunner:
                         intent_states=intent_states,
                         intent_state_by_key=intent_state_by_key,
                     )
+            if funding is not None and not accounting_notified:
+                on_funding = getattr(self.trade_port, "on_funding", None)
+                if callable(on_funding):
+                    on_funding(funding)
             self.trade_port.on_market(current)
             if self.trace_port is not None:
                 active_intents = self._synchronize_intents(

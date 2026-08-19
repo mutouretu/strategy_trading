@@ -21,6 +21,7 @@ from experiment_system import (
     export_comparison_csv,
     export_viewer_json,
     parse_experiment_spec,
+    performance_document,
     plan_experiment,
     viewer_document,
 )
@@ -106,6 +107,11 @@ class ExperimentReadModelTests(unittest.TestCase):
                 ],
                 3,
             )
+            self.assertEqual(
+                first["provider_summary"]["provider_summary"]
+                ["test-simulation/v1"]["fill_count"],
+                3,
+            )
             self.assertEqual(reader.database_path, database.resolve())
 
     def test_comparison_and_viewer_exports_are_explicit(self) -> None:
@@ -147,6 +153,15 @@ class ExperimentReadModelTests(unittest.TestCase):
             )
             self.assertEqual(set(root.rglob("*.json")), before_json)
 
+            performance = performance_document(reader, run_id)
+            self.assertEqual(performance["source_point_count"], 6)
+            self.assertEqual(performance["sampled_point_count"], 7)
+            self.assertEqual(performance["assets"], ["USDT"])
+            self.assertEqual(
+                performance["statistics"]["USDT"]["initial_equity"],
+                "1000",
+            )
+
             csv_path = export_comparison_csv(
                 reader,
                 root / "exports" / "comparison.csv",
@@ -168,6 +183,129 @@ class ExperimentReadModelTests(unittest.TestCase):
                 outcome.runs[0].market_reference.market_path_id,
                 dynamic_viewer["manifest"]["market_path_id"],
             )
+
+    def test_performance_document_exposes_daily_margin_risk_rate(self) -> None:
+        class Reader:
+            @staticmethod
+            def run_detail(run_id: str) -> dict[str, object]:
+                return {
+                    "status": "SUCCEEDED",
+                    "trace_state": "STORED",
+                    "summary": {
+                        "result": {
+                            "initial_equity": "1000",
+                            "equity_asset": "USDT",
+                            "initial_account_metrics": {},
+                        }
+                    },
+                }
+
+            @staticmethod
+            def load_trace(run_id: str) -> dict[str, object]:
+                return {
+                    "equity": [
+                        {
+                            "sequence": 0,
+                            "timestamp": 86_400_000,
+                            "date": "1970-01-02",
+                            "equity": "990",
+                            "equity_asset": "USDT",
+                            "account_metrics": {},
+                        },
+                        {
+                            "sequence": 1,
+                            "timestamp": 172_800_000,
+                            "date": "1970-01-03",
+                            "equity": "900",
+                            "equity_asset": "USDT",
+                            "account_metrics": {},
+                        },
+                    ],
+                    "margin": [
+                        {
+                            "sequence": 0,
+                            "timestamp": 86_400_000,
+                            "date": "1970-01-02",
+                            "settlement_asset": "USDT",
+                            "position_quantity": "1",
+                            "mark_price": "100",
+                            "estimated_liquidation_price": "70",
+                            "margin_balance": "400",
+                            "maintenance_margin": "20",
+                            "maintenance_margin_utilization": "0.05",
+                            "liquidation_triggered": False,
+                        },
+                        {
+                            "sequence": 1,
+                            "timestamp": 86_400_001,
+                            "date": "1970-01-02",
+                            "settlement_asset": "USDT",
+                            "position_quantity": "1",
+                            "mark_price": "80",
+                            "estimated_liquidation_price": "70",
+                            "margin_balance": "300",
+                            "maintenance_margin": "30",
+                            "maintenance_margin_utilization": "0.1",
+                            "liquidation_triggered": False,
+                        },
+                        {
+                            "sequence": 2,
+                            "timestamp": 172_800_000,
+                            "date": "1970-01-03",
+                            "settlement_asset": "USDT",
+                            "position_quantity": "1",
+                            "mark_price": "80",
+                            "estimated_liquidation_price": "72",
+                            "margin_balance": "200",
+                            "maintenance_margin": "100",
+                            "maintenance_margin_utilization": None,
+                            "liquidation_triggered": False,
+                        },
+                    ],
+                }
+
+        performance = performance_document(Reader(), "margin-probe")
+        self.assertEqual(performance["margin_source_point_count"], 3)
+        self.assertEqual(
+            performance["margin_statistics"],
+            {
+                "settlement_asset": "USDT",
+                "maximum_risk_rate": "0.5",
+                "minimum_margin_balance": "200",
+                "minimum_liquidation_distance_rate": "0.1",
+                "risk_threshold_rate": "1",
+                "liquidation_triggered": False,
+            },
+        )
+        self.assertEqual(
+            [point["margin"]["risk_rate"] for point in performance["points"]],
+            ["0", "0.1", "0.5"],
+        )
+        self.assertEqual(
+            [point["margin"]["mark_price"] for point in performance["points"]],
+            [None, "80", "80"],
+        )
+        self.assertEqual(
+            [
+                point["margin"]["estimated_liquidation_price"]
+                for point in performance["points"]
+            ],
+            [None, "70", "72"],
+        )
+        self.assertEqual(
+            [
+                point["margin"]["liquidation_distance_rate"]
+                for point in performance["points"]
+            ],
+            [None, "0.125", "0.1"],
+        )
+        self.assertEqual(
+            [
+                point["margin"]["minimum_liquidation_distance_rate"]
+                for point in performance["points"]
+            ],
+            [None, "0.125", "0.1"],
+        )
 
 
 if __name__ == "__main__":

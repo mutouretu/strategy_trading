@@ -42,10 +42,11 @@
         },
         {
           "key": "target-liquidation-ladder",
-          "type": "target-liquidation-ladder-long/v1",
+          "type": "coinm-long-take-profit-ladder/v1",
           "parameters": {
             "strategy_id": "btc-target-liquidation-ladder",
             "instrument": "BTCUSD_PERP",
+            "entry_sizing_mode": "TARGET_LIQUIDATION_PRICE",
             "target_liquidation_price": "20000",
             "first_take_profit_ratio": "1.10",
             "take_profit_end_price": "150000",

@@ -9,7 +9,7 @@
       content="Read-only strategy, market environment and simulation experiment research workspace."
     >
     <link rel="stylesheet" href="./styles.css">
-    <link rel="stylesheet" href="./experiments.css">
+    <link rel="stylesheet" href="./experiments.css?v=20260819-readable-type">
   </head>
   <body class="research-app">
     <aside class="app-sidebar">
@@ -23,12 +23,12 @@
 
       <nav class="primary-nav" aria-label="研究系统导航">
         <section class="nav-group">
-          <div class="nav-group-label">策略</div>
-          <button class="nav-item active" data-page="strategy-overview" type="button">
-            <span class="nav-icon">▦</span>策略总览
+          <div class="nav-group-label">交易规则</div>
+          <button class="nav-item" data-page="rule-overview" type="button">
+            <span class="nav-icon">▦</span>规则总览
           </button>
-          <button class="nav-item" data-page="strategy-detail" type="button">
-            <span class="nav-icon">ƒ</span>策略详情
+          <button class="nav-item" data-page="rule-detail" type="button">
+            <span class="nav-icon">ƒ</span>规则详情
           </button>
         </section>
 
@@ -40,12 +40,25 @@
         </section>
 
         <section class="nav-group">
+          <div class="nav-group-label">策略</div>
+          <button class="nav-item active" data-page="strategy-overview" type="button">
+            <span class="nav-icon">◇</span>策略总览
+          </button>
+          <button class="nav-item" data-page="strategy-detail" type="button">
+            <span class="nav-icon">⌘</span>策略详情
+          </button>
+          <button class="nav-item" data-page="strategy-runs" type="button">
+            <span class="nav-icon">◎</span>策略运行
+          </button>
+        </section>
+
+        <section class="nav-group">
           <div class="nav-group-label">实验</div>
           <button class="nav-item" data-page="experiment-overview" type="button">
-            <span class="nav-icon">▤</span>实验总览
+            <span class="nav-icon">▤</span>参数研究
           </button>
           <button class="nav-item" data-page="experiment-detail" type="button">
-            <span class="nav-icon">◎</span>实验详情
+            <span class="nav-icon">◎</span>Run 详情
           </button>
           <button class="nav-item" data-page="playback" type="button">
             <span class="nav-icon">▶</span>K 线播放
@@ -77,8 +90,8 @@
         <section class="workspace-page active" data-page-panel="strategy-overview">
           <div class="page-intro">
             <div>
-              <h2>策略目录</h2>
-              <p>按策略实现分组，配置、实验和市场环境作为策略的研究记录。</p>
+              <h2>策略定义目录</h2>
+              <p>Strategy 是 n 条 Rule 完成参数绑定、职责分配与协作关系定义后的可运行组合。</p>
             </div>
             <div id="strategy-overview-facts" class="mini-facts"></div>
           </div>
@@ -88,11 +101,11 @@
                 <thead>
                   <tr>
                     <th>策略</th>
-                    <th>配置数</th>
-                    <th>实验数</th>
-                    <th>市场环境</th>
-                    <th>运行结果</th>
-                    <th>最近研究</th>
+                    <th>策略族</th>
+                    <th>规则组成</th>
+                    <th>方向</th>
+                    <th>产品</th>
+                    <th>研究记录</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -110,36 +123,144 @@
             </label>
           </div>
           <section id="strategy-hero" class="strategy-hero"></section>
+          <section class="data-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Rule 组成与职责</h2>
+                <p>这里展示 Slot、权限、订阅输入和 Strategy 参数到 RuleConfig 的转换。</p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table class="research-table">
+                <thead>
+                  <tr><th>Rule Slot</th><th>职责</th><th>Rule Type</th><th>权限</th><th>订阅</th><th>参数转换</th></tr>
+                </thead>
+                <tbody id="strategy-rule-body"></tbody>
+              </table>
+            </div>
+          </section>
+          <div class="strategy-spec-grid">
+            <section class="data-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>Strategy 外部参数</h2>
+                  <p>交易与市场语义先由 Strategy 接收，再转换为各 Rule 的内部配置。</p>
+                </div>
+              </div>
+              <div id="strategy-parameters" class="strategy-parameter-list"></div>
+            </section>
+            <section class="data-panel">
+              <div class="panel-heading">
+                <div>
+                  <h2>协调策略</h2>
+                  <p>同一事件内的 Rule 提案批次、冲突处理和退出控制权。</p>
+                </div>
+              </div>
+              <div id="strategy-coordination" class="note-list"></div>
+              <div id="strategy-constraints" class="constraint-list"></div>
+            </section>
+          </div>
+          <section class="data-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>生命周期</h2>
+                <p>Strategy 组合层的阶段，不替代各 Rule 自身的状态机。</p>
+              </div>
+            </div>
+            <div id="strategy-lifecycle" class="strategy-flow"></div>
+          </section>
+        </section>
+
+        <section class="workspace-page" data-page-panel="strategy-runs">
+          <div class="page-toolbar">
+            <label>
+              当前策略
+              <select id="strategy-run-select"></select>
+            </label>
+            <div id="strategy-run-facts" class="mini-facts"></div>
+          </div>
+          <div class="page-intro compact-page-intro">
+            <div>
+              <h2>策略实验与运行实例</h2>
+              <p>按当前 StrategyDefinition 汇总基本绑定、各 Rule 的最终配置和关键结果。</p>
+            </div>
+          </div>
+          <section class="data-panel">
+            <div class="table-wrap">
+              <table class="research-table strategy-run-table">
+                <thead id="strategy-run-head"></thead>
+                <tbody id="strategy-run-body"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="workspace-page" data-page-panel="rule-overview">
+          <div class="page-intro">
+            <div>
+              <h2>交易规则目录</h2>
+              <p>规则定义独立于实验数据库展示；实验记录只补充规则的实际使用情况。</p>
+            </div>
+            <div id="rule-overview-facts" class="mini-facts"></div>
+          </div>
+          <div class="data-panel">
+            <div class="table-wrap">
+              <table class="research-table">
+                <thead>
+                  <tr>
+                    <th>交易规则</th>
+                    <th>规则族</th>
+                    <th>输入</th>
+                    <th>输出</th>
+                    <th>适用产品</th>
+                    <th>研究记录</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="rule-overview-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section class="workspace-page" data-page-panel="rule-detail">
+          <div class="page-toolbar">
+            <label>
+              当前规则
+              <select id="rule-detail-select"></select>
+            </label>
+          </div>
+          <section id="rule-hero" class="strategy-hero"></section>
           <div class="strategy-spec-grid">
             <section class="data-panel">
               <div class="panel-heading">
                 <div>
                   <h2>数学定义</h2>
-                  <p>策略 Plugin 提供的公式与约束，不展示实现代码。</p>
+                  <p>规则定义提供的状态转移公式与约束，不展示实现代码。</p>
                 </div>
               </div>
-              <div id="strategy-formulae" class="formula-list"></div>
-              <div id="strategy-constraints" class="constraint-list"></div>
+              <div id="rule-formulae" class="formula-list"></div>
+              <div id="rule-constraints" class="constraint-list"></div>
             </section>
             <section class="data-panel">
               <div class="panel-heading">
                 <div>
                   <h2>配置参数</h2>
-                  <p>字段含义、默认值与必填状态来自策略描述。</p>
+                  <p>这里是 Strategy 完成转换后传给 Rule 的内部配置。</p>
                 </div>
               </div>
-              <div id="strategy-parameters" class="strategy-parameter-list"></div>
+              <div id="rule-parameters" class="strategy-parameter-list"></div>
             </section>
           </div>
           <div class="detail-columns">
             <section class="data-panel">
               <div class="panel-heading">
                 <div>
-                  <h2>执行流程</h2>
-                  <p>这里只描述策略与仿真框架的调用关系，不展示实现代码。</p>
+                  <h2>状态机</h2>
+                  <p>Rule 只处理输入、当前状态与已解析配置。</p>
                 </div>
               </div>
-              <div id="strategy-flow" class="strategy-flow" aria-label="策略执行流程">
+              <div id="rule-flow" class="strategy-flow" aria-label="规则状态机">
                 <div><span>01</span><strong>市场数据</strong><small>当前 K 线与历史状态</small></div>
                 <i>→</i>
                 <div><span>02</span><strong>策略判断</strong><small>参数与内部状态</small></div>
@@ -152,26 +273,26 @@
             <section class="data-panel">
               <div class="panel-heading">
                 <div>
-                  <h2>研究说明</h2>
-                  <p>来自使用该策略的实验描述。</p>
+                  <h2>能力与边界</h2>
+                  <p>方向、产品、输入输出和约束来自规则定义。</p>
                 </div>
               </div>
-              <div id="strategy-research-notes" class="note-list"></div>
+              <div id="rule-research-notes" class="note-list"></div>
             </section>
           </div>
           <section class="data-panel">
             <div class="panel-heading">
               <div>
-                <h2>已研究配置</h2>
-                <p>同一策略实现下，不同参数组合形成独立配置。</p>
+                <h2>规则使用情况</h2>
+                <p>Strategy 如何把该 Rule 放入组合，以及已有实验中的 RuleConfig。</p>
               </div>
             </div>
             <div class="table-wrap">
               <table class="research-table">
                 <thead>
-                  <tr><th>配置名称</th><th>参数</th><th>Run 数</th></tr>
+                  <tr><th>Rule Slot / Strategy</th><th>RuleConfig</th><th>Run 数</th></tr>
                 </thead>
-                <tbody id="strategy-config-body"></tbody>
+                <tbody id="rule-config-body"></tbody>
               </table>
             </div>
           </section>
@@ -222,8 +343,8 @@
         <section class="workspace-page" data-page-panel="experiment-overview">
           <div class="page-intro">
             <div>
-              <h2>实验总览</h2>
-              <p>策略默认收起；点击策略展开实验，点击实验名称进入详情。</p>
+              <h2>Study 与参数对比</h2>
+              <p>大分组按核心 Rule Type 建立；标的、参数和市场在 Study 内比较，规则组成与配合 Strategy 随结果展示。</p>
             </div>
             <a id="download-current-comparison" class="button" href="#" hidden>导出当前实验</a>
           </div>
@@ -231,33 +352,75 @@
         </section>
 
         <section class="workspace-page" data-page-panel="experiment-detail">
-          <div class="run-selector-grid">
+          <div class="run-selector-grid run-report-width">
             <label>实验<select id="detail-experiment-select"></select></label>
             <label>配置 / 市场<select id="detail-scenario-select"></select></label>
             <label>Seed<select id="detail-seed-select"></select></label>
           </div>
-          <section id="run-detail-hero" class="run-detail-hero"></section>
-          <section class="data-panel">
-            <div class="panel-heading">
-              <div>
-                <h2>关键指标</h2>
-                <p>优先展示收益、回撤、强平距离和成交事实；页面不重新计算指标。</p>
-              </div>
-              <button id="open-playback-from-detail" class="button button-primary" type="button">
-                查看 K 线播放
-              </button>
+          <section id="run-detail-hero" class="run-detail-hero run-report-width"></section>
+          <div id="run-performance-empty" class="run-performance-empty run-report-width" hidden></div>
+          <div class="run-tearsheet-layout run-report-width">
+            <div class="run-tearsheet-main">
+              <section class="data-panel run-chart-panel">
+                <div class="run-chart-heading">
+                  <div>
+                    <span class="chart-kicker">PRICE · LIQUIDATION · RETURN</span>
+                    <h2>价格、预计强平价与累计收益</h2>
+                    <p id="run-return-chart-summary">选择一个带 Trace 的 Run。</p>
+                  </div>
+                  <div id="run-performance-asset-switch" class="run-asset-switch" aria-label="权益计价资产"></div>
+                </div>
+                <div class="run-chart-frame">
+                  <canvas id="run-return-chart" aria-label="价格、预计强平价与累计收益走势图"></canvas>
+                </div>
+              </section>
+
+              <section class="data-panel run-chart-panel">
+                <div class="run-chart-heading">
+                  <div>
+                    <span class="chart-kicker">LIQUIDATION DISTANCE</span>
+                    <h2>距强平安全距离（每日最小）</h2>
+                    <p id="run-margin-risk-chart-summary">当前价格距离预计强平价的百分比；0% 触发强平。</p>
+                  </div>
+                </div>
+                <div class="run-chart-frame run-margin-risk-frame">
+                  <canvas id="run-margin-risk-chart" aria-label="距强平安全距离走势图"></canvas>
+                </div>
+              </section>
+
+              <details class="data-panel run-audit-details">
+                <summary>
+                  <span>配置与全部指标</span>
+                  <small>核对区 · 页面不重新计算指标</small>
+                </summary>
+                <div class="run-audit-grid">
+                  <section>
+                    <div class="run-audit-heading"><h3>本次配置</h3><span>策略、市场、执行与账户</span></div>
+                    <div id="run-configuration" class="configuration-sections"></div>
+                  </section>
+                  <section>
+                    <div class="run-audit-heading"><h3>全部指标</h3><span>按 MetricSet 分组</span></div>
+                    <div id="all-metrics" class="all-metrics"></div>
+                  </section>
+                </div>
+              </details>
             </div>
-            <div id="run-key-metrics" class="metric-card-grid"></div>
-          </section>
-          <div class="detail-columns">
-            <section class="data-panel">
-              <div class="panel-heading"><div><h2>本次配置</h2><p>策略、市场、执行与账户。</p></div></div>
-              <div id="run-configuration" class="configuration-sections"></div>
-            </section>
-            <section class="data-panel">
-              <div class="panel-heading"><div><h2>全部指标</h2><p>按 MetricSet 分组。</p></div></div>
-              <div id="all-metrics" class="all-metrics"></div>
-            </section>
+
+            <aside class="data-panel run-tearsheet-sidebar">
+              <div class="panel-heading">
+                <div>
+                  <span class="chart-kicker">STATISTICS</span>
+                  <h2>关键绩效指标</h2>
+                  <p>收益、风险与成交事实。</p>
+                </div>
+              </div>
+              <div id="run-key-metrics" class="run-metric-table"></div>
+              <div class="run-sidebar-action">
+                <button id="open-playback-from-detail" class="button button-primary" type="button">
+                  查看 K 线播放
+                </button>
+              </div>
+            </aside>
           </div>
         </section>
 
@@ -279,7 +442,7 @@
     </div>
 
     <div id="page-message" class="page-message" role="status"></div>
-    <script src="./research-model.js"></script>
-    <script src="./experiment-api.js?v=20260807-database-identity"></script>
+    <script src="./research-model.js?v=20260819-strategy-runs-page"></script>
+    <script src="./experiment-api.js?v=20260819-rule-config-runs"></script>
   </body>
 </html>

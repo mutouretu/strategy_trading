@@ -22,8 +22,8 @@
 ### 2.2 策略与桥接
 
 - `hold-btc/v1`：零交易 BTC 持有基准；
-- `target-liquidation-ladder-long/v1`：目标强平价反算仓位、主动建仓、几何阶梯
-  `reduce_only` 退出；
+- `coinm-long-take-profit-ladder/v1`：按目标强平价或目标有效杠杆率反算仓位、
+  主动建仓、几何阶梯 `reduce_only` 退出；
 - `single-following-grid/v1`：只通过 Plugin 桥接已有网格 Strategy 和 Adapter，
   未复制或修改网格规则。
 

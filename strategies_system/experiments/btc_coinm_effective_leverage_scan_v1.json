@@ -1,0 +1,109 @@
+{
+  "schema_version": "experiment-spec/v1",
+  "experiment_id": "btc-coinm-effective-leverage-scan-v1",
+  "description": "单市场单 Seed 仓位敏感性实验：固定10倍账户杠杆，比较0.5至3.0倍入场有效杠杆率的COIN-M阶梯止盈结果",
+  "scenario_groups": [
+    {
+      "key": "btc-base-bull-effective-leverage-scan",
+      "run_provider": "strategies-simulation/v1",
+      "markets": [
+        {
+          "key": "btc-base-bull-train-1101",
+          "type": "locked-market-path/v1",
+          "parameters": {
+            "path_set_id": "btc-three-year-market-baseline-v1",
+            "path_set_lock_fingerprint": "dc171110a1394d76a0d42215bce1c8699c94671d8a61c42ecf3784ab8a04933e",
+            "manifest_sha256": "2bf77264e426cc5f3ca5a10becc1ba13bba33e8cc3d0cbac52de81df4f2c56dd",
+            "path_key": "btc-base-bull-v1:TRAIN:1101",
+            "scenario_id": "btc-base-bull-v1",
+            "role": "TRAIN",
+            "market_seed": 1101,
+            "origin": "SYNTHETIC",
+            "market_path_id": "362b1875d7298decde19",
+            "path": "market_environments/generated/btc-three-year-market-baseline-v1/362b1875d7298decde19.parquet",
+            "instrument": "BTCUSD_PERP",
+            "interval": "1h",
+            "frame_count": 26305,
+            "content_sha256": "362b1875d7298decde196156af356c4601e0e0f548650758dd0d08383fb96c77",
+            "file_sha256": "1d6a7b99f4cb4d356ce14c91cef7199dbf17a931271596aaa5b1fb99da733f5e"
+          }
+        }
+      ],
+      "strategies": [
+        {
+          "key": "btc-effective-leverage-ladder",
+          "type": "coinm-long-take-profit-ladder/v1",
+          "parameters": {
+            "strategy_id": "btc-effective-leverage-ladder-scan",
+            "instrument": "BTCUSD_PERP",
+            "entry_sizing_mode": "EFFECTIVE_LEVERAGE",
+            "entry_effective_leverage": "0.5",
+            "first_take_profit_ratio": "1.10",
+            "take_profit_end_price": "150000",
+            "take_profit_count": 10,
+            "tick_size": "0.1",
+            "quantity_step": "1"
+          }
+        }
+      ],
+      "executions": [
+        {
+          "key": "binance-coinm-baseline-fees-zero-funding",
+          "type": "daily-bar-execution/v1",
+          "parameters": {
+            "maker_fee_rate": "0.0002",
+            "taker_fee_rate": "0.0005",
+            "fee_asset": "BTC",
+            "funding_model": "none"
+          }
+        }
+      ],
+      "accounts": [
+        {
+          "key": "coinm-cross-1-1-btc-10x",
+          "type": "coinm-inverse/v1",
+          "parameters": {
+            "instrument": "BTCUSD_PERP",
+            "contract_size": "100",
+            "spot_btc": "0",
+            "futures_wallet_btc": "1.1",
+            "base_asset": "BTC",
+            "quote_asset": "USDT",
+            "notional_asset": "USD",
+            "margin_model": "flat-maintenance/v1",
+            "leverage": "10",
+            "maintenance_margin_rate": "0.005",
+            "mark_price_sampling": "ADVERSE_EXTREME"
+          }
+        }
+      ],
+      "parameter_axes": [
+        {
+          "path": "/strategy/parameters/entry_effective_leverage",
+          "values": ["0.5", "1.0", "1.5", "2.0", "2.5", "3.0"]
+        }
+      ]
+    }
+  ],
+  "seeds": [0],
+  "output": {
+    "root": "experiment_results",
+    "default_retention_class": "archived"
+  },
+  "controls": {
+    "max_runs": 6,
+    "continue_on_error": false
+  },
+  "metadata": {
+    "purpose": "coinm-position-size-sensitivity",
+    "formal_baseline": false,
+    "market_assumption": "btc-base-bull-v1",
+    "market_path_key": "btc-base-bull-v1:TRAIN:1101",
+    "initial_btc": "1.1",
+    "account_leverage": "10",
+    "position_axis": "entry_effective_leverage",
+    "funding_assumption": "zero",
+    "maker_fee_rate": "0.0002",
+    "taker_fee_rate": "0.0005"
+  }
+}

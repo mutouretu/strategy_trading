@@ -250,13 +250,9 @@ python3 scripts/generate_ladder_run.py
 viewer/data/btc-geometric-ladder-3y-seed-42.json
 ```
 
-接入后的改进版 COIN-M 多层跟随网格示例由相邻 `strategies_system` 中的
-`experiments/layered_following_grid_baseline.json` 定义，并通过
-`strategy_simulation` 实验 CLI 显式导出。
-Viewer 默认载入
-`viewer/data/layered-following-grid-coinm-long-3y-seed-42.json`，并可切换查看 BTC
-总权益、按每日收盘价折算的 USDT 总权益、逐笔和累计手续费以及资金费净入账。
-单组跟随网格结果也由同一策略工程生成，可手动载入对照。
+Viewer 默认载入 `viewer/data/deterministic-probe-run.json`，用于核对 Runtime 的
+意图、成交、账本和回放。策略结果不再作为静态默认文件提交；它们由实验系统保存，
+并从研究页面按具体 Run 打开。
 
 启动本地播放器：
 

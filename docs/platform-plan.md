@@ -765,6 +765,13 @@ Run
 该模块的 v1.0 代码边界、首批基准策略和实施批次由《第 5 部分：策略体系 v1.0
 方案》单独定义。
 
+在 v1.0 已完成单策略 Plugin、Ladder 与网格验证后，底层交易规则、规则组合、同策略
+多实例、多策略组合、资金配额和虚拟仓位归属的下一阶段架构，由《第 5 部分：交易规则
+与策略应用层 v2.0 方案》单独定义。v2.0 将 Rule 定义为可复用的底层状态转换机制，
+将 Strategy 定义为 n 条 Rule（n ≥ 1）的可运行组合；外部参数先由 Strategy 接收，再解析
+为各 Rule 的内部 RuleConfig。先使用 Ladder 验证新模型，
+不在首轮迁移中修改 `grid_rule`。
+
 ---
 
 # 10. 模块六：策略研究与优化
@@ -1170,6 +1177,7 @@ docs/
 ├── metrics-v1-spec.md
 ├── market-environment-plan.md
 ├── strategy-system-plan.md
+├── 05_trading_rule_strategy_application_v2.md
 ├── 06_strategy_optimization_v1.md
 └── validation-plan.md
 ```

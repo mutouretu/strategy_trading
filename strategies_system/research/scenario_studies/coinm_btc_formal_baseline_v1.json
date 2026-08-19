@@ -5,7 +5,7 @@
   "strategy_family": "single-following-grid/v1",
   "baseline_ids": [
     "hold-btc/v1",
-    "target-liquidation-ladder-long/v1",
+    "coinm-long-take-profit-ladder/v1",
     "single-following-grid/v1",
     "layered-following-grid/v1"
   ],

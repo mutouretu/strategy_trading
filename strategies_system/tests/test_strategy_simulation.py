@@ -18,8 +18,8 @@ from simulation_runtime import IntentStatus, SimulationRunner
 
 from strategy_simulation.experiment_provider import build_strategy_registry
 from strategy_simulation.plugins import (
-    TARGET_LIQUIDATION_LADDER_LONG_V1,
-    TargetLiquidationLadderSimulationPlugin,
+    COINM_LONG_TAKE_PROFIT_LADDER_V1,
+    CoinMLongTakeProfitLadderSimulationPlugin,
 )
 from strategy_simulation.registry import (
     SimulationStrategyBuildContext,
@@ -69,9 +69,10 @@ def execution(account_runtime):
 def component() -> ComponentSpec:
     return ComponentSpec(
         key="ladder",
-        type=TARGET_LIQUIDATION_LADDER_LONG_V1,
+        type=COINM_LONG_TAKE_PROFIT_LADDER_V1,
         parameters={
             "instrument": "BTCUSD_PERP",
+            "entry_sizing_mode": "TARGET_LIQUIDATION_PRICE",
             "target_liquidation_price": "20000",
             "take_profit_end_price": "100000",
             "take_profit_count": 3,
@@ -108,7 +109,7 @@ class StrategySimulationTests(unittest.TestCase):
     def binding_and_runtimes():
         account_runtime = account()
         execution_runtime = execution(account_runtime)
-        plugin = TargetLiquidationLadderSimulationPlugin()
+        plugin = CoinMLongTakeProfitLadderSimulationPlugin()
         binding = plugin.build(
             plugin.resolve(component()),
             SimulationStrategyBuildContext(
@@ -142,17 +143,69 @@ class StrategySimulationTests(unittest.TestCase):
         self.assertEqual(
             set(registry.strategy_types),
             {
+                "coinm-long-take-profit-ladder/v1",
                 "fixed-grid/v1",
                 "hold-btc/v1",
                 "layered-following-grid/v1",
-                "target-liquidation-ladder-long/v1",
                 "single-following-grid/v1",
             },
         )
         with self.assertRaisesRegex(ValueError, "already registered"):
-            registry.register(TargetLiquidationLadderSimulationPlugin())
+            registry.register(CoinMLongTakeProfitLadderSimulationPlugin())
         with self.assertRaisesRegex(ValueError, "not registered"):
             registry.get("rsi/v1")
+
+    def test_effective_leverage_entry_sizes_to_requested_exposure(self) -> None:
+        account_runtime = account()
+        execution_runtime = execution(account_runtime)
+        plugin = CoinMLongTakeProfitLadderSimulationPlugin()
+        binding = plugin.build(
+            plugin.resolve(
+                ComponentSpec(
+                    key="effective-ladder",
+                    type=COINM_LONG_TAKE_PROFIT_LADDER_V1,
+                    parameters={
+                        "instrument": "BTCUSD_PERP",
+                        "entry_sizing_mode": "EFFECTIVE_LEVERAGE",
+                        "entry_effective_leverage": "0.5",
+                        "take_profit_end_price": "100000",
+                        "take_profit_count": 3,
+                    },
+                )
+            ),
+            SimulationStrategyBuildContext(
+                instrument=account_runtime.instrument,
+                market_type=account_runtime.market_type,
+                contract_size=account_runtime.contract_size,
+                settlement_asset=account_runtime.base_asset,
+                ledger_factory=account_runtime.ledger_factory,
+                margin_model=account_runtime.margin_model,
+                fee_model=execution_runtime.fee_model,
+            ),
+        )
+        result = SimulationRunner(
+            FixedBarMarketSource(
+                "BTCUSD_PERP",
+                [
+                    ("60000", "61000", "59000", "60000"),
+                    ("60000", "61000", "59000", "60000"),
+                ],
+            ),
+            trade_port=binding.trade_port,
+            fee_model=execution_runtime.fee_model,
+            ledger_factory=account_runtime.ledger_factory,
+            margin_model=account_runtime.margin_model,
+            mark_price_sampling=account_runtime.mark_price_sampling,
+        ).run(seed=0)
+        summary = binding.summarize(result)
+
+        self.assertEqual(summary["requested_entry_effective_leverage"], "0.5")
+        self.assertLessEqual(
+            Decimal(summary["actual_entry_effective_leverage"]),
+            Decimal("0.5"),
+        )
+        self.assertGreater(Decimal(summary["entry_contracts"]), 0)
+        self.assertIsNone(summary["target_liquidation_price"])
 
     def test_position_sizing_and_full_reduce_only_ladder(self) -> None:
         binding, result = self.run_frames(
@@ -174,7 +227,50 @@ class StrategySimulationTests(unittest.TestCase):
         self.assertTrue(summary["completed"])
         self.assertEqual(len(result.fills), 4)
         self.assertTrue(all(fill.reduce_only for fill in result.fills[1:]))
-        self.assertTrue(all(record.status == IntentStatus.FILLED for record in result.intents))
+        self.assertTrue(
+            all(
+                record.status == IntentStatus.FILLED
+                for record in result.intents
+            )
+        )
+        self.assertEqual(result.fills[0].tags["rule_key"], "entry")
+        self.assertEqual(
+            result.fills[0].tags["rule_type"],
+            "initial-entry/v1",
+        )
+        self.assertTrue(
+            all(
+                fill.tags["rule_type"] == "ladder-take-profit/v1"
+                for fill in result.fills[1:]
+            )
+        )
+        self.assertEqual(
+            {fill.tags["strategy_instance_id"] for fill in result.fills},
+            {summary["strategy_id"]},
+        )
+        for identity in (
+            "application_id",
+            "strategy_instance_id",
+            "strategy_spec_id",
+            "rule_instance_id",
+            "rule_type",
+            "allocation_id",
+            "position_owner_id",
+        ):
+            self.assertTrue(all(fill.tags.get(identity) for fill in result.fills))
+        self.assertEqual(
+            summary["research_focus"]["primary_rule_type"],
+            "ladder-take-profit/v1",
+        )
+        application = summary["application"]
+        self.assertEqual(application["application_id"], summary["application_id"])
+        self.assertEqual(application["strategy_count"], 1)
+        self.assertTrue(application["reconciliation"]["balanced"])
+        strategy_document = application["strategies"][0]
+        self.assertEqual(
+            {item["rule_type"] for item in strategy_document["rules"]},
+            {"initial-entry/v1", "ladder-take-profit/v1"},
+        )
 
     def test_partial_and_untouched_exit_paths(self) -> None:
         untouched_binding, untouched = self.run_frames(
@@ -232,7 +328,7 @@ class StrategySimulationTests(unittest.TestCase):
             )
         )
         execution_runtime = execution(account_runtime)
-        plugin = TargetLiquidationLadderSimulationPlugin()
+        plugin = CoinMLongTakeProfitLadderSimulationPlugin()
         binding = plugin.build(
             plugin.resolve(component()),
             SimulationStrategyBuildContext(

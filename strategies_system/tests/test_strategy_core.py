@@ -5,15 +5,16 @@ import unittest
 from decimal import Decimal
 from pathlib import Path
 
+from strategy_application import CoinMLongTakeProfitLadderStrategy
 from trading_strategies.baselines import HoldBtcConfig, HoldBtcStrategy
 from trading_strategies.btc_accumulation import (
+    CoinMLongTakeProfitLadderConfig,
+    EntrySizingMode,
     LadderState,
     PositionPlan,
     StrategyFill,
     StrategyOrderSide,
     StrategyRole,
-    TargetLiquidationLadderConfig,
-    TargetLiquidationLadderStrategy,
     build_take_profit_schedule,
 )
 
@@ -33,11 +34,15 @@ class StaticSizer:
     def evaluate_long(self, **_kwargs) -> PositionPlan:
         return self.size_long()
 
+    def size_long_by_effective_leverage(self, **_kwargs) -> PositionPlan:
+        return self.size_long()
 
-def config() -> TargetLiquidationLadderConfig:
-    return TargetLiquidationLadderConfig(
+
+def config() -> CoinMLongTakeProfitLadderConfig:
+    return CoinMLongTakeProfitLadderConfig(
         strategy_id="ladder",
         instrument="BTCUSD_PERP",
+        entry_sizing_mode=EntrySizingMode.TARGET_LIQUIDATION_PRICE,
         target_liquidation_price=Decimal("20000"),
         first_take_profit_ratio=Decimal("1.10"),
         take_profit_end_price=Decimal("120000"),
@@ -71,7 +76,10 @@ class StrategyCoreTests(unittest.TestCase):
         self.assertEqual([item.quantity for item in levels], [Decimal("4"), Decimal("4"), Decimal("5")])
 
     def test_state_changes_only_from_fills_and_duplicate_is_idempotent(self) -> None:
-        strategy = TargetLiquidationLadderStrategy(config(), StaticSizer())
+        strategy = CoinMLongTakeProfitLadderStrategy(
+            config(),
+            StaticSizer(),
+        )
         strategy.initialize()
         plan = strategy.plan_entry(Decimal("60000"))
         self.assertEqual(strategy.state, LadderState.ENTRY_PENDING)
@@ -100,9 +108,31 @@ class StrategyCoreTests(unittest.TestCase):
         self.assertEqual(strategy.state, LadderState.COMPLETED)
         self.assertEqual(strategy.remaining_quantity, Decimal("0"))
 
+    def test_effective_leverage_strategy_delegates_only_entry_sizing(self) -> None:
+        strategy = CoinMLongTakeProfitLadderStrategy(
+            CoinMLongTakeProfitLadderConfig(
+                strategy_id="effective-ladder",
+                instrument="BTCUSD_PERP",
+                entry_sizing_mode=EntrySizingMode.EFFECTIVE_LEVERAGE,
+                entry_effective_leverage=Decimal("1.5"),
+                first_take_profit_ratio=Decimal("1.10"),
+                take_profit_end_price=Decimal("120000"),
+                take_profit_count=3,
+                tick_size=Decimal("0.1"),
+                quantity_step=Decimal("1"),
+            ),
+            StaticSizer(),
+        )
+        strategy.initialize()
+        plan = strategy.plan_entry(Decimal("60000"))
+
+        self.assertEqual(plan.position.quantity, Decimal("12"))
+        self.assertEqual(strategy.state, LadderState.ENTRY_PENDING)
+
     def test_pure_strategy_package_has_no_runtime_or_web_imports(self) -> None:
         root = Path(__file__).parents[1] / "src" / "trading_strategies"
         forbidden = {
+            "strategy_application",
             "strategy_simulation",
             "simulation_runtime",
             "market_simulator",

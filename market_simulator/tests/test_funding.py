@@ -212,6 +212,33 @@ class _RoundTripPort:
         return None
 
 
+class _FundingObservingRoundTripPort(_RoundTripPort):
+    def __init__(self) -> None:
+        self.events: list[tuple[str, int]] = []
+
+    def on_fills(self, fills: Sequence[SimFill]) -> None:
+        self.events.append(("fill", fills[0].sequence))
+
+    def on_funding(self, settlement) -> None:
+        self.events.append(("funding", settlement.sequence))
+
+
+class _AccountingObservingRoundTripPort(_RoundTripPort):
+    def __init__(self) -> None:
+        self.events: list[tuple[int, int | None]] = []
+
+    def on_accounting(self, fills, funding) -> None:
+        self.events.append(
+            (
+                len(fills),
+                None if funding is None else funding.sequence,
+            )
+        )
+
+    def on_fills(self, fills: Sequence[SimFill]) -> None:
+        raise AssertionError("on_accounting replaces legacy notifications")
+
+
 class FundingRuntimeTests(unittest.TestCase):
     def source(self) -> FixedBarMarketSource:
         return FixedBarMarketSource(
@@ -296,6 +323,37 @@ class FundingRuntimeTests(unittest.TestCase):
             document["summary"]["funding_event_count"],
             1,
         )
+
+    def test_optional_funding_observer_sees_fill_before_settlement(self) -> None:
+        port = _FundingObservingRoundTripPort()
+        SimulationRunner(
+            self.source(),
+            trade_port=port,
+            initial_equity=Decimal("1000"),
+            funding_model=FixedRateFundingModel(
+                funding_rate=Decimal("0.01"),
+                funding_interval_seconds=DAY_SECONDS,
+            ),
+        ).run()
+
+        self.assertEqual(
+            port.events,
+            [("fill", 1), ("funding", 1), ("fill", 2)],
+        )
+
+    def test_accounting_observer_receives_atomic_ordered_facts(self) -> None:
+        port = _AccountingObservingRoundTripPort()
+        SimulationRunner(
+            self.source(),
+            trade_port=port,
+            initial_equity=Decimal("1000"),
+            funding_model=FixedRateFundingModel(
+                funding_rate=Decimal("0.01"),
+                funding_interval_seconds=DAY_SECONDS,
+            ),
+        ).run()
+
+        self.assertEqual(port.events, [(1, 1), (1, None)])
 
     def test_default_zero_model_is_explicit_and_compatible(self) -> None:
         result = SimulationRunner(

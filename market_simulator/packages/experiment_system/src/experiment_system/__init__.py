@@ -32,6 +32,7 @@ from .exports import (
     comparison_table,
     export_comparison_csv,
     export_viewer_json,
+    performance_document,
     viewer_document,
 )
 from .expansion import expand_scenarios, planned_run_count
@@ -168,6 +169,7 @@ __all__ = [
     "experiment_spec_to_document",
     "export_comparison_csv",
     "export_viewer_json",
+    "performance_document",
     "expand_scenarios",
     "flatten_scalars",
     "load_experiment_spec",

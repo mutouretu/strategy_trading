@@ -9,9 +9,11 @@ def check_fields(
     required: set[str],
     *,
     context: str,
+    optional: set[str] | None = None,
 ) -> None:
+    optional_fields = optional or set()
     missing = required - set(parameters)
-    extra = set(parameters) - required
+    extra = set(parameters) - required - optional_fields
     if missing:
         raise ValueError(f"{context} is missing parameters: {sorted(missing)}")
     if extra:

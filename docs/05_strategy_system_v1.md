@@ -398,14 +398,14 @@ Simulation Adapter 注入 COIN-M 实现；未来 Live Adapter 可以根据真实
 
 在当前全 BTC 账户中，“不交易”和“HODL”语义相同，v1.0 不重复实现两个组件。
 
-### 7.2 目标强平价阶梯止盈多头
+### 7.2 COIN-M 阶梯止盈多头
 
-类型：`target-liquidation-ladder-long/v1`
+类型：`coinm-long-take-profit-ladder/v1`
 
 行为：
 
 1. 在实验开始后的第一个可成交开盘价建立 COIN-M 多仓；
-2. 仓位数量由目标强平价反算；
+2. 仓位数量按配置选择由目标强平价或目标有效杠杆率反算；
 3. 建仓成交后生成多个被动 `reduce_only` 卖出意图；
 4. 每个价格档位触发后部分平仓；
 5. 最后一个档位处理取整余量并完全退出；
@@ -418,7 +418,7 @@ Simulation Adapter 注入 COIN-M 实现；未来 Live Adapter 可以根据真实
 
 ---
 
-## 8. 目标强平价阶梯止盈策略规格
+## 8. COIN-M 阶梯止盈策略规格
 
 ### 8.1 策略配置
 
@@ -605,7 +605,7 @@ v1.0 不新增通用策略事件存储系统。通过以下现有事实表达行
 ```json
 {
   "key": "btc-ladder-baseline",
-  "type": "target-liquidation-ladder-long/v1",
+  "type": "coinm-long-take-profit-ladder/v1",
   "parameters": {}
 }
 ```
@@ -624,7 +624,7 @@ experiment_system.ProviderRegistry
     └── strategies-simulation/v1
             └── SimulationStrategyRegistry
                     ├── hold-btc/v1
-                    ├── target-liquidation-ladder-long/v1
+                    ├── coinm-long-take-profit-ladder/v1
                     ├── single-following-grid/v1
                     ├── layered-following-grid/v1
                     └── rsi-long-only/v1（后续）
@@ -661,7 +661,7 @@ Plugin 所有。
 相同 Market × 相同 Seed × 相同 Account × 相同 Execution
 
 hold-btc/v1
-target-liquidation-ladder-long/v1
+coinm-long-take-profit-ladder/v1
 single-following-grid/v1
 ```
 
@@ -814,8 +814,8 @@ v1.0 只实现 Simulation Adapter，不修改实盘 Server。
 2. 通用 Provider 通过 Registry 加载策略，不硬编码具体策略类型；
 3. 主动信号与被动价格策略均可通过同一 Registry 注册；
 4. `hold-btc/v1` 可完成实验并作为基准；
-5. `target-liquidation-ladder-long/v1` 可完成完整仿真；
-6. 建仓数量由目标强平价和账户事实反算；
+5. `coinm-long-take-profit-ladder/v1` 可完成完整仿真；
+6. 建仓数量可由目标强平价或目标有效杠杆率和账户事实反算；
 7. 预计强平价经过现有 Margin Model 校验；
 8. 所有止盈指令为 reduce-only；
 9. 完全退出后仓位为 0；

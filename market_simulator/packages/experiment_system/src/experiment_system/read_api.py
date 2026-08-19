@@ -20,6 +20,7 @@ from .errors import (
 from .exports import (
     comparison_csv_text,
     comparison_table,
+    performance_document,
     viewer_document,
 )
 from .market_path_catalog import MarketPathSetCatalog
@@ -309,6 +310,12 @@ class ExperimentReadHandler(SimpleHTTPRequestHandler):
                     if download
                     else None
                 ),
+            )
+            return
+        if len(parts) == 6 and parts[5] == "performance":
+            self._send_json(
+                200,
+                performance_document(reader, run_id),
             )
             return
         raise ExperimentRepositoryError("API route not found")

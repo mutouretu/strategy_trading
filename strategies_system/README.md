@@ -1,15 +1,61 @@
 # Strategies System
 
-策略体系工程包含三条明确隔离的代码边界：
+策略体系工程包含四条明确隔离的代码边界：
 
 - `trading_strategies`：纯策略核心，不依赖 simulator、实验系统或实盘 Server；
+- `strategy_application`：承载 TradingRuleInstance、StrategyInstance 和兼容门面，不依赖
+  simulator；
 - `strategy_simulation`：Simulation Adapter、实验组件、显式 Plugin Registry、实验 Provider 和策略指标。
 - `strategy_optimization`：第 6 部分的 Study、研究协议、ExperimentSpec 编译和研究状态持久化。
+
+策略体系 v2.0 已完成 5V2-A Rule 领域契约、5V2-B Ladder 单实例迁移、5V2-C
+同策略多实例、5V2-D 多策略独立并行、5V2-E 虚拟仓位与财务归因，以及
+5V2-F 仿真、实验结果和规则视角前端接线：
+
+- `TradingRule`：无运行状态的底层交易规则虚基类；
+- `TradingRuleDefinition` 与 `TradingRuleRegistry`：规则描述与注册；
+- `TradingRuleSpec`：Strategy 解析后分配给一条 Rule 的内部配置；
+- `TradingEvent`、`RuleIntentProposal` 和 `RuleTransition`：类型化输入事实、意图与状态转换；
+- `RuleConfigFieldDefinition`：Rule 内部配置契约。
+- `StrategyDefinition` 与 `StrategySpec`：接收外部策略参数并组合 n 条 Rule；
+- `StrategyDefinitionDescriptor` 与 `StrategyDefinitionRegistry`：不依赖实验数据库的策略
+  定义目录；
+- `TradingRuleInstance` 与 `StrategyInstance`：保存运行状态并执行事件级原子协调；
+- `StrategyApplicationSpec`、`StrategyLaunchSpec` 与 `StrategyApplication`：运行一个或多个
+  StrategySpec 的隔离实例，并精确路由 Fill；
+- `ApplicationCoordinationPolicy`：跨 Strategy 原子事件批次、fail-fast 和单向账户
+  反向建仓冲突拒绝；
+- `VirtualPositionBook`：按 Strategy Owner 隔离的虚拟仓位、Owner 级减仓校验、
+  Linear/Inverse 盈亏、手续费和资金费归因；
+- `AttributionReconciliation`：与 Runtime 权威账户快照对比仓位、资金和盈亏残差；
+- `InitialEntryRule` 与 `LadderTakeProfitRule`：首批两条可复用 TradingRule；
+- `build_trading_rule_registry()`：不依赖实验数据库的内置规则目录。
+- `build_strategy_definition_registry()`：当前注册产品中立的
+  `entry-then-ladder-exit/v1`，由 InitialEntryRule 与 LadderTakeProfitRule 组成。
+
+Rule Intent 使用明确数量和显式数量单位；当前 COIN-M Ladder 全程以 `contracts` 张数
+表达，不接受“目标仓位”式模糊指令。
+
+COIN-M 阶梯止盈的 Plugin/Adapter 外部入口保持不变，内部已经运行于
+`StrategyDefinition → StrategySpec → StrategyInstance → TradingRule` 链路。HODL 和
+Grid 仍使用 v1.0 运行路径；已迁移的阶梯止盈单策略 Plugin 会自动包装为只有一个 Strategy launch 的 Application。
+
+前端的“策略”目录直接读取 StrategyDefinitionRegistry，“交易规则”目录直接读取
+TradingRuleRegistry；清空实验 SQLite 后两类定义仍会显示。仿真 Strategy Component
+Descriptor 只负责实验接线，不再作为策略定义的权威来源。
+
+Application 现在可以同时运行同一或不同 StrategySpec 的多个 Launch。每个 Launch
+拥有独立结算资产 Allocation、Position Owner、Rule State 和 Intent 空间；跨策略事件
+先统一预演和批准，再按 Strategy Instance ID 稳定提交。Virtual Position Book 只负责
+策略归属和对账；账户权益、保证金和强平仍以 `simulation_runtime` 账本为唯一权威。
+`StrategyApplicationSimulationAdapter` 接收 Runner 的有序 Fill/Funding 事实，并把财务归因与身份写入实验结果；未迁移的旧 Adapter 保持兼容路径。
+
+详细方案见 `../docs/05_trading_rule_strategy_application_v2.md`。
 
 当前注册的仿真策略：
 
 - `hold-btc/v1`；
-- `target-liquidation-ladder-long/v1`；
+- `coinm-long-take-profit-ladder/v1`：支持按目标强平价或目标有效杠杆率确定初始仓位；
 - `single-following-grid/v1`；
 - `layered-following-grid/v1`。
 - `fixed-grid/v1`（支持 USD-M/COIN-M 与 long/short）。

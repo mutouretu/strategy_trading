@@ -32,28 +32,9 @@ python3 -m http.server 8088 --directory viewer
 python3 scripts/generate_ladder_run.py
 ```
 
-当前默认文件为
-`viewer/data/layered-following-grid-coinm-long-3y-seed-42.json`。该文件由相邻
-`strategies_system` 工程按 `SimulationRunner → StrategyAdapter → Strategy → GridRuleEngine`
-调用链生成，包含三年、40,000 至 200,000 美元边界内的固定 seed 随机日线、LONG
-多层向上跟随窗口、每跌 5,000 美元新建一层、层间碰撞复位、币本位账本、可配置
-Maker/Taker 手续费和真实规则状态转换。页面不会修改源数据。
-
-重新生成这份数据：
-
-```bash
-cd ../strategies_system
-PYTHONPATH=src python3 -m strategy_simulation run \
-  experiments/layered_following_grid_baseline.json \
-  --database experiments/experiment_results/layered-following-grid.sqlite3 \
-  --market-root experiments/market_data \
-  --export-viewer ../market_simulator/viewer/data/layered-following-grid-coinm-long-3y-seed-42.json
-```
-
-仿真事实先进入实验 SQLite 与 Parquet，再显式导出 Viewer JSON。单组跟随网格对应
-`experiments/single_following_grid_baseline.json`，使用相同的
-`strategy_simulation run --export-viewer` 命令导出后手动载入。
-正式基线要求两个仓库 clean；开发期可显式增加 `--allow-dirty`。
+当前默认文件为 `viewer/data/deterministic-probe-run.json`。它只用于核对仿真框架的
+主动/被动意图、成交、账本和回放，不代表任何研究策略。策略运行应从实验结果页面进入，
+或在新的 Rule → Strategy → Application 组合完成实验后再显式导出。
 
 COIN-M 强平展示样例位于
 `viewer/data/coinm-liquidation-adverse-extreme-v1.json`。它使用 5 倍杠杆、10 张
@@ -87,17 +68,26 @@ Viewer 使用 `reference_price = price`、滑点为零。
 
 实验研究入口 `experiments.html` 使用左侧分组导航组织以下页面：
 
-- 策略总览：按策略实现分组，展示配置、实验、市场和运行数量；
-- 策略详情：展示策略说明、运行流程和已经研究的配置；
+- 规则总览：直接读取 TradingRuleRegistry，展示规则类型、输入、输出、产品能力和研究记录；
+- 规则详情：展示规则状态机、公式、约束、内部 RuleConfig 契约及其 Strategy 使用记录；
 - 市场环境：直接列出已锁定 PathSet 的 Scenario、TRAIN/VALIDATION Seed 和周/月
   K 线，同时保留实验数据库中使用过的市场记录；
-- 实验总览：按策略分组实验，展开后查看配置 × 市场 × Seed 的 Scenario；
-- 实验详情：固定到一个策略、一个配置、一个市场和一个 Seed，展示该 Run 的指标；
+- 参数研究：新式 Strategy 先按核心 Trading Rule Type 分组，再把相同市场、执行成本和账户条件归为一个 Study；旧结果自动保留为历史 Strategy 分组；
+- StrategyApplication 结果：Run 保留 Application、StrategyInstance、RuleInstance、Allocation 与 PositionOwner 身份，Study 展示规则组成和按 StrategyInstance 汇总的配合 Strategy；
+  Study 展开后使用 tearsheet 报告布局，横向比较参数组合的 TRAIN/VALIDATION 收益
+  中位数、相对 HODL、最差回撤、强平率和成交/循环数，原始市场路径与 Seed 按需
+  展开；
+- Run 详情：固定到一个策略、一个配置、一个市场和一个 Seed，使用 tearsheet 双栏布局
+  展示累计收益、保证金强平风险率和紧凑绩效指标；BTC/USDT 权益可切换，配置与全部指标折叠核对；
 - K 线播放：在实验上下文内嵌现有逐日播放器，也可在独立窗口打开。
 
 页面从 SQLite 中读取已经保存的 `core/v1` 和应用扩展指标，不在浏览器重算指标。
+TradingRuleRegistry 独立提供规则目录，因此清空实验数据库后规则总览和规则详情仍会
+显示已注册 Rule；Strategy、Study、配置和实际 RuleInstance 记录只有运行实验后才出现。
 BTC 计价收益优先用于区分币本位策略效果；USDT 总收益会标注“含行情”，避免把标的
 自身涨跌误认为策略收益。全部 MetricSet 和组件参数仍保留在实验详情中供核对。
+同一个 `experiment_id` 存在多份数据库时，参数研究页优先选择带标签、可复现且 clean
+的版本参与比较，其他执行版本折叠保留，避免重复计入样本。
 
 PathSet K 线由服务端读取内容锁定的 Parquet，并聚合为周线或月线。HOLDOUT 只在目录
 中显示身份和锁定状态；页面不会请求或接收其价格、画像和 K 线。

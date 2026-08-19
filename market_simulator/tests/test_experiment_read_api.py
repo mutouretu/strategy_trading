@@ -145,6 +145,26 @@ class ExperimentReadApiTests(unittest.TestCase):
         self.assertEqual(viewer["schema_version"], 2)
         self.assertEqual(len(viewer["market"]), 6)
         self.assertEqual(len(viewer["fills"]), 3)
+
+        _, _, body = self._get(
+            f"/api/experiments/read-api-probe/runs/{run_id}/performance"
+        )
+        performance = json.loads(body)
+        self.assertEqual(
+            performance["schema_version"],
+            "run-performance/v1",
+        )
+        self.assertEqual(performance["run_id"], run_id)
+        self.assertEqual(performance["sampling"], "daily-close-with-initial")
+        self.assertEqual(performance["source_point_count"], 6)
+        self.assertEqual(performance["margin_source_point_count"], 0)
+        self.assertEqual(performance["sampled_point_count"], 7)
+        self.assertEqual(performance["assets"], ["USDT"])
+        self.assertEqual(performance["default_asset"], "USDT")
+        self.assertIsNone(performance["margin_statistics"])
+        first_asset = performance["points"][0]["assets"]["USDT"]
+        self.assertEqual(first_asset["return_rate"], "0")
+        self.assertEqual(first_asset["drawdown_rate"], "0")
         self.assertEqual(set(self.root.rglob("*.json")), before_json)
 
     def test_csv_static_assets_validation_and_read_only_methods(self) -> None:

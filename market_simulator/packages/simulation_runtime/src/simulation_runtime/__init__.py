@@ -52,7 +52,11 @@ from .slippage import (
     SlippageModel,
 )
 from .trace import SimulationTracePort
-from .trade import SimulationTradePort
+from .trade import (
+    SimulationAccountingPort,
+    SimulationFundingPort,
+    SimulationTradePort,
+)
 
 __all__ = [
     "EquitySnapshot",
@@ -87,6 +91,8 @@ __all__ = [
     "SimulationRunner",
     "SlippageModel",
     "SimulationTracePort",
+    "SimulationAccountingPort",
+    "SimulationFundingPort",
     "SimulationTradePort",
     "TradeInstruction",
     "TradeIntentMode",

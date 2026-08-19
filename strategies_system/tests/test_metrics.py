@@ -48,7 +48,7 @@ class StrategyMetricTests(unittest.TestCase):
 
     def test_ladder_summary_metrics_are_complete(self) -> None:
         values = BtcAccumulationMetricCalculator().calculate(
-            metric_input("target-liquidation-ladder-long/v1")
+            metric_input("coinm-long-take-profit-ladder/v1")
         )
         by_key = {value.metric_key: value for value in values}
         self.assertEqual(len(values), 9)
@@ -60,6 +60,22 @@ class StrategyMetricTests(unittest.TestCase):
             by_key["strategy.entry_contracts"].status,
             MetricValueStatus.AVAILABLE,
         )
+
+    def test_legacy_ladder_types_remain_metric_compatible(self) -> None:
+        for strategy_type in (
+            "effective-leverage-ladder-long/v1",
+            "target-liquidation-ladder-long/v1",
+        ):
+            values = BtcAccumulationMetricCalculator().calculate(
+                metric_input(strategy_type)
+            )
+            self.assertEqual(len(values), 9)
+            self.assertTrue(
+                all(
+                    value.reason_code != "NOT_APPLICABLE"
+                    for value in values
+                )
+            )
 
     def test_non_ladder_strategy_is_explicitly_not_applicable(self) -> None:
         values = BtcAccumulationMetricCalculator().calculate(

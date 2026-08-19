@@ -18,7 +18,7 @@ from simulation_runtime import (
 from trading_strategies.btc_accumulation import PositionPlan
 
 
-class CoinMTargetLiquidationPositionSizer:
+class CoinMPositionSizer:
     def __init__(
         self,
         *,
@@ -38,7 +38,7 @@ class CoinMTargetLiquidationPositionSizer:
         if not self.instrument.strip():
             raise ValueError("instrument must not be empty")
         if self.margin_model is None:
-            raise ValueError("target-liquidation sizing requires a margin model")
+            raise ValueError("COIN-M position sizing requires a margin model")
         if self.quantity_step <= 0:
             raise ValueError("quantity_step must be > 0")
 
@@ -83,6 +83,72 @@ class CoinMTargetLiquidationPositionSizer:
             raise ValueError(
                 "account cannot open one quantity step within the target "
                 "liquidation constraint"
+            )
+
+        lower = 1
+        upper = 2
+        for _ in range(128):
+            try:
+                plan = candidate(upper)
+            except (ValueError, RuntimeError):
+                break
+            if not acceptable(plan):
+                break
+            lower = upper
+            upper *= 2
+        else:
+            raise RuntimeError("unable to find a finite sizing upper bound")
+
+        while lower + 1 < upper:
+            middle = (lower + upper) // 2
+            try:
+                plan = candidate(middle)
+                valid = acceptable(plan)
+            except (ValueError, RuntimeError):
+                valid = False
+            if valid:
+                lower = middle
+            else:
+                upper = middle
+        return candidate(lower)
+
+    def size_long_by_effective_leverage(
+        self,
+        *,
+        entry_price: Decimal,
+        effective_leverage: Decimal,
+    ) -> PositionPlan:
+        entry = Decimal(entry_price)
+        target = Decimal(effective_leverage)
+        if entry <= 0:
+            raise ValueError("entry_price must be > 0")
+        if target <= 0:
+            raise ValueError("effective_leverage must be > 0")
+
+        def candidate(step_count: int) -> PositionPlan:
+            return self.evaluate_long(
+                entry_price=entry,
+                quantity=self.quantity_step * Decimal(step_count),
+            )
+
+        def acceptable(plan: PositionPlan) -> bool:
+            return (
+                plan.effective_leverage is not None
+                and plan.effective_leverage <= target
+                and plan.margin_buffer > 0
+            )
+
+        try:
+            first = candidate(1)
+        except (ValueError, RuntimeError) as exc:
+            raise ValueError(
+                "account cannot open one quantity step within the effective "
+                "leverage constraint"
+            ) from exc
+        if not acceptable(first):
+            raise ValueError(
+                "account cannot open one quantity step within the effective "
+                "leverage constraint"
             )
 
         lower = 1
@@ -195,4 +261,5 @@ class CoinMTargetLiquidationPositionSizer:
                 f"coinm-margin/{self.margin_model.maintenance_schedule_version};"
                 f"leverage={snapshot.leverage}"
             ),
+            effective_leverage=snapshot.effective_leverage,
         )

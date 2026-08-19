@@ -639,14 +639,14 @@ Study 指纹由 Study 定义与实际 Experiment 配置形成；协议指纹同�
 
 \section{COIN-M 与 USD-M（U 本位）产品差异的隔离}
 
-策略逻辑尽量不感知合约计价差异，产品差异由账户与数值适配器处理：
+交易规则与策略组合尽量不感知合约计价差异，产品差异由账户与数值适配器处理：
 
 \begin{figure}[htbp]
 \centering
 \resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[node distance=9mm and 18mm]
   \node[strategy,text width=50mm] (same) {
-    \textbf{相同策略逻辑}\\
+    \textbf{相同交易规则与策略组合}\\
     建网格、跟随、复位、暂停、退出
   };
   \node[component,below left=12mm and 9mm of same,text width=47mm] (coinm) {

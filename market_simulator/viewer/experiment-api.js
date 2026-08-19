@@ -5,9 +5,12 @@
   const PAGE_META = {
     "strategy-overview": ["STRATEGIES", "策略总览"],
     "strategy-detail": ["STRATEGY DETAIL", "策略详情"],
+    "strategy-runs": ["STRATEGY RUNS", "策略运行"],
+    "rule-overview": ["TRADING RULES", "规则总览"],
+    "rule-detail": ["RULE DETAIL", "规则详情"],
     "market-overview": ["MARKET ENVIRONMENTS", "市场环境"],
-    "experiment-overview": ["EXPERIMENTS", "实验总览"],
-    "experiment-detail": ["RUN DETAIL", "实验详情"],
+    "experiment-overview": ["STUDIES", "参数研究"],
+    "experiment-detail": ["RUN DETAIL", "Run 详情"],
     playback: ["PLAYBACK", "K 线播放"],
   };
 
@@ -15,10 +18,13 @@
     experiments: [],
     records: [],
     strategies: [],
+    strategyDefinitions: [],
+    rules: [],
     markets: [],
     pathSets: [],
     page: "strategy-overview",
     strategyId: null,
+    ruleId: null,
     marketId: null,
     marketRole: null,
     marketInterval: "1w",
@@ -27,7 +33,12 @@
     detailDatabaseName: null,
     detailScenarioId: null,
     detailRunId: null,
+    overviewExperimentId: null,
+    overviewDatabaseName: null,
     runDetail: null,
+    runPerformance: null,
+    runPerformanceAsset: null,
+    runPerformanceError: null,
     playbackUrl: null,
   };
 
@@ -45,12 +56,25 @@
     strategyBody: byId("strategy-overview-body"),
     strategySelect: byId("strategy-detail-select"),
     strategyHero: byId("strategy-hero"),
-    strategyFormulae: byId("strategy-formulae"),
-    strategyConstraints: byId("strategy-constraints"),
+    strategyRuleBody: byId("strategy-rule-body"),
     strategyParameters: byId("strategy-parameters"),
-    strategyFlow: byId("strategy-flow"),
-    strategyNotes: byId("strategy-research-notes"),
-    strategyConfigBody: byId("strategy-config-body"),
+    strategyCoordination: byId("strategy-coordination"),
+    strategyConstraints: byId("strategy-constraints"),
+    strategyLifecycle: byId("strategy-lifecycle"),
+    strategyRunSelect: byId("strategy-run-select"),
+    strategyRunFacts: byId("strategy-run-facts"),
+    strategyRunHead: byId("strategy-run-head"),
+    strategyRunBody: byId("strategy-run-body"),
+    ruleFacts: byId("rule-overview-facts"),
+    ruleBody: byId("rule-overview-body"),
+    ruleSelect: byId("rule-detail-select"),
+    ruleHero: byId("rule-hero"),
+    ruleFormulae: byId("rule-formulae"),
+    ruleConstraints: byId("rule-constraints"),
+    ruleParameters: byId("rule-parameters"),
+    ruleFlow: byId("rule-flow"),
+    ruleNotes: byId("rule-research-notes"),
+    ruleConfigBody: byId("rule-config-body"),
     marketList: byId("market-list"),
     marketIntervalSwitch: byId("market-interval-switch"),
     marketTitle: byId("market-chart-title"),
@@ -66,6 +90,12 @@
     detailScenarioSelect: byId("detail-scenario-select"),
     detailSeedSelect: byId("detail-seed-select"),
     runDetailHero: byId("run-detail-hero"),
+    runPerformanceEmpty: byId("run-performance-empty"),
+    runPerformanceAssetSwitch: byId("run-performance-asset-switch"),
+    runReturnChart: byId("run-return-chart"),
+    runReturnChartSummary: byId("run-return-chart-summary"),
+    runMarginRiskChart: byId("run-margin-risk-chart"),
+    runMarginRiskChartSummary: byId("run-margin-risk-chart-summary"),
     runKeyMetrics: byId("run-key-metrics"),
     runConfiguration: byId("run-configuration"),
     allMetrics: byId("all-metrics"),
@@ -130,7 +160,24 @@
   }
 
   function strategyName(strategy) {
+    const composition = strategy?.descriptor?.rule_composition || [];
+    if (composition.length) {
+      return composition.map((rule) => strategyRuleName(rule)).join("&");
+    }
     return strategy?.descriptor?.display_name || humanize(strategy?.id);
+  }
+
+  function ruleName(rule) {
+    return rule?.descriptor?.display_name || humanize(rule?.id);
+  }
+
+  function strategyRuleName(compositionRule) {
+    const rule = state.rules.find(
+      (item) => item.type === compositionRule?.rule_type,
+    );
+    return rule
+      ? ruleName(rule)
+      : humanize(compositionRule?.rule_type || compositionRule?.rule_key);
   }
 
   function shortId(value, length = 12) {
@@ -242,6 +289,48 @@
     return wrapper;
   }
 
+  function ruleConfigSummary(compositionRule, strategyInstance) {
+    const ruleInstance = (strategyInstance?.rules || []).find(
+      (item) => item.rule_key === compositionRule.rule_key,
+    );
+    const ruleDefinition = state.rules.find(
+      (item) => item.type === compositionRule.rule_type,
+    );
+    const fields = ruleDefinition?.descriptor?.config_fields || [];
+    const config = ruleInstance?.config || {};
+    const wrapper = make("div", "parameter-summary");
+    fields
+      .filter((field) => Object.hasOwn(config, field.key))
+      .forEach((field) => {
+        wrapper.append(
+          make("span", "", `${field.name}=${simpleValue(config[field.key])}`),
+        );
+      });
+    if (!wrapper.childElementCount) {
+      wrapper.append(make("span", "", "—"));
+    }
+    return wrapper;
+  }
+
+  function renderStrategyRunHeader(strategy) {
+    const row = document.createElement("tr");
+    ["实验 ID", "标的", "方向", "产品", "资金 / 账户", "市场 / Seed"]
+      .forEach((label) => row.append(make("th", "", label)));
+    (strategy?.descriptor?.rule_composition || []).forEach(
+      (rule) => row.append(make("th", "", strategyRuleName(rule))),
+    );
+    [
+      "BTC 收益",
+      "USDT 收益",
+      "仓位 / 预计强平价",
+      "成交",
+      "状态",
+      "",
+    ].forEach((label) => row.append(make("th", "", label)));
+    elements.strategyRunHead.replaceChildren(row);
+    return 12 + (strategy?.descriptor?.rule_composition || []).length;
+  }
+
   function replaceOptions(select, items, selected) {
     select.replaceChildren(...items);
     if (selected && [...select.options].some((item) => item.value === selected)) {
@@ -257,8 +346,14 @@
     );
   }
 
-  function selectedStrategy() {
-    return state.strategies.find((item) => item.id === state.strategyId);
+  function selectedRule() {
+    return state.rules.find((item) => item.id === state.ruleId);
+  }
+
+  function selectedStrategyDefinition() {
+    return state.strategyDefinitions.find(
+      (item) => item.id === state.strategyId,
+    );
   }
 
   function selectedMarket() {
@@ -281,53 +376,380 @@
       url.searchParams.set("page", page);
       window.history.replaceState({}, "", url);
     }
+    if (page === "experiment-detail") {
+      window.requestAnimationFrame(renderPerformanceCharts);
+    }
   }
 
   function renderStrategyOverview() {
+    const ruleTypes = new Set(
+      state.strategyDefinitions.flatMap(
+        (item) => (item.descriptor?.rule_composition || [])
+          .map((rule) => rule.rule_type),
+      ),
+    );
     elements.strategyFacts.replaceChildren(
-      make("span", "mini-fact", `${state.strategies.length} 个策略`),
       make(
         "span",
         "mini-fact",
-        `${state.strategies.reduce((sum, item) => sum + item.configurations.length, 0)} 个配置`,
+        `${state.strategyDefinitions.length} 类 Strategy`,
       ),
+      make("span", "mini-fact", `${ruleTypes.size} 类 Rule`),
       make("span", "mini-fact", `${state.experiments.length} 个实验`),
     );
     elements.strategyBody.replaceChildren();
-    if (!state.strategies.length) {
-      emptyRow(elements.strategyBody, 7, "结果目录中还没有策略研究记录");
+    if (!state.strategyDefinitions.length) {
+      emptyRow(
+        elements.strategyBody,
+        7,
+        "当前没有注册的 StrategyDefinition",
+      );
       return;
     }
-    state.strategies.forEach((strategy) => {
+    state.strategyDefinitions.forEach((strategy) => {
+      const descriptor = strategy.descriptor || {};
+      const rules = descriptor.rule_composition || [];
       const row = document.createElement("tr");
       row.append(primaryCell(strategyName(strategy), strategy.type));
-      appendCell(row, strategy.configurations.length);
-      appendCell(row, strategy.experiments.length);
-      appendCell(row, strategy.markets.length);
-      const statusCell = document.createElement("td");
-      const status = make("span", "status-inline");
-      status.append(
-        make("i", "status-dot succeeded"),
-        document.createTextNode(statusText(strategy.status_counts)),
+      appendCell(row, descriptor.family || "—");
+      appendCell(
+        row,
+        rules.map(
+          (rule) => `${rule.rule_key}: ${strategyRuleName(rule)}`,
+        ).join("\n")
+          || "未登记",
       );
-      statusCell.append(status);
-      row.append(statusCell);
-      const latest = strategy.runs
-        .map(({record}) => record.experiment.updated_at)
-        .sort()
-        .at(-1);
-      appendCell(row, dateText(latest));
+      appendCell(
+        row,
+        (descriptor.supported_directions || []).join(" / ") || "—",
+      );
+      appendCell(
+        row,
+        (descriptor.supported_product_types || []).join(" / ") || "—",
+      );
+      appendCell(
+        row,
+        `${strategy.experiments.length} 实验 · ${strategy.runs.length} Runs`,
+      );
       const actionCell = document.createElement("td");
-      const action = make("button", "text-button", "查看策略 →");
-      action.type = "button";
-      action.addEventListener("click", () => {
+      const detailAction = make("button", "text-button", "详情 →");
+      detailAction.type = "button";
+      detailAction.addEventListener("click", () => {
         state.strategyId = strategy.id;
         renderStrategyDetail();
+        renderStrategyRuns();
         setPage("strategy-detail");
+      });
+      const runsAction = make("button", "text-button", "运行 →");
+      runsAction.type = "button";
+      runsAction.addEventListener("click", () => {
+        state.strategyId = strategy.id;
+        renderStrategyDetail();
+        renderStrategyRuns();
+        setPage("strategy-runs");
+      });
+      actionCell.append(detailAction, runsAction);
+      row.append(actionCell);
+      elements.strategyBody.append(row);
+    });
+  }
+
+  function renderStrategyDetail() {
+    const strategy = selectedStrategyDefinition()
+      || state.strategyDefinitions[0];
+    if (!strategy) {
+      const emptyOption = option("", "暂无注册策略");
+      emptyOption.disabled = true;
+      replaceOptions(elements.strategySelect, [emptyOption], "");
+      elements.strategyHero.replaceChildren(
+        make("div", "empty-cell", "当前没有注册的 StrategyDefinition。"),
+      );
+      emptyRow(elements.strategyRuleBody, 6, "暂无 Rule 组合");
+      elements.strategyParameters.replaceChildren(
+        make("div", "empty-cell", "暂无 Strategy 参数"),
+      );
+      elements.strategyCoordination.replaceChildren();
+      elements.strategyConstraints.replaceChildren();
+      elements.strategyLifecycle.replaceChildren();
+      return;
+    }
+    state.strategyId = strategy.id;
+    replaceOptions(
+      elements.strategySelect,
+      state.strategyDefinitions.map(
+        (item) => option(item.id, strategyName(item)),
+      ),
+      strategy.id,
+    );
+    const descriptor = strategy.descriptor || {};
+    const content = make("div");
+    content.append(
+      make("div", "eyebrow", "STRATEGY DEFINITION"),
+      make("h2", "", strategyName(strategy)),
+      make("div", "hero-type", strategy.type),
+      make(
+        "p",
+        "",
+        descriptor.description
+          || descriptor.summary
+          || "该 Strategy 来自历史运行，尚未登记独立定义。",
+      ),
+    );
+    const stats = make("div", "hero-stats");
+    stats.append(
+      heroStat("Rules", (descriptor.rule_composition || []).length),
+      heroStat("Parameters", (descriptor.parameters || []).length),
+      heroStat("Instances", strategy.instances.length),
+    );
+    elements.strategyHero.replaceChildren(content, stats);
+
+    elements.strategyRuleBody.replaceChildren();
+    const composition = descriptor.rule_composition || [];
+    if (!composition.length) {
+      emptyRow(elements.strategyRuleBody, 6, "尚未登记 Rule 组成");
+    } else {
+      composition.forEach((rule) => {
+        const row = document.createElement("tr");
+        row.append(primaryCell(rule.rule_key, rule.summary || "—"));
+        appendCell(row, rule.role || "—");
+        appendCell(row, rule.rule_type || "—");
+        appendCell(row, (rule.permissions || []).join(" / ") || "—");
+        appendCell(row, (rule.subscriptions || []).join(" / ") || "—");
+        const mappings = document.createElement("td");
+        mappings.append(parameterSummary(rule.parameter_mappings || {}, 12));
+        row.append(mappings);
+        elements.strategyRuleBody.append(row);
+      });
+    }
+
+    elements.strategyParameters.replaceChildren();
+    const parameters = descriptor.parameters || [];
+    if (!parameters.length) {
+      elements.strategyParameters.append(
+        make("div", "empty-cell", "该 Strategy 没有登记外部参数"),
+      );
+    } else {
+      parameters.forEach((parameter) => {
+        const row = make("div", "strategy-parameter-item");
+        const identity = make("div");
+        identity.append(
+          make("strong", "", parameter.name || parameter.key),
+          make("code", "", parameter.key),
+        );
+        if (parameter.description) {
+          identity.append(make("small", "", parameter.description));
+        }
+        const destinations = (parameter.maps_to || []).join(" · ");
+        row.append(
+          identity,
+          make(
+            "span",
+            "",
+            [
+              parameter.required
+                ? "必填"
+                : `默认 ${simpleValue(parameter.default)}`,
+              parameter.group ? `分组 ${parameter.group}` : "",
+              destinations ? `→ ${destinations}` : "",
+            ].filter(Boolean).join(" · "),
+          ),
+        );
+        elements.strategyParameters.append(row);
+      });
+    }
+
+    elements.strategyCoordination.replaceChildren();
+    const policy = descriptor.coordination_policy || {};
+    [
+      `事件批次：${policy.proposal_batch || "未登记"}`,
+      `冲突处理：${policy.conflict_resolution || "未登记"}`,
+      `退出控制者：${policy.exit_controller_rule_key || "无"}`,
+      `方向：${(descriptor.supported_directions || []).join("、") || "未登记"}`,
+      `产品：${(descriptor.supported_product_types || []).join("、") || "未登记"}`,
+    ].forEach((note) =>
+      elements.strategyCoordination.append(make("div", "note-item", note)),
+    );
+    elements.strategyConstraints.replaceChildren();
+    (descriptor.constraints || []).forEach((constraint) =>
+      elements.strategyConstraints.append(
+        make("span", "constraint-item", constraint),
+      ),
+    );
+
+    elements.strategyLifecycle.replaceChildren();
+    (descriptor.lifecycle || []).forEach((phase, index, phases) => {
+      const node = make("div");
+      node.append(
+        make("span", "", String(index + 1).padStart(2, "0")),
+        make("strong", "", phase),
+        make("small", "", "Strategy phase"),
+      );
+      elements.strategyLifecycle.append(node);
+      if (index < phases.length - 1) {
+        elements.strategyLifecycle.append(make("i", "", "→"));
+      }
+    });
+  }
+
+  function renderStrategyRuns() {
+    const strategy = selectedStrategyDefinition()
+      || state.strategyDefinitions[0];
+    if (!strategy) {
+      const emptyOption = option("", "暂无注册策略");
+      emptyOption.disabled = true;
+      replaceOptions(elements.strategyRunSelect, [emptyOption], "");
+      elements.strategyRunFacts.replaceChildren();
+      const columnCount = renderStrategyRunHeader(null);
+      emptyRow(elements.strategyRunBody, columnCount, "暂无策略运行实例");
+      return;
+    }
+    state.strategyId = strategy.id;
+    replaceOptions(
+      elements.strategyRunSelect,
+      state.strategyDefinitions.map(
+        (item) => option(item.id, strategyName(item)),
+      ),
+      strategy.id,
+    );
+    elements.strategyRunFacts.replaceChildren(
+      make("span", "mini-fact", `${strategy.experiments.length} 个实验`),
+      make("span", "mini-fact", `${strategy.run_instances.length} 个 Runs`),
+      make("span", "mini-fact", `${strategy.configurations.length} 组参数`),
+    );
+    const composition = strategy.descriptor?.rule_composition || [];
+    const columnCount = renderStrategyRunHeader(strategy);
+    elements.strategyRunBody.replaceChildren();
+    if (!strategy.run_instances.length) {
+      emptyRow(
+        elements.strategyRunBody,
+        columnCount,
+        "策略定义已经注册，但尚无实验运行实例",
+      );
+    } else {
+      strategy.run_instances.forEach((item) => {
+        const {record, run, strategy: instance} = item;
+        const row = document.createElement("tr");
+        appendCell(row, record.experiment.experiment_id);
+        appendCell(row, instance.binding?.instrument || "—");
+        appendCell(row, instance.binding?.direction || "—");
+        appendCell(row, instance.binding?.product_type || "—");
+        const account = run.resolved_components.account;
+        const allocation = instance.allocation || {};
+        row.append(primaryCell(
+          allocation.amount && allocation.settlement_asset
+            ? `${allocation.amount} ${allocation.settlement_asset}`
+            : "—",
+          [
+            account.type,
+            account.parameters?.leverage
+              ? `${account.parameters.leverage}×`
+              : "",
+            account.parameters?.margin_model || "",
+          ].filter(Boolean).join(" · ") || "—",
+        ));
+        const market = run.resolved_components.market;
+        row.append(primaryCell(
+          market.key,
+          `${market.parameters?.role || "EXPERIMENT"} · Path ${market.parameters?.market_seed ?? "—"} · Run ${run.seed}`,
+        ));
+        composition.forEach((rule) => {
+          const cell = document.createElement("td");
+          cell.append(ruleConfigSummary(rule, instance));
+          row.append(cell);
+        });
+        appendCell(
+          row,
+          optionalRatio(Model.metricScalar(
+            run,
+            "return.total_rate",
+            {scope: "account.total_equity", valuation_asset: "BTC"},
+          )),
+        );
+        appendCell(
+          row,
+          optionalRatio(Model.metricScalar(
+            run,
+            "return.total_rate",
+            {scope: "account.total_equity", valuation_asset: "USDT"},
+          )),
+        );
+        const entryContracts = Model.metricScalar(
+          run,
+          "strategy.entry_contracts",
+        );
+        const liquidationPrice = Model.metricScalar(
+          run,
+          "strategy.estimated_liquidation_price_after_entry",
+        );
+        appendCell(
+          row,
+          `${optionalNumber(entryContracts, 0)} 张 / ${optionalNumber(liquidationPrice, 2)}`,
+        );
+        const fillCount = Model.metricScalar(
+          run,
+          "execution.fill_count",
+        );
+        appendCell(row, `${optionalNumber(fillCount, 0)} 笔`);
+        const liquidated = [true, 1, "true"].includes(
+          Model.metricScalar(run, "run.liquidated"),
+        );
+        appendCell(
+          row,
+          liquidated ? "已强平" : `${run.status} · ${instance.lifecycle || "—"}`,
+          liquidated ? "risk-cell" : "",
+        );
+        const actionCell = document.createElement("td");
+        const action = make("button", "text-button", "查看 Run →");
+        action.type = "button";
+        action.addEventListener("click", () => openRunDetail(record, run));
+        actionCell.append(action);
+        row.append(actionCell);
+        elements.strategyRunBody.append(row);
+      });
+    }
+  }
+
+  function renderRuleOverview() {
+    elements.ruleFacts.replaceChildren(
+      make("span", "mini-fact", `${state.rules.length} 条规则`),
+      make(
+        "span",
+        "mini-fact",
+        `${new Set(state.rules.flatMap((item) => item.strategies)).size} 类 Strategy`,
+      ),
+      make("span", "mini-fact", `${state.experiments.length} 个实验`),
+    );
+    elements.ruleBody.replaceChildren();
+    if (!state.rules.length) {
+      emptyRow(elements.ruleBody, 7, "当前没有注册的 TradingRuleDefinition");
+      return;
+    }
+    state.rules.forEach((rule) => {
+      const descriptor = rule.descriptor || {};
+      const row = document.createElement("tr");
+      row.append(primaryCell(ruleName(rule), rule.type));
+      appendCell(row, descriptor.family || "—");
+      appendCell(row, (descriptor.input_types || []).join(" / ") || "—");
+      appendCell(row, (descriptor.output_types || []).join(" / ") || "—");
+      appendCell(
+        row,
+        (descriptor.supported_product_types || []).join(" / ") || "—",
+      );
+      appendCell(
+        row,
+        `${rule.experiments.length} 实验 · ${rule.runs.length} Runs`,
+      );
+      const actionCell = document.createElement("td");
+      const action = make("button", "text-button", "查看规则 →");
+      action.type = "button";
+      action.addEventListener("click", () => {
+        state.ruleId = rule.id;
+        renderRuleDetail();
+        setPage("rule-detail");
       });
       actionCell.append(action);
       row.append(actionCell);
-      elements.strategyBody.append(row);
+      elements.ruleBody.append(row);
     });
   }
 
@@ -337,53 +759,75 @@
     return card;
   }
 
-  function renderStrategyDetail() {
-    const strategy = selectedStrategy() || state.strategies[0];
-    if (!strategy) return;
-    state.strategyId = strategy.id;
+  function renderRuleDetail() {
+    const rule = selectedRule() || state.rules[0];
+    if (!rule) {
+      const emptyOption = option("", "暂无注册规则");
+      emptyOption.disabled = true;
+      replaceOptions(elements.ruleSelect, [emptyOption], "");
+      elements.ruleHero.replaceChildren(
+        make("div", "empty-cell", "当前没有注册的 TradingRuleDefinition。"),
+      );
+      elements.ruleFormulae.replaceChildren(
+        make("div", "empty-cell", "暂无规则定义"),
+      );
+      elements.ruleConstraints.replaceChildren();
+      elements.ruleParameters.replaceChildren(
+        make("div", "empty-cell", "暂无规则配置字段"),
+      );
+      elements.ruleFlow.replaceChildren();
+      elements.ruleNotes.replaceChildren(
+        make("div", "empty-cell", "暂无能力声明"),
+      );
+      elements.ruleConfigBody.replaceChildren();
+      emptyRow(elements.ruleConfigBody, 3, "尚未被 Strategy 使用");
+      return;
+    }
+    state.ruleId = rule.id;
     replaceOptions(
-      elements.strategySelect,
-      state.strategies.map((item) => option(item.id, strategyName(item))),
-      strategy.id,
+      elements.ruleSelect,
+      state.rules.map((item) => option(item.id, ruleName(item))),
+      rule.id,
     );
 
-    const summary = strategy.descriptor?.description
-      || strategy.descriptions[0]
-      || "该策略尚未录入独立说明；当前页面根据已有实验整理配置、市场与运行记录。";
+    const descriptor = rule.descriptor || {};
+    const summary = descriptor.description
+      || descriptor.summary
+      || "该规则来自历史结果，当前版本尚未注册独立定义。";
     const content = make("div");
     content.append(
-      make("div", "eyebrow", "STRATEGY"),
-      make("h2", "", strategyName(strategy)),
-      make("div", "hero-type", strategy.type),
+      make("div", "eyebrow", "TRADING RULE"),
+      make("h2", "", ruleName(rule)),
+      make("div", "hero-type", rule.type),
       make("p", "", summary),
     );
     const stats = make("div", "hero-stats");
     stats.append(
-      heroStat("配置", strategy.configurations.length),
-      heroStat("实验", strategy.experiments.length),
-      heroStat("Runs", strategy.runs.length),
+      heroStat("Strategy", rule.strategies.length),
+      heroStat("实验", rule.experiments.length),
+      heroStat("Rule Instances", rule.instances.length),
     );
-    elements.strategyHero.replaceChildren(content, stats);
+    elements.ruleHero.replaceChildren(content, stats);
 
-    elements.strategyFormulae.replaceChildren();
-    const formulae = strategy.descriptor?.formulae || [];
-    (formulae.length ? formulae : ["该策略尚未登记数学公式。"])
+    elements.ruleFormulae.replaceChildren();
+    const formulae = descriptor.formulae || [];
+    (formulae.length ? formulae : ["该规则尚未登记状态转移公式。"])
       .forEach((formula) =>
-        elements.strategyFormulae.append(
+        elements.ruleFormulae.append(
           make("code", "formula-item", formula),
         ),
       );
-    elements.strategyConstraints.replaceChildren();
-    (strategy.descriptor?.constraints || []).forEach((constraint) =>
-      elements.strategyConstraints.append(
+    elements.ruleConstraints.replaceChildren();
+    (descriptor.constraints || []).forEach((constraint) =>
+      elements.ruleConstraints.append(
         make("span", "constraint-item", constraint),
       ),
     );
-    elements.strategyParameters.replaceChildren();
-    const descriptorParameters = strategy.descriptor?.parameters || [];
+    elements.ruleParameters.replaceChildren();
+    const descriptorParameters = descriptor.config_fields || [];
     if (!descriptorParameters.length) {
-      elements.strategyParameters.append(
-        make("div", "empty-cell", "该策略没有额外配置参数"),
+      elements.ruleParameters.append(
+        make("div", "empty-cell", "该规则没有内部配置字段"),
       );
     } else {
       descriptorParameters.forEach((parameter) => {
@@ -403,17 +847,15 @@
               : `默认 ${simpleValue(parameter.default)}`,
           ),
         );
-        elements.strategyParameters.append(row);
+        elements.ruleParameters.append(row);
       });
     }
 
-    const flow = strategy.descriptor?.flow || [
-      {title: "市场数据", detail: "当前 K 线与历史状态"},
-      {title: "策略判断", detail: "参数与内部状态"},
-      {title: "交易意图", detail: "方向、数量与触发条件"},
-      {title: "执行与账户", detail: "成交、记账与指标"},
-    ];
-    elements.strategyFlow.replaceChildren();
+    const flow = (descriptor.lifecycle || []).map((phase) => ({
+      title: phase,
+      detail: "Rule state",
+    }));
+    elements.ruleFlow.replaceChildren();
     flow.forEach((step, index) => {
       const node = make("div");
       node.append(
@@ -421,37 +863,49 @@
         make("strong", "", step.title),
         make("small", "", step.detail),
       );
-      elements.strategyFlow.append(node);
+      elements.ruleFlow.append(node);
       if (index < flow.length - 1) {
-        elements.strategyFlow.append(make("i", "", "→"));
+        elements.ruleFlow.append(make("i", "", "→"));
       }
     });
 
-    elements.strategyNotes.replaceChildren();
-    (strategy.descriptions.length
-      ? strategy.descriptions
-      : ["暂无实验说明。后续可由策略应用提供公式、约束与适用市场说明。"]
-    ).forEach((note) =>
-      elements.strategyNotes.append(make("div", "note-item", note)),
+    elements.ruleNotes.replaceChildren();
+    [
+      `输入：${(descriptor.input_types || []).join("、") || "未登记"}`,
+      `输出：${(descriptor.output_types || []).join("、") || "未登记"}`,
+      `方向：${(descriptor.supported_directions || []).join("、") || "未登记"}`,
+      `产品：${(descriptor.supported_product_types || []).join("、") || "未登记"}`,
+    ].forEach((note) =>
+      elements.ruleNotes.append(make("div", "note-item", note)),
     );
 
-    elements.strategyConfigBody.replaceChildren();
-    if (!strategy.configurations.length) {
+    elements.ruleConfigBody.replaceChildren();
+    if (!rule.configurations.length && !rule.strategies.length) {
       emptyRow(
-        elements.strategyConfigBody,
+        elements.ruleConfigBody,
         3,
-        "尚未运行实验；策略已经注册，可以开始配置实验",
+        "规则已经注册，但尚无 Strategy 组合或实验记录",
       );
       return;
     }
-    strategy.configurations.forEach((configuration) => {
+    const configurations = rule.configurations.length
+      ? rule.configurations
+      : rule.strategies.map((strategyType) => ({
+          id: strategyType,
+          key: strategyType,
+          parameters: {},
+          run_count: rule.runs.filter(({run}) =>
+            run.resolved_components.strategy.type === strategyType,
+          ).length,
+        }));
+    configurations.forEach((configuration) => {
       const row = document.createElement("tr");
       row.append(primaryCell(configuration.key, shortId(configuration.id, 20)));
       const parameterCell = document.createElement("td");
       parameterCell.append(parameterSummary(configuration.parameters, 12));
       row.append(parameterCell);
       appendCell(row, configuration.run_count);
-      elements.strategyConfigBody.append(row);
+      elements.ruleConfigBody.append(row);
     });
   }
 
@@ -872,23 +1326,704 @@
     return "—";
   }
 
-  function renderExperimentOverview() {
-    elements.experimentGroups.replaceChildren();
-    state.strategies.forEach((strategy) => {
-      const records = state.records.filter((record) =>
-        record.runs.some(
-          (run) => run.resolved_components.strategy.type === strategy.type,
+  function strategyParameterDescriptors(strategy) {
+    return strategy?.descriptor?.parameters || [];
+  }
+
+  function researchParameterLabel(strategy, path) {
+    return strategyParameterDescriptors(strategy).find(
+      (parameter) => parameter.key === path,
+    )?.name || String(path).split(".").at(-1) || parameterName(path);
+  }
+
+  function candidateParameterSummary(candidate, strategy) {
+    const entries = Object.entries(candidate.parameter_values || {});
+    const wrapper = make("div", "parameter-summary candidate-parameters");
+    if (!entries.length) {
+      wrapper.append(make("span", "parameter-empty", "无可调参数"));
+      return wrapper;
+    }
+    entries.forEach(([path, value]) => {
+      wrapper.append(
+        make(
+          "span",
+          candidate.varying_parameter_paths.includes(path) ? "is-varying" : "",
+          `${researchParameterLabel(strategy, path)}=${simpleValue(value)}`,
         ),
       );
+    });
+    return wrapper;
+  }
+
+  function optionalRatio(value) {
+    return value === null || value === undefined ? "—" : formatRatio(value);
+  }
+
+  function optionalNumber(value, digits = 1) {
+    return value === null || value === undefined
+      ? "—"
+      : formatNumber(value, digits);
+  }
+
+  function excessText(value) {
+    if (value === null || value === undefined) return "—";
+    const sign = Number(value) > 0 ? "+" : "";
+    return `${sign}${formatRatio(value)}`;
+  }
+
+  function openRunDetail(record, run) {
+    state.detailExperimentId = record.experiment.experiment_id;
+    state.detailDatabaseName = record.experiment.database_name;
+    state.detailScenarioId = run.scenario_id;
+    state.detailRunId = run.run_id;
+    renderDetailSelectors();
+    loadSelectedRun().catch((error) =>
+      showMessage(`Run 载入失败：${error.message}`, true),
+    );
+    setPage("experiment-detail");
+  }
+
+  function candidateSampleTable(candidate) {
+    const wrapper = make("div", "table-wrap candidate-sample-wrap");
+    const table = make("table", "research-table sample-table");
+    const head = document.createElement("thead");
+    const header = document.createElement("tr");
+    [
+      "数据角色",
+      "市场路径",
+      "Run Seed",
+      "收益",
+      "相对 HODL",
+      "最大回撤",
+      "成交 / 循环",
+      "状态",
+      "",
+    ].forEach((label) => header.append(make("th", "", label)));
+    head.append(header);
+    const body = document.createElement("tbody");
+    candidate.samples.forEach((sample) => {
+      const row = document.createElement("tr");
+      appendCell(row, sample.role);
+      row.append(
+        primaryCell(
+          sample.run.resolved_components.market.key,
+          sample.run.market_path_id || "未保存路径身份",
+        ),
+      );
+      appendCell(row, sample.run.seed);
+      appendCell(row, optionalRatio(sample.return_rate));
+      appendCell(row, excessText(sample.excess_vs_hodl));
+      appendCell(row, optionalRatio(sample.max_drawdown_rate));
+      appendCell(
+        row,
+        `${optionalNumber(sample.fill_count, 0)} / ${optionalNumber(sample.completed_cycles, 0)}`,
+      );
+      appendCell(row, sample.liquidated ? "已强平" : sample.run.status);
+      const actionCell = document.createElement("td");
+      const action = make("button", "text-button", "查看 Run →");
+      action.type = "button";
+      action.addEventListener("click", () =>
+        openRunDetail(sample.record, sample.run),
+      );
+      actionCell.append(action);
+      row.append(actionCell);
+      body.append(row);
+    });
+    table.append(head, body);
+    wrapper.append(table);
+    return wrapper;
+  }
+
+  function candidateComparisonTable(study, strategy) {
+    const preferredPaths = strategyParameterDescriptors(strategy).map(
+      (parameter) => parameter.key,
+    );
+    const candidates = Model.candidateRows(
+      study.preferred_records,
+      study.strategy_type,
+      preferredPaths,
+    );
+    const wrapper = make("div", "table-wrap candidate-table-wrap");
+    const table = make("table", "research-table candidate-table");
+    const head = document.createElement("thead");
+    const header = document.createElement("tr");
+    [
+      "参数组合",
+      "本次变化参数",
+      "配合策略",
+      "样本",
+      "TRAIN 收益中位数",
+      "VALIDATION 收益中位数",
+      "相对 HODL",
+      "最差回撤",
+      "强平率",
+      "成交 / 循环中位数",
+      "",
+    ].forEach((label) => header.append(make("th", "", label)));
+    head.append(header);
+    const body = document.createElement("tbody");
+    candidates.forEach((candidate) => {
+      const row = make("tr", "candidate-row");
+      row.append(
+        primaryCell(
+          candidate.label,
+          `${candidate.asset} 计价 · ${statusText(candidate.status_counts)}`,
+        ),
+      );
+      const parameters = document.createElement("td");
+      parameters.append(candidateParameterSummary(candidate, strategy));
+      row.append(parameters);
+      appendCell(
+        row,
+        companionStrategyText(candidate.samples[0]?.run),
+      );
+      appendCell(row, candidate.summary?.sample_count || 0);
+      appendCell(
+        row,
+        candidate.train
+          ? `${optionalRatio(candidate.train.return_median)} ${candidate.asset}`
+          : "—",
+      );
+      appendCell(
+        row,
+        candidate.validation
+          ? `${optionalRatio(candidate.validation.return_median)} ${candidate.asset}`
+          : "—",
+      );
+      appendCell(
+        row,
+        excessText(candidate.summary?.excess_median),
+      );
+      appendCell(row, optionalRatio(candidate.summary?.drawdown_worst));
+      const liquidation = appendCell(
+        row,
+        optionalRatio(candidate.summary?.liquidation_rate),
+      );
+      if (candidate.summary?.liquidation_rate > 0) {
+        liquidation.classList.add("risk-cell");
+      }
+      appendCell(
+        row,
+        `${optionalNumber(candidate.summary?.fill_median, 0)} / ${optionalNumber(candidate.summary?.cycle_median, 0)}`,
+      );
+      const actionCell = document.createElement("td");
+      const expand = make("button", "text-button", "展开样本");
+      expand.type = "button";
+      actionCell.append(expand);
+      row.append(actionCell);
+      const detailRow = make("tr", "candidate-samples-row");
+      detailRow.hidden = true;
+      const detailCell = document.createElement("td");
+      detailCell.colSpan = 11;
+      detailCell.append(candidateSampleTable(candidate));
+      detailRow.append(detailCell);
+      expand.addEventListener("click", () => {
+        detailRow.hidden = !detailRow.hidden;
+        expand.textContent = detailRow.hidden ? "展开样本" : "收起样本";
+      });
+      body.append(row, detailRow);
+    });
+    table.append(head, body);
+    wrapper.append(table);
+    return {element: wrapper, candidates};
+  }
+
+  function svgNode(tag, attributes = {}, text = null) {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    Object.entries(attributes).forEach(([name, value]) =>
+      node.setAttribute(name, String(value)),
+    );
+    if (text !== null) node.textContent = String(text);
+    return node;
+  }
+
+  function horizontalComparisonChart(
+    candidates,
+    seriesDefinitions,
+    {ratio = false} = {},
+  ) {
+    const width = 760;
+    const rowHeight = Math.max(62, 36 + seriesDefinitions.length * 17);
+    const height = Math.max(210, 66 + candidates.length * rowHeight);
+    const left = 145;
+    const right = 84;
+    const top = 24;
+    const bottom = 30;
+    const plotRight = width - right;
+    const values = candidates.flatMap((candidate) =>
+      seriesDefinitions.flatMap((series) => {
+        const rawValue = series.value(candidate);
+        if (rawValue === null || rawValue === undefined) return [];
+        const value = Number(rawValue);
+        return Number.isFinite(value) ? [value] : [];
+      }),
+    );
+    let minimum = Math.min(0, ...values);
+    let maximum = Math.max(0, ...values);
+    if (minimum === maximum) {
+      const padding = ratio ? 0.01 : Math.max(1, Math.abs(maximum));
+      minimum -= padding;
+      maximum += padding;
+    } else {
+      const padding = (maximum - minimum) * 0.08;
+      minimum -= minimum < 0 ? padding : 0;
+      maximum += maximum > 0 ? padding : 0;
+    }
+    const scale = (value) =>
+      left + ((Number(value) - minimum) / (maximum - minimum))
+        * (plotRight - left);
+    const zeroX = scale(0);
+    const svg = svgNode("svg", {
+      class: "tearsheet-chart-svg",
+      viewBox: `0 0 ${width} ${height}`,
+      role: "img",
+      "aria-label": "参数组合指标比较图",
+    });
+    [minimum, 0, maximum].forEach((value) => {
+      const x = scale(value);
+      svg.append(
+        svgNode("line", {
+          x1: x,
+          y1: top,
+          x2: x,
+          y2: height - bottom,
+          class: value === 0 ? "chart-zero" : "chart-grid",
+        }),
+        svgNode(
+          "text",
+          {
+            x,
+            y: height - 9,
+            class: "chart-axis-label",
+            "text-anchor": value === minimum
+              ? "start"
+              : value === maximum
+                ? "end"
+                : "middle",
+          },
+          ratio ? formatRatio(value) : formatNumber(value, 0),
+        ),
+      );
+    });
+    candidates.forEach((candidate, candidateIndex) => {
+      const rowTop = top + candidateIndex * rowHeight;
+      svg.append(
+        svgNode(
+          "text",
+          {x: 8, y: rowTop + 17, class: "chart-candidate-label"},
+          candidate.label,
+        ),
+        svgNode("line", {
+          x1: 8,
+          y1: rowTop + rowHeight - 4,
+          x2: width - 8,
+          y2: rowTop + rowHeight - 4,
+          class: "chart-row-line",
+        }),
+      );
+      seriesDefinitions.forEach((series, seriesIndex) => {
+        const rawValue = series.value(candidate);
+        if (rawValue === null || rawValue === undefined) return;
+        const value = Number(rawValue);
+        const y = rowTop + 25 + seriesIndex * 17;
+        svg.append(
+          svgNode(
+            "text",
+            {x: left - 10, y: y + 8, class: "chart-series-label", "text-anchor": "end"},
+            series.label,
+          ),
+        );
+        if (!Number.isFinite(value)) return;
+        const valueX = scale(value);
+        svg.append(
+          svgNode("rect", {
+            x: Math.min(zeroX, valueX),
+            y,
+            width: Math.max(1.5, Math.abs(valueX - zeroX)),
+            height: 9,
+            rx: 2,
+            fill: series.color,
+          }),
+          svgNode(
+            "text",
+            {
+              x: width - 8,
+              y: y + 8,
+              class: "chart-value-label",
+              "text-anchor": "end",
+            },
+            ratio ? formatRatio(value) : formatNumber(value, 0),
+          ),
+        );
+      });
+    });
+    return svg;
+  }
+
+  function tearSheetCharts(candidates) {
+    const charts = make("div", "tearsheet-charts");
+    const performance = make("section", "tearsheet-chart-block");
+    performance.append(
+      make("h4", "", "收益、最差回撤与保证金风险"),
+      make(
+        "p",
+        "",
+        "有 VALIDATION 时优先显示样本外收益；回撤以负方向表示。",
+      ),
+      horizontalComparisonChart(
+        candidates,
+        [
+          {
+            label: "验证收益",
+            value: (candidate) => candidate.validation?.return_median
+              ?? candidate.summary?.return_median,
+            color: "#26a69a",
+          },
+          {
+            label: "最差回撤",
+            value: (candidate) => candidate.summary?.drawdown_worst === null
+              || candidate.summary?.drawdown_worst === undefined
+              ? null
+              : -Number(candidate.summary.drawdown_worst),
+            color: "#ef5350",
+          },
+          {
+            label: "峰值初始保证金占用",
+            value: (candidate) => (
+              candidate.summary?.initial_margin_utilization_worst
+            ),
+            color: "#ab47bc",
+          },
+          {
+            label: "峰值保证金风险",
+            value: (candidate) => candidate.summary?.margin_risk_worst,
+            color: "#f0a33e",
+          },
+        ],
+        {ratio: true},
+      ),
+    );
+    const activity = make("section", "tearsheet-chart-block");
+    activity.append(
+      make("h4", "", "成交与完整循环"),
+      make("p", "", "使用每个参数组合在全部样本上的中位数。"),
+      horizontalComparisonChart(candidates, [
+        {
+          label: "成交数",
+          value: (candidate) => candidate.summary?.fill_median,
+          color: "#5b8def",
+        },
+        {
+          label: "完整循环",
+          value: (candidate) => candidate.summary?.cycle_median,
+          color: "#d99a42",
+        },
+      ]),
+    );
+    charts.append(performance, activity);
+    return charts;
+  }
+
+  function tearSheetMetrics(candidates) {
+    const panel = make("aside", "tearsheet-metrics");
+    panel.append(
+      make("h4", "", "关键绩效指标"),
+      make("p", "", "同一 Study 内按参数组合对齐，页面不重新计算指标。"),
+    );
+    const wrapper = make("div", "tearsheet-metric-table-wrap");
+    const table = make("table", "tearsheet-metric-table");
+    const head = document.createElement("thead");
+    const header = document.createElement("tr");
+    header.append(make("th", "", "指标"));
+    candidates.forEach((candidate) =>
+      header.append(make("th", "", candidate.label)),
+    );
+    head.append(header);
+    const body = document.createElement("tbody");
+    const rows = [
+      ["样本数", (candidate) => candidate.summary?.sample_count ?? 0],
+      ["TRAIN 收益中位数", (candidate) => optionalRatio(candidate.train?.return_median)],
+      ["VALIDATION 收益中位数", (candidate) => optionalRatio(candidate.validation?.return_median)],
+      ["全部收益中位数", (candidate) => optionalRatio(candidate.summary?.return_median)],
+      ["相对 HODL", (candidate) => excessText(candidate.summary?.excess_median)],
+      ["最差回撤", (candidate) => optionalRatio(candidate.summary?.drawdown_worst)],
+      ["强平率", (candidate) => optionalRatio(candidate.summary?.liquidation_rate)],
+      ["峰值保证金风险", (candidate) => optionalRatio(candidate.summary?.margin_risk_worst)],
+      ["峰值初始保证金占用", (candidate) => optionalRatio(candidate.summary?.initial_margin_utilization_worst)],
+      ["最大实际仓位倍率", (candidate) => {
+        const value = candidate.summary?.max_effective_leverage;
+        return value === null || value === undefined
+          ? "—"
+          : `${formatNumber(value, 3)}×`;
+      }],
+      ["建仓合约张数", (candidate) => optionalNumber(candidate.summary?.entry_contracts_median, 0)],
+      ["入场预计强平价", (candidate) => optionalNumber(candidate.summary?.estimated_liquidation_price_median, 2)],
+      ["成交数中位数", (candidate) => optionalNumber(candidate.summary?.fill_median, 0)],
+      ["完整循环中位数", (candidate) => optionalNumber(candidate.summary?.cycle_median, 0)],
+      ["手续费中位数", (candidate) => {
+        const value = candidate.summary?.fee_median;
+        return value === null || value === undefined
+          ? "—"
+          : `${formatNumber(value, candidate.asset === "BTC" ? 6 : 2)} ${candidate.asset}`;
+      }],
+    ];
+    rows.forEach(([label, formatter]) => {
+      const row = document.createElement("tr");
+      row.append(make("th", "", label));
+      candidates.forEach((candidate) =>
+        row.append(make("td", "", formatter(candidate))),
+      );
+      body.append(row);
+    });
+    table.append(head, body);
+    wrapper.append(table);
+    panel.append(wrapper);
+    return panel;
+  }
+
+  function contextText(items, kind) {
+    const values = items.map((item) => {
+      const parameters = item.parameters || {};
+      if (kind === "market" && parameters.path_set_id) {
+        return [
+          parameters.path_set_id,
+          parameters.scenario_id || "全部场景",
+          parameters.instrument,
+          parameters.interval,
+        ].filter(Boolean).join(" · ");
+      }
+      if (kind === "market" && parameters.content_sha256) {
+        return [
+          item.type,
+          parameters.instrument,
+          parameters.interval,
+          shortId(parameters.content_sha256),
+        ].filter(Boolean).join(" · ");
+      }
+      const parameterText = Object.entries(parameters)
+        .filter(([key]) => ![
+          "path",
+          "content_sha256",
+          "file_sha256",
+        ].includes(key))
+        .slice(0, 4)
+        .map(([key, value]) => `${parameterName(key)}=${simpleValue(value)}`)
+        .join(" · ");
+      return parameterText ? `${item.type} · ${parameterText}` : item.type;
+    });
+    return [...new Set(values)].join("；") || "—";
+  }
+
+  function revisionHistory(study) {
+    const block = make("details", "study-revisions");
+    const summary = make(
+      "summary",
+      "",
+      `执行版本 ${study.versions.length} 个（默认只比较推荐版本）`,
+    );
+    const list = make("div", "study-revision-list");
+    study.versions.forEach((record) => {
+      const revision = Model.revisionSummary(record);
+      const selected = study.preferred_records.some(
+        (preferred) => preferred.experiment.database_name
+          === record.experiment.database_name,
+      );
+      const row = make("div", "study-revision-row");
+      const identity = make("div");
+      identity.append(
+        make("strong", "", record.experiment.database_name),
+        make(
+          "span",
+          "",
+          `${record.experiment.experiment_id} · ${dateText(record.experiment.updated_at)}`,
+        ),
+      );
+      row.append(
+        identity,
+        make(
+          "span",
+          selected ? "revision-badge recommended" : "revision-badge",
+          selected ? `${revision.label} · 用于比较` : revision.label,
+        ),
+      );
+      list.append(row);
+    });
+    block.append(summary, list);
+    return block;
+  }
+
+  function companionStrategyText(run) {
+    const companions = Model.companionStrategies(run);
+    return companions.length
+      ? companions.map((item) =>
+          `${item.display_name} × ${item.count}`,
+        ).join("、")
+      : "无";
+  }
+
+  function studyCard(study, strategy) {
+    const record = study.preferred;
+    const card = make("details", "data-panel study-card");
+    const requested = study.versions.some((version) =>
+      version.experiment.experiment_id === state.overviewExperimentId
+      && version.experiment.database_name === state.overviewDatabaseName,
+    );
+    card.open = requested;
+    card.dataset.requested = requested ? "true" : "false";
+    const header = make("summary", "study-card-heading");
+    const copy = make("div", "study-card-copy");
+    const title = make("h3");
+    const titleLink = make(
+      "a",
+      "experiment-detail-link",
+      record.experiment.description || humanize(study.id),
+    );
+    titleLink.href = experimentDetailHref(record.experiment);
+    title.append(titleLink);
+    copy.append(
+      make("div", "eyebrow", "STUDY · 同策略 / 同市场 / 同账户 / 同成本"),
+      title,
+      make(
+        "p",
+        "",
+        `${strategyName(strategy)} · ${study.experiments.length} 个逻辑实验 · ${study.versions.length} 个执行版本`,
+      ),
+    );
+    const headerActions = make("div", "study-card-actions");
+    const expandLabel = make(
+      "span",
+      "study-expand-label",
+      requested ? "收起报告" : "展开报告",
+    );
+    headerActions.append(
+      make(
+        "span",
+        "study-status-badge",
+        `比较版本 ${study.preferred_records.length}/${study.versions.length}`,
+      ),
+      expandLabel,
+    );
+    header.append(copy, headerActions);
+    card.append(header);
+    card.addEventListener("toggle", () => {
+      expandLabel.textContent = card.open ? "收起报告" : "展开报告";
+    });
+
+    const body = make("div", "study-card-body");
+    const composition = strategy.descriptor?.rule_composition || [];
+    const primaryRule = strategy.descriptor?.research_focus?.primary_rule_type;
+    const companionSummary = make("div", "study-guidance");
+    companionSummary.append(
+      make(
+        "strong",
+        "",
+        `规则组成：${composition.length
+          ? composition.map((item) =>
+              `${item.rule_key}=${item.rule_type}${item.rule_type === primaryRule ? "（核心）" : ""}`,
+            ).join("；")
+          : "历史 Strategy，尚无 Rule 身份"}`,
+      ),
+      make(
+        "span",
+        "",
+        `配合策略：${companionStrategyText(
+          Model.strategyRuns(
+            study.preferred_records[0],
+            study.strategy_type,
+          )[0],
+        )}`,
+      ),
+    );
+    const context = make("div", "study-context-grid");
+    [
+      ["市场环境", contextText(study.context.market, "market")],
+      ["执行与成本", contextText(study.context.execution, "execution")],
+      ["账户模型", contextText(study.context.account, "account")],
+    ].forEach(([label, value]) => {
+      const item = make("div", "study-context-item");
+      item.append(make("span", "", label), make("strong", "", value));
+      context.append(item);
+    });
+    body.append(companionSummary, context);
+
+    const comparison = candidateComparisonTable(study, strategy);
+    const varying = [...new Set(
+      comparison.candidates.flatMap((candidate) =>
+        candidate.varying_parameter_paths,
+      ),
+    )];
+    const guidance = make("div", "study-guidance");
+    guidance.append(
+      make(
+        "strong",
+        "",
+        varying.length
+          ? `正在比较：${varying.map((path) =>
+              researchParameterLabel(strategy, path)).join("、")}`
+          : "当前只有一组策略参数",
+      ),
+      make(
+        "span",
+        "",
+        varying.length
+          ? "报告按相同市场样本比较收益、回撤、强平和交易活跃度。"
+          : "后续参数扫描产生的新组合会自动加入这份报告。",
+      ),
+    );
+    const report = make("div", "tearsheet-layout");
+    report.append(
+      tearSheetCharts(comparison.candidates),
+      tearSheetMetrics(comparison.candidates),
+    );
+    const rawDetails = make("details", "tearsheet-raw-details");
+    rawDetails.append(
+      make("summary", "", "参数组合与 Run 明细"),
+      comparison.element,
+    );
+    body.append(
+      guidance,
+      report,
+      rawDetails,
+      revisionHistory(study),
+    );
+    card.append(body);
+    return card;
+  }
+
+  function renderExperimentOverview() {
+    elements.experimentGroups.replaceChildren();
+    let renderedGroupCount = 0;
+    Model.researchFocusGroups(state.strategies).forEach((focus) => {
+      const strategyStudies = focus.strategies.map((strategy) => ({
+        strategy,
+        studies: Model.studyGroups(state.records, strategy.type),
+      })).filter((item) => item.studies.length);
+      if (!strategyStudies.length) return;
+      const studies = strategyStudies.flatMap((item) => item.studies);
       const panel = make(
         "details",
         "data-panel experiment-strategy-group",
       );
+      panel.open = studies.some((study) =>
+        study.versions.some((version) =>
+          version.experiment.experiment_id === state.overviewExperimentId
+          && version.experiment.database_name === state.overviewDatabaseName,
+        ),
+      );
       const heading = make("summary", "experiment-group-heading");
       const identity = make("div", "experiment-group-identity");
+      const rule = state.rules.find((item) => item.type === focus.rule_type);
+      const runCount = strategyStudies.reduce(
+        (sum, item) => sum + item.strategy.runs.length,
+        0,
+      );
       identity.append(
-        make("strong", "", strategyName(strategy)),
-        make("span", "", `${records.length} 个实验 · ${strategy.runs.length} Runs`),
+        make(
+          "strong",
+          "",
+          rule ? ruleName(rule) : `${strategyName(focus.strategies[0])}（历史）`,
+        ),
+        make("span", "", `${studies.length} 个 Study · ${runCount} Runs`),
       );
       heading.append(
         identity,
@@ -898,54 +2033,23 @@
         heading.querySelector(".experiment-group-action").textContent =
           panel.open ? "收起" : "展开";
       });
-      const wrapper = make("div", "table-wrap");
-      const table = make("table", "research-table");
-      const head = document.createElement("thead");
-      const header = document.createElement("tr");
-      ["实验", "说明", "场景", "Seeds", "Runs", "状态", "更新时间", ""].forEach(
-        (label) => header.append(make("th", "", label)),
+      const studyList = make("div", "study-list");
+      strategyStudies.forEach(({strategy, studies: items}) =>
+        items.forEach((study) => studyList.append(studyCard(study, strategy))),
       );
-      head.append(header);
-      const body = document.createElement("tbody");
-      records.forEach((record) => {
-        const scenarios = Model.scenarioRows(record);
-        const experiment = record.experiment;
-        const row = make("tr", "experiment-row");
-        row.append(experimentCell(experiment));
-        appendCell(row, experiment.description || "—");
-        appendCell(row, scenarios.length);
-        appendCell(
-          row,
-          [...new Set(record.runs.map((run) => run.seed))]
-            .sort((a, b) => a - b)
-            .join(", "),
-        );
-        appendCell(row, experiment.planned_run_count);
-        appendCell(row, statusText(experiment.status_counts));
-        appendCell(row, dateText(experiment.updated_at));
-        const actionCell = document.createElement("td");
-        const expand = make("button", "text-button", "展开配置");
-        expand.type = "button";
-        actionCell.append(expand);
-        row.append(actionCell);
-        const detailRow = make("tr", "scenario-row");
-        detailRow.hidden = true;
-        const detailCell = document.createElement("td");
-        detailCell.colSpan = 8;
-        detailCell.append(scenarioTable(record));
-        detailRow.append(detailCell);
-        expand.addEventListener("click", () => {
-          detailRow.hidden = !detailRow.hidden;
-          expand.textContent = detailRow.hidden ? "展开配置" : "收起配置";
-        });
-        body.append(row, detailRow);
-      });
-      table.append(head, body);
-      wrapper.append(table);
-      panel.append(heading, wrapper);
+      panel.append(heading, studyList);
       elements.experimentGroups.append(panel);
+      renderedGroupCount += 1;
     });
-    if (!state.strategies.length) {
+    const requestedStudy = elements.experimentGroups.querySelector(
+      '.study-card[data-requested="true"]',
+    );
+    if (requestedStudy) {
+      window.requestAnimationFrame(() =>
+        requestedStudy.scrollIntoView({block: "start"}),
+      );
+    }
+    if (!renderedGroupCount) {
       elements.experimentGroups.append(
         make("div", "large-empty", "结果目录中还没有实验"),
       );
@@ -1115,17 +2219,25 @@
       return;
     }
     values.forEach(({evaluation, value}) => {
-      const card = make("div", "metric-card");
-      card.append(
+      const row = make("div", "run-metric-row");
+      const label = make("div", "run-metric-label");
+      label.append(
         make("span", "", metricLabel(record, evaluation, value)),
-        make("strong", "", formatMetric(record, evaluation, value)),
-        make(
-          "small",
-          "",
-          `${evaluation.metric_set_id}/${evaluation.metric_set_version} · ${value.unit}`,
-        ),
+        make("small", "", `${evaluation.metric_set_id} · ${value.unit}`),
       );
-      elements.runKeyMetrics.append(card);
+      const formatted = make("strong", "", formatMetric(record, evaluation, value));
+      const numeric = Number(value.value);
+      if (Number.isFinite(numeric)) {
+        if (value.metric_key === "return.total_rate" && numeric > 0) {
+          formatted.classList.add("positive");
+        } else if (
+          value.metric_key === "risk.max_drawdown_rate" && numeric < 0
+        ) {
+          formatted.classList.add("negative");
+        }
+      }
+      row.append(label, formatted);
+      elements.runKeyMetrics.append(row);
     });
   }
 
@@ -1223,12 +2335,467 @@
     elements.runDetailHero.replaceChildren(content, stats);
   }
 
+  function chartPercent(value) {
+    const percent = Number(value) * 100;
+    const digits = Math.abs(percent) >= 10 ? 1 : 2;
+    return `${percent.toFixed(digits)}%`;
+  }
+
+  function chartDate(value) {
+    const date = new Date(`${value}T00:00:00Z`);
+    if (Number.isNaN(date.getTime())) return String(value || "");
+    return date.toLocaleDateString("zh-CN", {
+      year: "2-digit",
+      month: "2-digit",
+      timeZone: "UTC",
+    });
+  }
+
+  function performanceSeries(asset, field) {
+    return (state.runPerformance?.points || [])
+      .map((point) => ({
+        date: point.date,
+        timestamp: Number(point.timestamp),
+        value: Number(point.assets?.[asset]?.[field]),
+      }))
+      .filter((point) => Number.isFinite(point.value));
+  }
+
+  function liquidationDistanceSeries() {
+    return (state.runPerformance?.points || [])
+      .map((point) => {
+        const rawValue = point.margin?.minimum_liquidation_distance_rate;
+        return {
+          date: point.date,
+          timestamp: Number(point.timestamp),
+          value: rawValue === null || rawValue === undefined
+            ? Number.NaN
+            : Number(rawValue),
+        };
+      })
+      .filter((point) => Number.isFinite(point.value));
+  }
+
+  function marginPriceSeries(field) {
+    return (state.runPerformance?.points || [])
+      .map((point) => {
+        const rawValue = point.margin?.[field];
+        return {
+          date: point.date,
+          timestamp: Number(point.timestamp),
+          value: rawValue === null || rawValue === undefined
+            ? Number.NaN
+            : Number(rawValue),
+          liquidationTriggered: Boolean(point.margin?.liquidation_triggered),
+        };
+      })
+      .filter((point) => Number.isFinite(point.value));
+  }
+
+  function clearChart(canvas) {
+    if (!canvas) return;
+    const context = canvas.getContext("2d");
+    context.clearRect(0, 0, canvas.width, canvas.height);
+  }
+
+  function drawChartMessage(canvas, message) {
+    if (!canvas) return;
+    const width = Math.max(canvas.clientWidth || 620, 320);
+    const height = Math.max(canvas.clientHeight || 224, 180);
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(width * pixelRatio);
+    canvas.height = Math.round(height * pixelRatio);
+    const context = canvas.getContext("2d");
+    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    context.clearRect(0, 0, width, height);
+    context.fillStyle = "#6f7785";
+    context.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(message, width / 2, height / 2);
+  }
+
+  function drawPerformanceChart(
+    canvas,
+    series,
+    {color, fill, liquidationDistance = false, timeline = []},
+  ) {
+    if (!canvas || !series.length) {
+      clearChart(canvas);
+      return;
+    }
+    const width = Math.max(canvas.clientWidth || 620, 320);
+    const height = Math.max(
+      canvas.clientHeight || 0,
+      liquidationDistance ? 224 : 286,
+    );
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(width * pixelRatio);
+    canvas.height = Math.round(height * pixelRatio);
+    const context = canvas.getContext("2d");
+    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    context.clearRect(0, 0, width, height);
+
+    const margin = {top: 14, right: 13, bottom: 28, left: 54};
+    const chartWidth = width - margin.left - margin.right;
+    const chartHeight = height - margin.top - margin.bottom;
+    const values = series.map((point) => point.value);
+    const rawMinimum = Math.min(0, ...values);
+    const rawMaximum = Math.max(0, ...values);
+    let minimum;
+    let maximum;
+    if (liquidationDistance) {
+      const span = Math.max(rawMaximum - rawMinimum, 0.01);
+      minimum = rawMinimum < 0 ? rawMinimum - span * 0.08 : 0;
+      maximum = Math.max(0.01, rawMaximum + span * 0.08);
+    } else {
+      const span = Math.max(rawMaximum - rawMinimum, 0.02);
+      minimum = rawMinimum - span * 0.08;
+      maximum = rawMaximum + span * 0.08;
+    }
+    const range = Math.max(maximum - minimum, 0.000001);
+    const domainSeries = timeline.length ? timeline : series;
+    const domainTimestamps = domainSeries
+      .map((point) => Number(point.timestamp))
+      .filter(Number.isFinite);
+    const firstTimestamp = Math.min(...domainTimestamps);
+    const lastTimestamp = Math.max(...domainTimestamps);
+    const timestampRange = Math.max(lastTimestamp - firstTimestamp, 1);
+    const x = (point) =>
+      margin.left
+      + ((point.timestamp - firstTimestamp) / timestampRange) * chartWidth;
+    const y = (value) => margin.top + ((maximum - value) / range) * chartHeight;
+
+    context.font = "9px ui-monospace, SFMono-Regular, Menlo, monospace";
+    context.textBaseline = "middle";
+    context.textAlign = "right";
+    for (let index = 0; index <= 4; index += 1) {
+      const value = maximum - (range * index) / 4;
+      const position = margin.top + (chartHeight * index) / 4;
+      context.strokeStyle = "#262c38";
+      context.lineWidth = 1;
+      context.beginPath();
+      context.moveTo(margin.left, Math.round(position) + 0.5);
+      context.lineTo(width - margin.right, Math.round(position) + 0.5);
+      context.stroke();
+      context.fillStyle = "#68707e";
+      context.fillText(chartPercent(value), margin.left - 8, position);
+    }
+
+    const zero = y(0);
+    context.strokeStyle = liquidationDistance ? "#ef5350" : "#475164";
+    context.setLineDash([4, 4]);
+    context.beginPath();
+    context.moveTo(margin.left, zero);
+    context.lineTo(width - margin.right, zero);
+    context.stroke();
+    context.setLineDash([]);
+
+    if (liquidationDistance) {
+      context.fillStyle = "#ef7775";
+      context.textAlign = "left";
+      context.fillText("强平 0%", margin.left + 6, zero - 9);
+    }
+
+    const gradient = context.createLinearGradient(0, margin.top, 0, margin.top + chartHeight);
+    gradient.addColorStop(0, fill);
+    gradient.addColorStop(1, "rgb(15 18 26 / 0%)");
+    context.beginPath();
+    series.forEach((point, index) => {
+      const pointX = x(point);
+      const pointY = y(point.value);
+      if (index === 0) context.moveTo(pointX, pointY);
+      else context.lineTo(pointX, pointY);
+    });
+    context.lineTo(x(series.at(-1)), zero);
+    context.lineTo(x(series[0]), zero);
+    context.closePath();
+    context.fillStyle = gradient;
+    context.fill();
+
+    context.beginPath();
+    series.forEach((point, index) => {
+      const pointX = x(point);
+      const pointY = y(point.value);
+      if (index === 0) context.moveTo(pointX, pointY);
+      else context.lineTo(pointX, pointY);
+    });
+    context.strokeStyle = color;
+    context.lineWidth = 1.6;
+    context.lineJoin = "round";
+    context.stroke();
+
+    context.textAlign = "center";
+    context.textBaseline = "alphabetic";
+    context.fillStyle = "#68707e";
+    const tickCount = Math.min(5, domainSeries.length);
+    const used = new Set();
+    for (let index = 0; index < tickCount; index += 1) {
+      const pointIndex = tickCount === 1
+        ? 0
+        : Math.round((index * (domainSeries.length - 1)) / (tickCount - 1));
+      if (used.has(pointIndex)) continue;
+      used.add(pointIndex);
+      context.fillText(
+        chartDate(domainSeries[pointIndex].date),
+        x(domainSeries[pointIndex]),
+        height - 7,
+      );
+    }
+  }
+
+  function chartPrice(value) {
+    return new Intl.NumberFormat("en-US", {
+      maximumFractionDigits: Math.abs(value) < 100 ? 2 : 0,
+    }).format(value);
+  }
+
+  function drawPriceReturnChart(
+    canvas,
+    marketSeries,
+    liquidationSeries,
+    returnSeries,
+  ) {
+    const allSeries = [marketSeries, liquidationSeries, returnSeries];
+    const allPoints = allSeries.flat();
+    if (!canvas || !allPoints.length) {
+      clearChart(canvas);
+      return;
+    }
+    const width = Math.max(canvas.clientWidth || 620, 320);
+    const height = Math.max(canvas.clientHeight || 0, 286);
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(width * pixelRatio);
+    canvas.height = Math.round(height * pixelRatio);
+    const context = canvas.getContext("2d");
+    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    context.clearRect(0, 0, width, height);
+
+    const margin = {top: 38, right: 58, bottom: 28, left: 68};
+    const chartWidth = width - margin.left - margin.right;
+    const chartHeight = height - margin.top - margin.bottom;
+    const timestamps = allPoints
+      .map((point) => point.timestamp)
+      .filter(Number.isFinite);
+    const firstTimestamp = Math.min(...timestamps);
+    const lastTimestamp = Math.max(...timestamps);
+    const timestampRange = Math.max(lastTimestamp - firstTimestamp, 1);
+    const x = (point) =>
+      margin.left
+      + ((point.timestamp - firstTimestamp) / timestampRange) * chartWidth;
+
+    const priceValues = [...marketSeries, ...liquidationSeries]
+      .map((point) => point.value)
+      .filter(Number.isFinite);
+    const hasPrice = priceValues.length > 0;
+    const rawPriceMinimum = hasPrice ? Math.min(...priceValues) : 0;
+    const rawPriceMaximum = hasPrice ? Math.max(...priceValues) : 1;
+    const priceSpan = Math.max(rawPriceMaximum - rawPriceMinimum, rawPriceMaximum * 0.02, 1);
+    const priceMinimum = rawPriceMinimum - priceSpan * 0.08;
+    const priceMaximum = rawPriceMaximum + priceSpan * 0.08;
+    const priceRange = Math.max(priceMaximum - priceMinimum, 1);
+    const yPrice = (value) =>
+      margin.top + ((priceMaximum - value) / priceRange) * chartHeight;
+
+    const returnValues = returnSeries.map((point) => point.value);
+    const rawReturnMinimum = Math.min(0, ...returnValues);
+    const rawReturnMaximum = Math.max(0, ...returnValues);
+    const returnSpan = Math.max(rawReturnMaximum - rawReturnMinimum, 0.02);
+    const returnMinimum = rawReturnMinimum - returnSpan * 0.08;
+    const returnMaximum = rawReturnMaximum + returnSpan * 0.08;
+    const returnRange = Math.max(returnMaximum - returnMinimum, 0.000001);
+    const yReturn = (value) =>
+      margin.top + ((returnMaximum - value) / returnRange) * chartHeight;
+
+    context.font = "9px ui-monospace, SFMono-Regular, Menlo, monospace";
+    context.textBaseline = "middle";
+    for (let index = 0; index <= 4; index += 1) {
+      const position = margin.top + (chartHeight * index) / 4;
+      context.strokeStyle = "#262c38";
+      context.lineWidth = 1;
+      context.beginPath();
+      context.moveTo(margin.left, Math.round(position) + 0.5);
+      context.lineTo(width - margin.right, Math.round(position) + 0.5);
+      context.stroke();
+
+      if (hasPrice) {
+        const priceValue = priceMaximum - (priceRange * index) / 4;
+        context.fillStyle = "#68707e";
+        context.textAlign = "right";
+        context.fillText(chartPrice(priceValue), margin.left - 8, position);
+      }
+      const returnValue = returnMaximum - (returnRange * index) / 4;
+      context.fillStyle = "#68707e";
+      context.textAlign = "left";
+      context.fillText(chartPercent(returnValue), width - margin.right + 8, position);
+    }
+
+    const returnZero = yReturn(0);
+    context.strokeStyle = "#475164";
+    context.setLineDash([4, 4]);
+    context.beginPath();
+    context.moveTo(margin.left, returnZero);
+    context.lineTo(width - margin.right, returnZero);
+    context.stroke();
+    context.setLineDash([]);
+
+    const drawLine = (series, y, color, lineDash = [], lineWidth = 1.6) => {
+      if (!series.length) return;
+      context.beginPath();
+      series.forEach((point, index) => {
+        if (index === 0) context.moveTo(x(point), y(point.value));
+        else context.lineTo(x(point), y(point.value));
+      });
+      context.strokeStyle = color;
+      context.lineWidth = lineWidth;
+      context.lineJoin = "round";
+      context.setLineDash(lineDash);
+      context.stroke();
+      context.setLineDash([]);
+    };
+    drawLine(marketSeries, yPrice, "#4f7dff", [], 1.7);
+    drawLine(liquidationSeries, yPrice, "#ef5350", [6, 4], 1.5);
+    drawLine(returnSeries, yReturn, "#26a69a", [], 1.8);
+
+    marketSeries
+      .filter((point) => point.liquidationTriggered)
+      .forEach((point) => {
+        context.beginPath();
+        context.arc(x(point), yPrice(point.value), 4, 0, Math.PI * 2);
+        context.fillStyle = "#ef5350";
+        context.fill();
+        context.strokeStyle = "#f8b4b2";
+        context.lineWidth = 1;
+        context.stroke();
+      });
+
+    const legend = [
+      ["市场价格", "#4f7dff", false],
+      ["预计强平价", "#ef5350", true],
+      [`${state.runPerformanceAsset || "权益"} 累计收益`, "#26a69a", false],
+    ];
+    let legendX = margin.left;
+    legend.forEach(([label, color, dashed]) => {
+      context.strokeStyle = color;
+      context.lineWidth = 2;
+      context.setLineDash(dashed ? [5, 3] : []);
+      context.beginPath();
+      context.moveTo(legendX, 17);
+      context.lineTo(legendX + 18, 17);
+      context.stroke();
+      context.setLineDash([]);
+      context.fillStyle = "#a8afbd";
+      context.textAlign = "left";
+      context.fillText(label, legendX + 24, 17);
+      legendX += 32 + context.measureText(label).width + 24;
+    });
+
+    const dateSeries = [...allPoints].sort(
+      (left, right) => left.timestamp - right.timestamp,
+    );
+    context.textAlign = "center";
+    context.textBaseline = "alphabetic";
+    context.fillStyle = "#68707e";
+    const tickCount = Math.min(5, dateSeries.length);
+    const used = new Set();
+    for (let index = 0; index < tickCount; index += 1) {
+      const pointIndex = tickCount === 1
+        ? 0
+        : Math.round((index * (dateSeries.length - 1)) / (tickCount - 1));
+      const point = dateSeries[pointIndex];
+      if (used.has(point.timestamp)) continue;
+      used.add(point.timestamp);
+      context.fillText(chartDate(point.date), x(point), height - 7);
+    }
+  }
+
+  function renderPerformanceAssetSwitch() {
+    elements.runPerformanceAssetSwitch.replaceChildren();
+    (state.runPerformance?.assets || []).forEach((asset) => {
+      const button = make("button", "run-asset-button", asset);
+      button.type = "button";
+      button.classList.toggle("active", asset === state.runPerformanceAsset);
+      button.addEventListener("click", () => {
+        state.runPerformanceAsset = asset;
+        renderPerformanceCharts();
+      });
+      elements.runPerformanceAssetSwitch.append(button);
+    });
+  }
+
+  function renderPerformanceCharts() {
+    const performance = state.runPerformance;
+    if (!performance) {
+      elements.runPerformanceAssetSwitch.replaceChildren();
+      elements.runPerformanceEmpty.hidden = !state.runPerformanceError;
+      elements.runPerformanceEmpty.textContent = state.runPerformanceError || "";
+      elements.runReturnChartSummary.textContent = "选择一个带 Trace 的 Run。";
+      elements.runMarginRiskChartSummary.textContent =
+        "当前价格距离预计强平价的百分比；0% 触发强平。";
+      clearChart(elements.runReturnChart);
+      clearChart(elements.runMarginRiskChart);
+      return;
+    }
+    elements.runPerformanceEmpty.hidden = true;
+    const assets = performance.assets || [];
+    if (!assets.includes(state.runPerformanceAsset)) {
+      state.runPerformanceAsset = performance.default_asset || assets[0] || null;
+    }
+    renderPerformanceAssetSwitch();
+    const asset = state.runPerformanceAsset;
+    const returns = performanceSeries(asset, "return_rate");
+    const marketPrices = marginPriceSeries("mark_price");
+    const liquidationPrices = marginPriceSeries("estimated_liquidation_price");
+    const liquidationDistance = liquidationDistanceSeries();
+    const statistics = performance.statistics?.[asset] || {};
+    const marginStatistics = performance.margin_statistics;
+    const latestMargin = [...(performance.points || [])]
+      .reverse()
+      .find((point) => point.margin)?.margin;
+    const latestMarketPrice = latestMargin?.mark_price == null
+      ? "—"
+      : formatNumber(latestMargin.mark_price, 2);
+    const latestLiquidationPrice = latestMargin?.estimated_liquidation_price == null
+      ? "—"
+      : formatNumber(latestMargin.estimated_liquidation_price, 2);
+    elements.runReturnChartSummary.textContent =
+      `${asset || "—"} · 期末收益 ${formatRatio(statistics.total_return_rate)}`
+      + ` · 末期价格 ${latestMarketPrice}`
+      + ` · 末期预计强平价 ${latestLiquidationPrice}`;
+    drawPriceReturnChart(
+      elements.runReturnChart,
+      marketPrices,
+      liquidationPrices,
+      returns,
+    );
+    if (marginStatistics && liquidationDistance.length) {
+      elements.runMarginRiskChartSummary.textContent =
+        `全时点最小安全距离 ${formatRatio(marginStatistics.minimum_liquidation_distance_rate)}`
+        + " · 0% 触发强平"
+        + ` · 结算资产 ${marginStatistics.settlement_asset || "—"}`;
+      drawPerformanceChart(elements.runMarginRiskChart, liquidationDistance, {
+        color: "#f0a33e",
+        fill: "rgb(240 163 62 / 31%)",
+        liquidationDistance: true,
+        timeline: performance.points || [],
+      });
+    } else {
+      elements.runMarginRiskChartSummary.textContent =
+        "当前 Run 没有可计算的持仓强平距离。";
+      drawChartMessage(elements.runMarginRiskChart, "无持仓强平距离");
+    }
+  }
+
   async function loadSelectedRun() {
     const record = recordById(
       state.detailExperimentId,
       state.detailDatabaseName,
     );
     if (!record || !state.detailRunId) return;
+    state.runPerformance = null;
+    state.runPerformanceAsset = null;
+    state.runPerformanceError = "正在读取收益与保证金风险序列…";
+    renderPerformanceCharts();
     state.runDetail = await request(
       experimentApiPath(
         record.experiment,
@@ -1243,6 +2810,22 @@
       state.runDetail.status === "SUCCEEDED" &&
       state.runDetail.trace_state === "STORED"
     );
+    if (!elements.detailPlayback.disabled) {
+      try {
+        state.runPerformance = await request(
+          experimentApiPath(
+            record.experiment,
+            ["runs", state.detailRunId, "performance"],
+          ),
+        );
+        state.runPerformanceError = null;
+      } catch (error) {
+        state.runPerformanceError = `收益与保证金风险序列载入失败：${error.message}`;
+      }
+    } else {
+      state.runPerformanceError = "当前 Run 没有可读取的 Trace，无法绘制收益与保证金风险。";
+    }
+    renderPerformanceCharts();
   }
 
   function playbackUrls() {
@@ -1310,14 +2893,19 @@
       state.experiments = catalog.items;
       state.records = research.records;
       state.strategies = research.strategies;
+      state.strategyDefinitions = research.strategyDefinitions;
+      state.rules = research.rules;
       state.pathSets = pathSets.items || [];
       state.markets = [
         ...Model.pathSetMarkets(state.pathSets),
         ...research.markets,
       ];
-      state.strategyId = state.strategies.some(
+      state.strategyId = state.strategyDefinitions.some(
         (item) => item.id === state.strategyId,
-      ) ? state.strategyId : state.strategies[0]?.id;
+      ) ? state.strategyId : state.strategyDefinitions[0]?.id;
+      state.ruleId = state.rules.some(
+        (item) => item.id === state.ruleId,
+      ) ? state.ruleId : state.rules[0]?.id;
       state.marketId = state.markets.some((item) => item.id === state.marketId)
         ? state.marketId
         : state.markets[0]?.id;
@@ -1330,6 +2918,9 @@
 
       renderStrategyOverview();
       renderStrategyDetail();
+      renderStrategyRuns();
+      renderRuleOverview();
+      renderRuleDetail();
       renderMarketList();
       if (state.marketId) await selectMarket(state.marketId);
       renderExperimentOverview();
@@ -1341,7 +2932,7 @@
         0,
       );
       elements.catalogStatus.textContent =
-        `${state.strategies.length} 策略 · ${state.pathSets.length} PathSet / ${state.markets.length} 市场 · ${state.experiments.length} 实验 · ${runCount} Runs`;
+        `${state.strategyDefinitions.length} Strategy / ${state.rules.length} Rule · ${state.pathSets.length} PathSet / ${state.markets.length} 市场 · ${state.experiments.length} 实验 · ${runCount} Runs`;
       elements.updatedAt.textContent = `更新于 ${new Date().toLocaleTimeString("zh-CN")}`;
     } catch (error) {
       elements.catalogStatus.textContent = "研究目录载入失败";
@@ -1356,6 +2947,16 @@
   elements.strategySelect.addEventListener("change", () => {
     state.strategyId = elements.strategySelect.value;
     renderStrategyDetail();
+    renderStrategyRuns();
+  });
+  elements.strategyRunSelect.addEventListener("change", () => {
+    state.strategyId = elements.strategyRunSelect.value;
+    renderStrategyDetail();
+    renderStrategyRuns();
+  });
+  elements.ruleSelect.addEventListener("change", () => {
+    state.ruleId = elements.ruleSelect.value;
+    renderRuleDetail();
   });
   elements.marketPathSelect.addEventListener("change", () => {
     loadMarketPath().catch((error) =>
@@ -1417,11 +3018,26 @@
   elements.playerWindow.addEventListener("click", () => {
     if (state.playbackUrl) window.open(state.playbackUrl.standalone, "_blank");
   });
+  let runChartResizeFrame = null;
+  window.addEventListener("resize", () => {
+    if (state.page !== "experiment-detail") return;
+    if (runChartResizeFrame !== null) {
+      window.cancelAnimationFrame(runChartResizeFrame);
+    }
+    runChartResizeFrame = window.requestAnimationFrame(() => {
+      runChartResizeFrame = null;
+      renderPerformanceCharts();
+    });
+  });
 
   const requestedParams = new URLSearchParams(window.location.search);
   const requestedPage = requestedParams.get("page");
   state.detailExperimentId = requestedParams.get("experiment");
   state.detailDatabaseName = requestedParams.get("database");
+  if (requestedPage === "experiment-overview") {
+    state.overviewExperimentId = requestedParams.get("experiment");
+    state.overviewDatabaseName = requestedParams.get("database");
+  }
   setPage(PAGE_META[requestedPage] ? requestedPage : "strategy-overview", {
     updateUrl: false,
   });

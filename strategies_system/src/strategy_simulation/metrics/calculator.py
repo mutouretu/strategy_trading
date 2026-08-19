@@ -16,7 +16,10 @@ from metric_system import (
     decimal_value,
 )
 
-from ..plugins import TARGET_LIQUIDATION_LADDER_LONG_V1
+from ..plugins import (
+    COINM_LONG_TAKE_PROFIT_LADDER_V1,
+    LEGACY_COINM_LONG_LADDER_TYPES,
+)
 
 
 def definition(
@@ -67,7 +70,11 @@ class BtcAccumulationMetricCalculator:
 
     def calculate(self, metric_input: MetricInput) -> tuple[MetricValue, ...]:
         summary = metric_input.provider_summary
-        if summary.get("strategy_type") != TARGET_LIQUIDATION_LADDER_LONG_V1:
+        strategy_type = summary.get("strategy_type")
+        if strategy_type not in {
+            COINM_LONG_TAKE_PROFIT_LADDER_V1,
+            *LEGACY_COINM_LONG_LADDER_TYPES,
+        }:
             return tuple(
                 self._unavailable(item, "NOT_APPLICABLE")
                 for item in self.metric_set.definitions
@@ -84,7 +91,11 @@ class BtcAccumulationMetricCalculator:
             self._optional_decimal(
                 "strategy.liquidation_target_deviation_rate",
                 summary.get("liquidation_target_deviation_rate"),
-                "ENTRY_NOT_FILLED",
+                (
+                    "POSITION_SIZED_BY_EFFECTIVE_LEVERAGE"
+                    if summary.get("target_liquidation_price") is None
+                    else "ENTRY_NOT_FILLED"
+                ),
             ),
             self._integer("strategy.take_profit_level_count", total),
             self._integer("strategy.completed_take_profit_level_count", completed),

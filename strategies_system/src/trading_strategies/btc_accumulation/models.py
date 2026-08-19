@@ -33,16 +33,23 @@ class StrategyRole(StrEnum):
     TAKE_PROFIT = "take_profit"
 
 
+class EntrySizingMode(StrEnum):
+    TARGET_LIQUIDATION_PRICE = "TARGET_LIQUIDATION_PRICE"
+    EFFECTIVE_LEVERAGE = "EFFECTIVE_LEVERAGE"
+
+
 @dataclass(frozen=True, slots=True)
-class TargetLiquidationLadderConfig:
+class CoinMLongTakeProfitLadderConfig:
     strategy_id: str
     instrument: str
-    target_liquidation_price: Decimal
+    entry_sizing_mode: EntrySizingMode
     first_take_profit_ratio: Decimal
     take_profit_end_price: Decimal
     take_profit_count: int
     tick_size: Decimal
     quantity_step: Decimal
+    target_liquidation_price: Decimal | None = None
+    entry_effective_leverage: Decimal | None = None
     sizing_safety_buffer_ratio: Decimal = Decimal("0")
 
     def __post_init__(self) -> None:
@@ -50,8 +57,9 @@ class TargetLiquidationLadderConfig:
             raise ValueError("strategy_id must not be empty")
         if not self.instrument.strip():
             raise ValueError("instrument must not be empty")
+        if not isinstance(self.entry_sizing_mode, EntrySizingMode):
+            raise TypeError("entry_sizing_mode must be an EntrySizingMode")
         for name in (
-            "target_liquidation_price",
             "first_take_profit_ratio",
             "take_profit_end_price",
             "tick_size",
@@ -59,8 +67,13 @@ class TargetLiquidationLadderConfig:
             "sizing_safety_buffer_ratio",
         ):
             object.__setattr__(self, name, _decimal(name, getattr(self, name)))
-        if self.target_liquidation_price <= 0:
-            raise ValueError("target_liquidation_price must be > 0")
+        for name in (
+            "target_liquidation_price",
+            "entry_effective_leverage",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, _decimal(name, value))
         if self.first_take_profit_ratio <= 1:
             raise ValueError("first_take_profit_ratio must be > 1")
         if self.take_profit_end_price <= 0:
@@ -79,6 +92,34 @@ class TargetLiquidationLadderConfig:
             raise ValueError(
                 "sizing_safety_buffer_ratio must be >= 0 and < 1"
             )
+        if self.entry_sizing_mode == EntrySizingMode.TARGET_LIQUIDATION_PRICE:
+            if (
+                self.target_liquidation_price is None
+                or self.target_liquidation_price <= 0
+            ):
+                raise ValueError(
+                    "target_liquidation_price must be > 0 for target sizing"
+                )
+            if self.entry_effective_leverage is not None:
+                raise ValueError(
+                    "entry_effective_leverage is not valid for target sizing"
+                )
+        else:
+            if (
+                self.entry_effective_leverage is None
+                or self.entry_effective_leverage <= 0
+            ):
+                raise ValueError(
+                    "entry_effective_leverage must be > 0 for leverage sizing"
+                )
+            if self.target_liquidation_price is not None:
+                raise ValueError(
+                    "target_liquidation_price is not valid for leverage sizing"
+                )
+            if self.sizing_safety_buffer_ratio != 0:
+                raise ValueError(
+                    "sizing_safety_buffer_ratio is only valid for target sizing"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +131,7 @@ class PositionPlan:
     maintenance_margin: Decimal
     margin_buffer: Decimal
     model_version: str
+    effective_leverage: Decimal | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -110,6 +152,14 @@ class PositionPlan:
             raise ValueError("margin requirements must be >= 0")
         if not self.model_version.strip():
             raise ValueError("model_version must not be empty")
+        if self.effective_leverage is not None:
+            object.__setattr__(
+                self,
+                "effective_leverage",
+                _decimal("effective_leverage", self.effective_leverage),
+            )
+            if self.effective_leverage <= 0:
+                raise ValueError("effective_leverage must be > 0")
 
 
 @dataclass(frozen=True, slots=True)

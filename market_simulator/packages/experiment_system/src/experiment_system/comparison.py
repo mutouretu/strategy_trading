@@ -363,6 +363,13 @@ class ExperimentReader:
             "summary_scalars": (
                 flatten_scalars(summary) if summary is not None else {}
             ),
+            # Structured provider output is intentionally exposed beside the
+            # historical flattened scalar view.  Historical runs keep their
+            # original summary shape, while Application-aware runs also retain
+            # Strategy/Rule composition and attribution identity.
+            "provider_summary": (
+                dict(summary) if summary is not None else {}
+            ),
             "error": error,
             "trace_state": row["trace_state"],
             "retention_class": row["retention_class"],

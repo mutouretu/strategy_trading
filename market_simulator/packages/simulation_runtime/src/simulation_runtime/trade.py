@@ -4,6 +4,7 @@ from typing import Protocol, Sequence
 
 from market_protocol import MarketFrame
 
+from .funding import FundingSettlement
 from .models import SimFill, TradeInstruction
 
 
@@ -23,3 +24,19 @@ class SimulationTradePort(Protocol):
     ) -> None: ...
 
     def on_market(self, frame: MarketFrame) -> None: ...
+
+
+class SimulationFundingPort(Protocol):
+    """Optional observer for funding already booked by the account ledger."""
+
+    def on_funding(self, settlement: FundingSettlement) -> None: ...
+
+
+class SimulationAccountingPort(Protocol):
+    """Optional ordered account facts, including terminal post-fill facts."""
+
+    def on_accounting(
+        self,
+        fills: Sequence[SimFill],
+        funding: FundingSettlement | None,
+    ) -> None: ...
