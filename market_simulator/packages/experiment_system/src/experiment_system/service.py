@@ -22,6 +22,7 @@ def validate_experiment(
     spec: ExperimentSpec,
     registry: ProviderRegistry,
 ) -> ValidationReport:
+    registry.validate_experiment_spec(spec)
     scenarios = expand_scenarios(spec, registry)
     return ValidationReport(
         experiment_id=spec.experiment_id,
@@ -57,6 +58,7 @@ def plan_experiment(
             raise ExperimentValidationError(
                 f"code revision {name!r} must be CodeRevision"
             )
+    registry.validate_experiment_spec(spec)
     scenarios = expand_scenarios(spec, registry)
     runs: list[RunSpec] = []
     seen_configuration_hashes: set[str] = set()

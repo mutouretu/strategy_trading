@@ -234,6 +234,15 @@
     return url.toString();
   }
 
+  function experimentOverviewHref(experiment) {
+    const url = new URL(window.location.href);
+    url.search = "";
+    url.searchParams.set("page", "experiment-overview");
+    url.searchParams.set("experiment", experiment.experiment_id);
+    url.searchParams.set("database", experiment.database_name);
+    return url.toString();
+  }
+
   function experimentCell(experiment) {
     const cell = make("td", "primary-cell");
     const title = make("strong");
@@ -289,46 +298,19 @@
     return wrapper;
   }
 
-  function ruleConfigSummary(compositionRule, strategyInstance) {
-    const ruleInstance = (strategyInstance?.rules || []).find(
-      (item) => item.rule_key === compositionRule.rule_key,
-    );
-    const ruleDefinition = state.rules.find(
-      (item) => item.type === compositionRule.rule_type,
-    );
-    const fields = ruleDefinition?.descriptor?.config_fields || [];
-    const config = ruleInstance?.config || {};
-    const wrapper = make("div", "parameter-summary");
-    fields
-      .filter((field) => Object.hasOwn(config, field.key))
-      .forEach((field) => {
-        wrapper.append(
-          make("span", "", `${field.name}=${simpleValue(config[field.key])}`),
-        );
-      });
-    if (!wrapper.childElementCount) {
-      wrapper.append(make("span", "", "—"));
-    }
-    return wrapper;
-  }
-
-  function renderStrategyRunHeader(strategy) {
+  function renderStrategyRunHeader() {
     const row = document.createElement("tr");
-    ["实验 ID", "标的", "方向", "产品", "资金 / 账户", "市场 / Seed"]
-      .forEach((label) => row.append(make("th", "", label)));
-    (strategy?.descriptor?.rule_composition || []).forEach(
-      (rule) => row.append(make("th", "", strategyRuleName(rule))),
-    );
     [
-      "BTC 收益",
-      "USDT 收益",
-      "仓位 / 预计强平价",
-      "成交",
+      "实验 ID",
+      "类型",
+      "说明",
+      "市场 / Seed",
+      "Runs / 版本",
       "状态",
       "",
     ].forEach((label) => row.append(make("th", "", label)));
     elements.strategyRunHead.replaceChildren(row);
-    return 12 + (strategy?.descriptor?.rule_composition || []).length;
+    return 7;
   }
 
   function replaceOptions(select, items, selected) {
@@ -591,6 +573,50 @@
     });
   }
 
+  function experimentKindLabel(kind) {
+    return {
+      BASELINE: "基线",
+      PARAMETER_STUDY: "参数研究",
+      MARKET_VALIDATION: "市场验证",
+      ROBUSTNESS: "稳健性验证",
+    }[kind] || kind || "未分类";
+  }
+
+  function experimentMarketSeedSummary(record, runs) {
+    const marketKeys = new Set(
+      runs.map((run) => run.resolved_components.market.key),
+    );
+    const seeds = new Set(runs.map((run) => run.seed));
+    if (!runs.length) {
+      (record.detail?.spec?.scenario_groups || []).forEach((group) => {
+        (group.markets || []).forEach((market) => marketKeys.add(market.key));
+      });
+      (record.detail?.spec?.seeds || []).forEach((seed) => seeds.add(seed));
+    }
+    return {
+      markets: [...marketKeys],
+      seeds: [...seeds].sort((left, right) => left - right),
+    };
+  }
+
+  function openStrategyExperiment(record, runs) {
+    if (record.experiment_kind === "PARAMETER_STUDY") {
+      state.overviewExperimentId = record.experiment.experiment_id;
+      state.overviewDatabaseName = record.experiment.database_name;
+      renderExperimentOverview();
+      setPage("experiment-overview");
+      return;
+    }
+    if (runs.length) {
+      openRunDetail(record, runs[0]);
+      return;
+    }
+    state.detailExperimentId = record.experiment.experiment_id;
+    state.detailDatabaseName = record.experiment.database_name;
+    renderDetailSelectors();
+    setPage("experiment-detail");
+  }
+
   function renderStrategyRuns() {
     const strategy = selectedStrategyDefinition()
       || state.strategyDefinitions[0];
@@ -599,8 +625,8 @@
       emptyOption.disabled = true;
       replaceOptions(elements.strategyRunSelect, [emptyOption], "");
       elements.strategyRunFacts.replaceChildren();
-      const columnCount = renderStrategyRunHeader(null);
-      emptyRow(elements.strategyRunBody, columnCount, "暂无策略运行实例");
+      const columnCount = renderStrategyRunHeader();
+      emptyRow(elements.strategyRunBody, columnCount, "暂无策略实验");
       return;
     }
     state.strategyId = strategy.id;
@@ -611,97 +637,77 @@
       ),
       strategy.id,
     );
+    const experimentGroups = Model.strategyExperimentGroups(strategy);
     elements.strategyRunFacts.replaceChildren(
-      make("span", "mini-fact", `${strategy.experiments.length} 个实验`),
-      make("span", "mini-fact", `${strategy.run_instances.length} 个 Runs`),
-      make("span", "mini-fact", `${strategy.configurations.length} 组参数`),
+      make("span", "mini-fact", `${experimentGroups.length} 个实验`),
+      make("span", "mini-fact", `${strategy.runs.length} 个 Runs`),
+      make(
+        "span",
+        "mini-fact",
+        `${experimentGroups.filter(
+          (group) => group.preferred.experiment_kind === "PARAMETER_STUDY",
+        ).length} 个参数研究`,
+      ),
     );
-    const composition = strategy.descriptor?.rule_composition || [];
-    const columnCount = renderStrategyRunHeader(strategy);
+    const columnCount = renderStrategyRunHeader();
     elements.strategyRunBody.replaceChildren();
-    if (!strategy.run_instances.length) {
+    if (!experimentGroups.length) {
       emptyRow(
         elements.strategyRunBody,
         columnCount,
-        "策略定义已经注册，但尚无实验运行实例",
+        "策略定义已经注册，但尚无关联实验",
       );
     } else {
-      strategy.run_instances.forEach((item) => {
-        const {record, run, strategy: instance} = item;
+      experimentGroups.forEach((group) => {
+        const record = group.preferred;
+        const runs = group.runs;
+        const scope = experimentMarketSeedSummary(record, runs);
         const row = document.createElement("tr");
-        appendCell(row, record.experiment.experiment_id);
-        appendCell(row, instance.binding?.instrument || "—");
-        appendCell(row, instance.binding?.direction || "—");
-        appendCell(row, instance.binding?.product_type || "—");
-        const account = run.resolved_components.account;
-        const allocation = instance.allocation || {};
+        const experimentCell = document.createElement("td");
+        const experimentLink = make(
+          "a",
+          "experiment-detail-link",
+          record.experiment.experiment_id,
+        );
+        experimentLink.href = record.experiment_kind === "PARAMETER_STUDY"
+          ? experimentOverviewHref(record.experiment)
+          : experimentDetailHref(record.experiment);
+        experimentCell.append(experimentLink);
+        row.append(experimentCell);
+        appendCell(row, experimentKindLabel(record.experiment_kind));
         row.append(primaryCell(
-          allocation.amount && allocation.settlement_asset
-            ? `${allocation.amount} ${allocation.settlement_asset}`
-            : "—",
-          [
-            account.type,
-            account.parameters?.leverage
-              ? `${account.parameters.leverage}×`
-              : "",
-            account.parameters?.margin_model || "",
-          ].filter(Boolean).join(" · ") || "—",
+          record.experiment.description || "未填写实验说明",
+          record.experiment.database_name,
         ));
-        const market = run.resolved_components.market;
         row.append(primaryCell(
-          market.key,
-          `${market.parameters?.role || "EXPERIMENT"} · Path ${market.parameters?.market_seed ?? "—"} · Run ${run.seed}`,
+          scope.markets.join(" / ") || "—",
+          scope.seeds.length ? `Seed ${scope.seeds.join(", ")}` : "尚无 Seed",
         ));
-        composition.forEach((rule) => {
-          const cell = document.createElement("td");
-          cell.append(ruleConfigSummary(rule, instance));
-          row.append(cell);
-        });
+        row.append(primaryCell(
+          `${runs.length} Runs`,
+          group.versions.length > 1
+            ? `${group.versions.length} 个结果版本`
+            : "1 个结果版本",
+        ));
         appendCell(
           row,
-          optionalRatio(Model.metricScalar(
-            run,
-            "return.total_rate",
-            {scope: "account.total_equity", valuation_asset: "BTC"},
-          )),
-        );
-        appendCell(
-          row,
-          optionalRatio(Model.metricScalar(
-            run,
-            "return.total_rate",
-            {scope: "account.total_equity", valuation_asset: "USDT"},
-          )),
-        );
-        const entryContracts = Model.metricScalar(
-          run,
-          "strategy.entry_contracts",
-        );
-        const liquidationPrice = Model.metricScalar(
-          run,
-          "strategy.estimated_liquidation_price_after_entry",
-        );
-        appendCell(
-          row,
-          `${optionalNumber(entryContracts, 0)} 张 / ${optionalNumber(liquidationPrice, 2)}`,
-        );
-        const fillCount = Model.metricScalar(
-          run,
-          "execution.fill_count",
-        );
-        appendCell(row, `${optionalNumber(fillCount, 0)} 笔`);
-        const liquidated = [true, 1, "true"].includes(
-          Model.metricScalar(run, "run.liquidated"),
-        );
-        appendCell(
-          row,
-          liquidated ? "已强平" : `${run.status} · ${instance.lifecycle || "—"}`,
-          liquidated ? "risk-cell" : "",
+          statusText(record.experiment.status_counts || {}),
         );
         const actionCell = document.createElement("td");
-        const action = make("button", "text-button", "查看 Run →");
+        const action = make(
+          "button",
+          "text-button",
+          record.experiment_kind === "PARAMETER_STUDY"
+            ? "查看参数研究 →"
+            : runs.length === 1
+              ? "查看 Run →"
+              : "查看实验 →",
+        );
         action.type = "button";
-        action.addEventListener("click", () => openRunDetail(record, run));
+        action.addEventListener(
+          "click",
+          () => openStrategyExperiment(record, runs),
+        );
         actionCell.append(action);
         row.append(actionCell);
         elements.strategyRunBody.append(row);
@@ -931,21 +937,44 @@
 
   function renderMarketList() {
     elements.marketList.replaceChildren();
-    state.markets.forEach((market) => {
-      const button = make("button", "selection-item");
-      button.type = "button";
-      button.classList.toggle("active", market.id === state.marketId);
-      button.append(
-        make("strong", "", market.key),
+    Model.marketAssetGroups(state.markets).forEach((group) => {
+      const details = make("details", "market-asset-group");
+      details.open = group.markets.some((market) => market.id === state.marketId);
+      const summary = make("summary", "market-asset-summary");
+      const title = make("span", "market-asset-title", group.asset);
+      title.append(make("small", "", "币种"));
+      summary.append(
+        title,
         make(
           "span",
-          market.source === "PATH_SET" ? "source-path-set" : "",
-          market.type,
+          "market-asset-count",
+          `${group.scenario_count} 类行情 · ${group.path_count} 条路径`,
         ),
-        make("span", "", marketDescription(market)),
       );
-      button.addEventListener("click", () => selectMarket(market.id));
-      elements.marketList.append(button);
+      const types = make("div", "market-type-list");
+      group.markets.forEach((market) => {
+        const assetPrefix = `${group.asset} `;
+        const typeName = market.key.startsWith(assetPrefix)
+          ? market.key.slice(assetPrefix.length)
+          : market.key;
+        const button = make("button", "selection-item market-type-item");
+        button.type = "button";
+        button.classList.toggle("active", market.id === state.marketId);
+        button.append(
+          make("span", "market-type-kicker", "行情类型"),
+          make("strong", "", typeName),
+          make(
+            "span",
+            market.source === "PATH_SET" ? "source-path-set" : "",
+            market.type,
+          ),
+          make("span", "", marketDescription(market)),
+        );
+        button.addEventListener("click", () => selectMarket(market.id));
+        types.append(button);
+      });
+      details.append(summary, types);
+      elements.marketList.append(details);
     });
     if (!state.markets.length) {
       elements.marketList.append(
@@ -1331,9 +1360,15 @@
   }
 
   function researchParameterLabel(strategy, path) {
-    return strategyParameterDescriptors(strategy).find(
-      (parameter) => parameter.key === path,
-    )?.name || String(path).split(".").at(-1) || parameterName(path);
+    if (path === "execution.funding_rate") return "日资金费率";
+    const parts = String(path).split(".");
+    const parameter = strategyParameterDescriptors(strategy).find(
+      (item) => item.key === parts[0],
+    );
+    if (!parameter) return parts.at(-1) || parameterName(path);
+    return parts.length === 1
+      ? parameter.name
+      : `${parameter.name} · ${parts.slice(1).join(".")}`;
   }
 
   function candidateParameterSummary(candidate, strategy) {
@@ -1558,6 +1593,13 @@
         return Number.isFinite(value) ? [value] : [];
       }),
     );
+    if (!values.length) {
+      return make(
+        "div",
+        "chart-empty",
+        "指标尚未评估；完成 MetricSet 计算后才显示比较图。",
+      );
+    }
     let minimum = Math.min(0, ...values);
     let maximum = Math.max(0, ...values);
     if (minimum === maximum) {
@@ -1720,7 +1762,21 @@
         },
       ]),
     );
-    charts.append(performance, activity);
+    const funding = make("section", "tearsheet-chart-block");
+    funding.append(
+      make("h4", "", "资金费净变动"),
+      make(
+        "p",
+        "",
+        "正值表示收到资金费，负值表示支付；单位使用合约结算资产。",
+      ),
+      horizontalComparisonChart(candidates, [{
+        label: "资金费",
+        value: (candidate) => candidate.summary?.funding_median,
+        color: "#5b8def",
+      }]),
+    );
+    charts.append(performance, funding, activity);
     return charts;
   }
 
@@ -1760,6 +1816,15 @@
       ["入场预计强平价", (candidate) => optionalNumber(candidate.summary?.estimated_liquidation_price_median, 2)],
       ["成交数中位数", (candidate) => optionalNumber(candidate.summary?.fill_median, 0)],
       ["完整循环中位数", (candidate) => optionalNumber(candidate.summary?.cycle_median, 0)],
+      ["资金费净变动", (candidate) => {
+        const value = candidate.summary?.funding_median;
+        const fundingAsset = candidate.samples[0]?.funding_asset
+          || candidate.asset;
+        return value === null || value === undefined
+          ? "—"
+          : `${formatNumber(value, 6)} ${fundingAsset}`;
+      }],
+      ["资金费结算次数", (candidate) => optionalNumber(candidate.summary?.funding_settlement_count_median, 0)],
       ["手续费中位数", (candidate) => {
         const value = candidate.summary?.fee_median;
         return value === null || value === undefined
@@ -1876,17 +1941,17 @@
     const titleLink = make(
       "a",
       "experiment-detail-link",
-      record.experiment.description || humanize(study.id),
+      record.experiment.experiment_id,
     );
     titleLink.href = experimentDetailHref(record.experiment);
     title.append(titleLink);
     copy.append(
-      make("div", "eyebrow", "STUDY · 同策略 / 同市场 / 同账户 / 同成本"),
+      make("div", "eyebrow", "PARAMETER STUDY EXPERIMENT"),
       title,
       make(
         "p",
         "",
-        `${strategyName(strategy)} · ${study.experiments.length} 个逻辑实验 · ${study.versions.length} 个执行版本`,
+        `${strategyName(strategy)} · ${record.experiment.description || "无说明"} · ${study.versions.length} 个执行版本`,
       ),
     );
     const headerActions = make("div", "study-card-actions");
@@ -1899,7 +1964,7 @@
       make(
         "span",
         "study-status-badge",
-        `比较版本 ${study.preferred_records.length}/${study.versions.length}`,
+        `${study.versions.length} 个版本`,
       ),
       expandLabel,
     );
@@ -1911,7 +1976,7 @@
 
     const body = make("div", "study-card-body");
     const composition = strategy.descriptor?.rule_composition || [];
-    const primaryRule = strategy.descriptor?.research_focus?.primary_rule_type;
+    const primaryRuleKey = strategy.descriptor?.primary_rule_key;
     const companionSummary = make("div", "study-guidance");
     companionSummary.append(
       make(
@@ -1919,7 +1984,7 @@
         "",
         `规则组成：${composition.length
           ? composition.map((item) =>
-              `${item.rule_key}=${item.rule_type}${item.rule_type === primaryRule ? "（核心）" : ""}`,
+              `${item.rule_key}=${item.rule_type}${item.rule_key === primaryRuleKey ? "（主规则）" : ""}`,
             ).join("；")
           : "历史 Strategy，尚无 Rule 身份"}`,
       ),
@@ -1927,7 +1992,7 @@
         "span",
         "",
         `配合策略：${companionStrategyText(
-          Model.strategyRuns(
+          Model.strategyDefinitionRuns(
             study.preferred_records[0],
             study.strategy_type,
           )[0],
@@ -1944,7 +2009,32 @@
       item.append(make("span", "", label), make("strong", "", value));
       context.append(item);
     });
-    body.append(companionSummary, context);
+    const axisGroups = make("div", "study-axis-groups");
+    Model.strategyParameterAxisGroups(
+      study.preferred,
+      strategy.descriptor,
+    ).forEach((group) => {
+      const item = make("div", "study-axis-group");
+      const groupLabel = group.scope === "RULE"
+        ? group.rules.map((rule) =>
+            `${rule.rule_key} · ${rule.rule_type}`,
+          ).join(" + ")
+        : group.scope === "STRATEGY"
+          ? "Strategy / Application"
+          : `${group.scope} Component`;
+      item.append(
+        make("strong", "", groupLabel),
+        make(
+          "span",
+          "",
+          group.axes.map((axis) =>
+            `${axis.name}（${axis.values.length} 个候选值）`,
+          ).join("；"),
+        ),
+      );
+      axisGroups.append(item);
+    });
+    body.append(companionSummary, context, axisGroups);
 
     const comparison = candidateComparisonTable(study, strategy);
     const varying = [...new Set(
@@ -1993,13 +2083,9 @@
   function renderExperimentOverview() {
     elements.experimentGroups.replaceChildren();
     let renderedGroupCount = 0;
-    Model.researchFocusGroups(state.strategies).forEach((focus) => {
-      const strategyStudies = focus.strategies.map((strategy) => ({
-        strategy,
-        studies: Model.studyGroups(state.records, strategy.type),
-      })).filter((item) => item.studies.length);
-      if (!strategyStudies.length) return;
-      const studies = strategyStudies.flatMap((item) => item.studies);
+    state.strategyDefinitions.forEach((strategy) => {
+      const studies = Model.studyGroups(state.records, strategy.type);
+      if (!studies.length) return;
       const panel = make(
         "details",
         "data-panel experiment-strategy-group",
@@ -2012,18 +2098,18 @@
       );
       const heading = make("summary", "experiment-group-heading");
       const identity = make("div", "experiment-group-identity");
-      const rule = state.rules.find((item) => item.type === focus.rule_type);
-      const runCount = strategyStudies.reduce(
-        (sum, item) => sum + item.strategy.runs.length,
-        0,
-      );
+      const runCount = strategy.runs.length;
       identity.append(
         make(
           "strong",
           "",
-          rule ? ruleName(rule) : `${strategyName(focus.strategies[0])}（历史）`,
+          strategyName(strategy),
         ),
-        make("span", "", `${studies.length} 个 Study · ${runCount} Runs`),
+        make(
+          "span",
+          "",
+          `${studies.length} 个参数实验 · ${runCount} Runs`,
+        ),
       );
       heading.append(
         identity,
@@ -2034,8 +2120,8 @@
           panel.open ? "收起" : "展开";
       });
       const studyList = make("div", "study-list");
-      strategyStudies.forEach(({strategy, studies: items}) =>
-        items.forEach((study) => studyList.append(studyCard(study, strategy))),
+      studies.forEach((study) =>
+        studyList.append(studyCard(study, strategy)),
       );
       panel.append(heading, studyList);
       elements.experimentGroups.append(panel);

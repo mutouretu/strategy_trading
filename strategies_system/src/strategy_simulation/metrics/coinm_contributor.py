@@ -79,16 +79,24 @@ class StrategiesCoinMMetricInputContributor:
                 )
                 initial_futures = initial_base
             else:
+                spot_key = (
+                    "spot_base" if "spot_base" in parameters else "spot_btc"
+                )
+                wallet_key = (
+                    "futures_wallet_base"
+                    if "futures_wallet_base" in parameters
+                    else "futures_wallet_btc"
+                )
                 initial_base = decimal_value(
-                    parameters.get("spot_btc", "0"),
-                    name="account.spot_btc",
+                    parameters.get(spot_key, "0"),
+                    name=f"account.{spot_key}",
                 ) + decimal_value(
-                    parameters.get("futures_wallet_btc", "0"),
-                    name="account.futures_wallet_btc",
+                    parameters.get(wallet_key, "0"),
+                    name=f"account.{wallet_key}",
                 )
                 initial_futures = decimal_value(
-                    parameters.get("futures_wallet_btc", "0"),
-                    name="account.futures_wallet_btc",
+                    parameters.get(wallet_key, "0"),
+                    name=f"account.{wallet_key}",
                 )
             first_mark = self._first_mark(trace_equity, instrument)
             initial_metrics = {

@@ -1,0 +1,125 @@
+{
+  "schema_version": "experiment-spec/v1",
+  "experiment_id": "aave-coinm-funding-rate-study-v1",
+  "description": "AAVE COIN-M 三年资金费敏感性实验：固定当前实仓近似规模与同一宽幅震荡路径，仅比较日资金费率",
+  "scenario_groups": [
+    {
+      "key": "aave-long-range-funding-rate-study",
+      "run_provider": "strategies-simulation/v1",
+      "markets": [
+        {
+          "key": "aave-long-range-train-4105",
+          "type": "historical-parquet/v1",
+          "parameters": {
+            "path": "../market_simulator/market_environments/generated/aave-three-year-market-baseline-v1/819a5d80a365068f352d.parquet",
+            "instrument": "AAVEUSD_PERP",
+            "interval": "1h",
+            "frame_count": 26305,
+            "content_sha256": "819a5d80a365068f352d6cb5f9e970d73bf04f04b72d6660496f9d3314ea0ce5",
+            "file_sha256": "5452f134336bf840d91f80b6ece12ebfb022609104e35faf0c56e828ed78b7e5"
+          }
+        }
+      ],
+      "strategies": [
+        {
+          "key": "aave-current-position-hold",
+          "type": "coinm-long-take-profit-ladder/v1",
+          "parameters": {
+            "strategy_definition_type": "entry-then-ladder-exit/v1",
+            "strategy_parameters": {
+              "strategy_id": "aave-current-position-funding-study",
+              "instrument": "AAVEUSD_PERP",
+              "direction": "LONG",
+              "product_type": "INVERSE_PERPETUAL",
+              "entry_sizing_policy": "EFFECTIVE_LEVERAGE",
+              "entry_sizing_parameters": {
+                "entry_effective_leverage": "0.58",
+                "sizing_safety_buffer_ratio": "0"
+              },
+              "first_exit_ratio": "10",
+              "exit_end_price": "2000",
+              "exit_level_count": 2,
+              "tick_size": "0.01",
+              "quantity_step": "1",
+              "quantity_unit": "contracts"
+            }
+          }
+        }
+      ],
+      "executions": [
+        {
+          "key": "binance-aave-coinm-fixed-daily-funding",
+          "type": "daily-bar-execution/v1",
+          "parameters": {
+            "maker_fee_rate": "0.0002",
+            "taker_fee_rate": "0.0005",
+            "fee_asset": "AAVE",
+            "funding_model": "fixed-daily/v1",
+            "funding_rate": "0",
+            "funding_interval_seconds": 86400,
+            "settlement_offset_seconds": 0
+          }
+        }
+      ],
+      "accounts": [
+        {
+          "key": "aave-coinm-cross-live-snapshot",
+          "type": "coinm-inverse/v1",
+          "parameters": {
+            "instrument": "AAVEUSD_PERP",
+            "contract_size": "10",
+            "spot_base": "0",
+            "futures_wallet_base": "135.07285718",
+            "base_asset": "AAVE",
+            "quote_asset": "USDT",
+            "notional_asset": "USD",
+            "margin_model": "flat-maintenance/v1",
+            "leverage": "10",
+            "maintenance_margin_rate": "0.05",
+            "mark_price_sampling": "ADVERSE_EXTREME"
+          }
+        }
+      ],
+      "parameter_axes": [
+        {
+          "path": "/execution/parameters/funding_rate",
+          "values": [
+            "-0.00015",
+            "0",
+            "0.0001421008888888889",
+            "0.0003",
+            "0.0006"
+          ]
+        }
+      ]
+    }
+  ],
+  "seeds": [0],
+  "output": {
+    "root": "experiment_results",
+    "default_retention_class": "archived"
+  },
+  "controls": {
+    "max_runs": 5,
+    "continue_on_error": false
+  },
+  "metadata": {
+    "experiment_kind": "PARAMETER_STUDY",
+    "purpose": "aave-coinm-funding-cost-sensitivity",
+    "formal_baseline": false,
+    "market_assumption": "aave-long-range-v1",
+    "market_path_key": "aave-long-range-v1:TRAIN:4105",
+    "live_snapshot_date": "2026-08-19",
+    "live_wallet_aave": "135.07285718",
+    "live_position_contracts": "730",
+    "live_account_leverage": "10",
+    "simulated_entry_effective_leverage": "0.58",
+    "funding_observation_count": 270,
+    "observed_mean_8h_funding_rate": "0.00004736696296296296",
+    "observed_daily_equivalent_funding_rate": "0.0001421008888888889",
+    "funding_rate_sign": "positive means long pays; negative means long receives",
+    "funding_interval": "daily",
+    "maker_fee_rate": "0.0002",
+    "taker_fee_rate": "0.0005"
+  }
+}

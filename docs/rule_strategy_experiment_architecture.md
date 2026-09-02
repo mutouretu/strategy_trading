@@ -2,7 +2,7 @@
 
 ## 1. 文档状态
 
-- 状态：待实施方案
+- 状态：A–D 已实现并通过测试；E 留作后续迁移
 - 适用范围：`strategies_system` 与 `market_simulator`
 - 文档目的：独立定义从 Trading Rule 到 Strategy，再到 Experiment 和
   Simulation Runtime 的逻辑关系、依赖方向、运行调用链与迁移顺序。
@@ -469,26 +469,29 @@ Trace，用于追溯，不作为参数研究的主要浏览页。
 - SQLite 已保存 ExperimentSpec、Run、Metric 和 Trace；
 - 前端已有参数候选表和比较报表。
 
-### 9.2 当前缺口
+### 9.2 实施前缺口（A–D 已闭环）
 
-- 实验 JSON 仍以历史专用仿真 Plugin Type 作为策略组件身份；
-- `ExperimentSpec` 中尚未显式声明 `strategy_definition_type`；
-- 前端的 Study 由历史 Strategy Plugin 和 `research_focus` 推导；
-- 尚未使用 StrategyDefinition 建立可在 Run 失败时仍稳定的实验归属；
-- 参数研究页仍会将单 Run 基线和真正参数扫描混在一起。
+- 有效 Ladder 实验已经在策略组件参数中显式声明
+  `strategy_definition_type`；
+- 两个首批实验已经使用 `strategy_parameters` 作为外部参数入口；
+- 前端从持久化 ExperimentSpec 建立 StrategyExperimentIndex，只有旧结果才从
+  Provider Summary 回退；
+- 即使 Run 失败或尚未产生 Provider Summary，实验仍可归属到 StrategyDefinition；
+- 参数研究页已经按 StrategyDefinition 和 PARAMETER_STUDY Experiment 组织，
+  单 Run 基线只留在策略运行页。
 
 ---
 
 ## 10. 实施计划
 
-### 10.1 A：建立 Experiment 到 Strategy 的显式关联
+### 10.1 A：建立 Experiment 到 Strategy 的显式关联（已完成）
 
 1. 在策略仿真组件参数中增加 `strategy_definition_type`。
 2. 在 `strategies_system` Provider 的 `resolve/validate` 阶段校验该定义已注册。
 3. 校验 Strategy Parameters 可以解析为合法 StrategySpec 和 RuleConfig。
 4. `market_simulator` 中的通用 `ExperimentSpec` 模型不增加 Strategy 领域依赖。
 
-### 10.2 B：建立 StrategyExperimentIndex
+### 10.2 B：建立 StrategyExperimentIndex（已完成）
 
 1. 从已保存的 ExperimentSpec 读取 `strategy_definition_type`。
 2. 以 `strategy_definition_type` 建立 Experiment 反向索引。
@@ -496,7 +499,7 @@ Trace，用于追溯，不作为参数研究的主要浏览页。
 4. 对旧数据暂时回退使用 Provider Summary 中的 canonical `strategy_type`。
 5. 回退逻辑只用于读取兼容，新 Experiment 必须具有显式关联。
 
-### 10.3 C：重构参数研究页
+### 10.3 C：重构参数研究页（已完成）
 
 1. 使用 StrategyDefinition 作为一级分组。
 2. 使用 Parameter Study Experiment 作为二级列表。
@@ -506,7 +509,7 @@ Trace，用于追溯，不作为参数研究的主要浏览页。
    的页面组织方式。
 6. 不含参数轴的基线只进入 Strategy 运行页。
 
-### 10.4 D：迁移当前有效实验
+### 10.4 D：迁移当前有效实验（已完成）
 
 首批迁移：
 
@@ -524,7 +527,7 @@ entry-then-ladder-exit/v1
 旧 Grid Experiment 等相应 Grid StrategyDefinition 建立后再迁移，不使用临时字符串
 归类。
 
-### 10.5 E：通用 Strategy Application 适配器
+### 10.5 E：通用 Strategy Application 适配器（待后续）
 
 本批次只预留目标，不作为 A–D 的前置条件。
 
@@ -658,3 +661,55 @@ entry-then-ladder-exit/v1
 运行时，ExperimentSystem 通过 strategies_system 适配器调用 StrategyInstance；
 代码上，StrategyDefinition 永远不依赖 Simulator。
 ```
+
+---
+
+## 15. A–D 实现记录
+
+### 15.1 显式关联和参数链路
+
+`coinm-long-take-profit-ladder/v1` 兼容 Plugin 现在要求显式提供已注册的
+`strategy_definition_type`。首批有效实验把外部参数放入 `strategy_parameters`，参数轴
+直接修改该对象，Plugin 只负责将其转换为已经验证过的 COIN-M 运行配置。
+
+Provider 在规划阶段完成以下校验：
+
+- StrategyDefinition 已注册并规范化为 canonical type；
+- 嵌套 Strategy 参数字段无缺失和未知项；
+- StrategyDefinition 最终生成的 StrategySpec 与声明类型一致；
+- `experiment_kind` 属于约定枚举；
+- PARAMETER_STUDY 至少包含一个参数轴。
+
+Experiment System 只增加了可选的 Provider 级 ExperimentSpec 校验钩子，不解释
+`experiment_kind`、Strategy 或 Rule。
+
+### 15.2 读取索引和旧数据
+
+Viewer 研究模型优先从持久化 ExperimentSpec 的 Strategy Component 参数读取
+`strategy_definition_type`，建立 `StrategyDefinition → Experiment[]` 反向索引。该索引
+不依赖成功 Run。旧 SQLite 若没有显式字段，则从 Provider Summary 中的 canonical
+Strategy type 回退，且为关联记录标明来源。
+
+### 15.3 参数研究页面
+
+参数研究页面当前层级为：
+
+```text
+StrategyDefinition
+    → PARAMETER_STUDY Experiment
+        → Strategy/Rule 分组的 ParameterAxis
+            → Candidate configuration
+                → Run / report
+```
+
+不同 Experiment ID 不再因为市场、账户和成本上下文相同而自动合并。一个参数扫描
+Experiment 内部的候选值仍在同一报表中比较；BASELINE 不进入参数研究主列表。
+
+### 15.4 首批迁移配置
+
+- `btc-hold-coinm-ladder-baseline-v1`：`experiment_kind=BASELINE`；
+- `btc-coinm-effective-leverage-scan-v1`：
+  `experiment_kind=PARAMETER_STUDY`，有效杠杆参数轴进入
+  `strategy_parameters.entry_sizing_parameters`。
+
+旧 Grid 实验没有伪造 StrategyDefinition 归属，等待对应策略定义建立后再迁移。

@@ -1,0 +1,20 @@
+{
+  "schema_version": "market-path-set/v1",
+  "path_set_id": "aave-three-year-market-baseline-v1",
+  "description": "AAVE 三年条件市场基线：六类高波动场景与分离的 TRAIN、VALIDATION、HOLDOUT Seed",
+  "asset_profile_path": "../asset_profiles/aave-24x7-v1.json",
+  "scenarios": [
+    {"scenario_id": "aave-base-recovery-v1", "path": "../scenarios/aave-base-recovery-v1.json"},
+    {"scenario_id": "aave-delayed-breakout-v1", "path": "../scenarios/aave-delayed-breakout-v1.json"},
+    {"scenario_id": "aave-deep-bear-then-recovery-v1", "path": "../scenarios/aave-deep-bear-then-recovery-v1.json"},
+    {"scenario_id": "aave-early-rally-crash-v1", "path": "../scenarios/aave-early-rally-crash-v1.json"},
+    {"scenario_id": "aave-long-range-v1", "path": "../scenarios/aave-long-range-v1.json"},
+    {"scenario_id": "aave-thesis-failure-v1", "path": "../scenarios/aave-thesis-failure-v1.json"}
+  ],
+  "roles": {
+    "TRAIN": [4101, 4102, 4103, 4104, 4105, 4106, 4107, 4108],
+    "VALIDATION": [4201, 4202, 4203, 4204],
+    "HOLDOUT": [4301, 4302, 4303, 4304]
+  },
+  "status": "LOCKED"
+}

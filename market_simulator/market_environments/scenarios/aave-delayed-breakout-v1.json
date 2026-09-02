@@ -1,0 +1,27 @@
+{
+  "schema_version": "market-scenario/v1",
+  "scenario_id": "aave-delayed-breakout-v1",
+  "name": "AAVE 延迟突破",
+  "description": "前两年保持高波动震荡，最后一年才随市场快速突破",
+  "origin": "SYNTHETIC",
+  "asset_profile_id": "aave-24x7/v1",
+  "instrument": "AAVEUSD_PERP",
+  "horizon": {"start": "2026-08-20", "end": "2029-08-20"},
+  "interval": "1h",
+  "model": {"type": "anchored-regime-bridge/v1", "price_quantum": "0.01", "periods_per_year": 365, "substeps_per_bar": 6},
+  "anchors": [
+    {"date": "2026-08-20", "target": {"type": "HARD", "price": "93.28"}},
+    {"date": "2027-08-20", "target": {"type": "BAND", "minimum": "50", "maximum": "120"}},
+    {"date": "2028-08-20", "target": {"type": "BAND", "minimum": "55", "maximum": "150"}},
+    {"date": "2029-04-20", "target": {"type": "BAND", "minimum": "220", "maximum": "420"}},
+    {"date": "2029-08-20", "target": {"type": "BAND", "minimum": "160", "maximum": "300"}}
+  ],
+  "volatility_regimes": [
+    {"start": "2026-08-20", "end_exclusive": "2027-08-20", "annual_volatility": {"minimum": "0.80", "maximum": "1.20"}},
+    {"start": "2027-08-20", "end_exclusive": "2028-08-20", "annual_volatility": {"minimum": "0.80", "maximum": "1.20"}},
+    {"start": "2028-08-20", "end_exclusive": "2029-04-20", "annual_volatility": {"minimum": "1.05", "maximum": "1.55"}},
+    {"start": "2029-04-20", "end_exclusive": "2029-08-20", "annual_volatility": {"minimum": "0.90", "maximum": "1.30"}}
+  ],
+  "status": "LOCKED",
+  "metadata": {"family": "DELAYED_BREAKOUT", "thesis": "条件市场假设，不是价格预测", "starting_price_source": "Binance AAVEUSD_PERP 2026-08-19 16:08 UTC mark price"}
+}

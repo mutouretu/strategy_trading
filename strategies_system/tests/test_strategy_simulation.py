@@ -71,6 +71,7 @@ def component() -> ComponentSpec:
         key="ladder",
         type=COINM_LONG_TAKE_PROFIT_LADDER_V1,
         parameters={
+            "strategy_definition_type": "entry-then-ladder-exit/v1",
             "instrument": "BTCUSD_PERP",
             "entry_sizing_mode": "TARGET_LIQUIDATION_PRICE",
             "target_liquidation_price": "20000",
@@ -81,6 +82,55 @@ def component() -> ComponentSpec:
 
 
 class StrategySimulationTests(unittest.TestCase):
+    def test_coinm_account_supports_generic_aave_settlement(self) -> None:
+        runtime = build_account_runtime(
+            resolve_account_component(
+                ComponentSpec(
+                    key="aave-coinm",
+                    type="coinm-inverse/v1",
+                    parameters={
+                        "instrument": "AAVEUSD_PERP",
+                        "contract_size": "10",
+                        "spot_base": "0",
+                        "futures_wallet_base": "135.07285718",
+                        "base_asset": "AAVE",
+                        "quote_asset": "USDT",
+                        "notional_asset": "USD",
+                        "margin_model": "flat-maintenance/v1",
+                        "leverage": "10",
+                        "maintenance_margin_rate": "0.05",
+                        "mark_price_sampling": "ADVERSE_EXTREME",
+                    },
+                )
+            )
+        )
+        ledger = runtime.ledger_factory()
+        self.assertEqual(runtime.settlement_asset, "AAVE")
+        self.assertEqual(runtime.contract_size, Decimal("10"))
+        self.assertEqual(
+            ledger.futures_wallet_balance,
+            Decimal("135.07285718"),
+        )
+
+    def test_coinm_account_rejects_legacy_btc_fields_for_aave(self) -> None:
+        with self.assertRaisesRegex(ValueError, "require base_asset='BTC'"):
+            build_account_runtime(
+                resolve_account_component(
+                    ComponentSpec(
+                        key="invalid-aave-coinm",
+                        type="coinm-inverse/v1",
+                        parameters={
+                            "instrument": "AAVEUSD_PERP",
+                            "contract_size": "10",
+                            "spot_btc": "0",
+                            "futures_wallet_btc": "1",
+                            "base_asset": "AAVE",
+                            "margin_model": "none",
+                        },
+                    )
+                )
+            )
+
     def test_result_server_registers_monorepo_market_environment_root(self):
         with patch(
             "strategy_simulation.cli.experiment_main",
@@ -165,6 +215,9 @@ class StrategySimulationTests(unittest.TestCase):
                     key="effective-ladder",
                     type=COINM_LONG_TAKE_PROFIT_LADDER_V1,
                     parameters={
+                        "strategy_definition_type": (
+                            "entry-then-ladder-exit/v1"
+                        ),
                         "instrument": "BTCUSD_PERP",
                         "entry_sizing_mode": "EFFECTIVE_LEVERAGE",
                         "entry_effective_leverage": "0.5",
@@ -198,6 +251,10 @@ class StrategySimulationTests(unittest.TestCase):
             mark_price_sampling=account_runtime.mark_price_sampling,
         ).run(seed=0)
         summary = binding.summarize(result)
+        self.assertEqual(
+            summary["strategy_definition_type"],
+            "entry-then-ladder-exit/v1",
+        )
 
         self.assertEqual(summary["requested_entry_effective_leverage"], "0.5")
         self.assertLessEqual(

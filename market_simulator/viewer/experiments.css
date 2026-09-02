@@ -247,7 +247,16 @@
 }
 
 .strategy-run-table {
-  min-width: 1900px;
+  min-width: 1120px;
+}
+
+.chart-empty {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  color: var(--tv-muted);
+  font-size: 14px;
+  text-align: center;
 }
 
 .research-table th,
@@ -564,6 +573,67 @@
   display: grid;
 }
 
+.market-asset-group {
+  border-bottom: 1px solid var(--tv-border);
+}
+
+.market-asset-group:last-child {
+  border-bottom: 0;
+}
+
+.market-asset-summary {
+  min-height: 58px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--surface-soft);
+  color: var(--tv-text);
+  cursor: pointer;
+  list-style: none;
+}
+
+.market-asset-summary::-webkit-details-marker {
+  display: none;
+}
+
+.market-asset-summary::before {
+  content: "▸";
+  color: var(--tv-muted);
+  font-size: 12px;
+  transition: transform 120ms ease;
+}
+
+.market-asset-group[open] > .market-asset-summary::before {
+  transform: rotate(90deg);
+}
+
+.market-asset-title {
+  margin-right: auto;
+  display: grid;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.market-asset-title small {
+  color: var(--tv-muted);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+
+.market-asset-count {
+  color: var(--tv-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.market-type-list {
+  display: grid;
+}
+
 .selection-item {
   width: 100%;
   padding: 14px;
@@ -575,6 +645,17 @@
   color: var(--tv-muted);
   cursor: pointer;
   text-align: left;
+}
+
+.market-type-item {
+  padding-left: 28px;
+}
+
+.market-type-kicker {
+  color: var(--tv-blue) !important;
+  font-size: 10px !important;
+  font-weight: 600;
+  letter-spacing: 0.08em;
 }
 
 .selection-item:hover,
@@ -891,6 +972,31 @@
   white-space: nowrap;
 }
 
+.study-axis-groups {
+  padding: 12px 17px;
+  display: grid;
+  gap: 8px;
+  border-bottom: 1px solid var(--tv-border);
+  background: #151a25;
+}
+
+.study-axis-group {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.32fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+}
+
+.study-axis-group strong {
+  color: #b8c8ff;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.study-axis-group span {
+  color: var(--tv-muted);
+  font-size: 12px;
+}
+
 .study-guidance {
   padding: 12px 17px;
   display: flex;
@@ -912,7 +1018,7 @@
 .tearsheet-layout {
   padding: 16px 17px 18px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(330px, 0.42fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   background: #f7f8fa;
   color: #20242c;
@@ -1670,6 +1776,11 @@
 
   .study-context-grid {
     grid-template-columns: 1fr;
+  }
+
+  .study-axis-group {
+    grid-template-columns: 1fr;
+    gap: 3px;
   }
 
   .study-context-item {
