@@ -59,3 +59,6 @@ docs/architecture/current_architecture.pdf
 **/coverage.xml
 **/*.tmp
 **/*.swp
+
+# Local source repository used to seed the standalone ledger module
+/trading-ledger/
