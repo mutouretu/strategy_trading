@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from experiment_system import ComponentSpec
 from strategy_application import (
     StrategyApplication,
@@ -16,6 +18,9 @@ from trading_strategies.btc_accumulation.long_take_profit_ladder import (
     ENTRY_RULE_KEY,
     TAKE_PROFIT_RULE_KEY,
     CoinMLongTakeProfitLadderStrategyDefinition,
+)
+from trading_strategies.entry_then_ladder_exit import (
+    ENTRY_THEN_LADDER_EXIT_V1,
 )
 from trading_strategies.rules import (
     InitialEntryPhase,
@@ -58,6 +63,8 @@ _DEFAULTS: dict[str, object] = {
     "sizing_safety_buffer_ratio": "0",
 }
 _FIELDS = {
+    "strategy_definition_type",
+    "strategy_parameters",
     "strategy_id",
     "instrument",
     "side",
@@ -76,9 +83,89 @@ _FIELDS = {
     "sizing_safety_buffer_ratio",
 }
 _OPTIONAL_FIELDS = {
+    "strategy_parameters",
     "target_liquidation_price",
     "entry_effective_leverage",
 }
+_STRATEGY_PARAMETER_FIELDS = {
+    "strategy_id",
+    "instrument",
+    "direction",
+    "product_type",
+    "entry_sizing_policy",
+    "entry_sizing_parameters",
+    "first_exit_ratio",
+    "exit_end_price",
+    "exit_level_count",
+    "tick_size",
+    "quantity_step",
+    "quantity_unit",
+}
+_SIZING_PARAMETER_FIELDS = {
+    "target_liquidation_price",
+    "entry_effective_leverage",
+    "sizing_safety_buffer_ratio",
+}
+
+
+def _nested_strategy_parameters(
+    parameters: Mapping[str, object],
+) -> tuple[dict[str, object], dict[str, object]]:
+    raw = parameters.get("strategy_parameters")
+    if not isinstance(raw, Mapping):
+        raise ValueError(
+            "coinm-long-take-profit-ladder/v1.strategy_parameters "
+            "must be an object"
+        )
+    nested = dict(raw)
+    check_fields(
+        nested,
+        _STRATEGY_PARAMETER_FIELDS,
+        context=(
+            "coinm-long-take-profit-ladder/v1.strategy_parameters"
+        ),
+    )
+    context = "coinm-long-take-profit-ladder/v1.strategy_parameters"
+    direction = text(nested, "direction", context=context).upper()
+    if direction != "LONG":
+        raise ValueError(f"{context}.direction must be 'LONG'")
+    product_type = text(nested, "product_type", context=context).upper()
+    if product_type != "INVERSE_PERPETUAL":
+        raise ValueError(
+            f"{context}.product_type must be 'INVERSE_PERPETUAL'"
+        )
+    quantity_unit = text(nested, "quantity_unit", context=context)
+    if quantity_unit != "contracts":
+        raise ValueError(f"{context}.quantity_unit must be 'contracts'")
+    sizing = nested["entry_sizing_parameters"]
+    if not isinstance(sizing, Mapping):
+        raise ValueError(f"{context}.entry_sizing_parameters must be an object")
+    sizing_parameters = dict(sizing)
+    check_fields(
+        sizing_parameters,
+        set(),
+        optional=_SIZING_PARAMETER_FIELDS,
+        context=f"{context}.entry_sizing_parameters",
+    )
+    translated: dict[str, object] = {
+        "strategy_id": nested["strategy_id"],
+        "instrument": nested["instrument"],
+        "side": direction,
+        "entry_sizing_mode": nested["entry_sizing_policy"],
+        "first_take_profit_ratio": nested["first_exit_ratio"],
+        "take_profit_end_price": nested["exit_end_price"],
+        "take_profit_count": nested["exit_level_count"],
+        "tick_size": nested["tick_size"],
+        "quantity_step": nested["quantity_step"],
+    }
+    translated.update(sizing_parameters)
+    return translated, {
+        **nested,
+        "direction": direction,
+        "product_type": product_type,
+        "quantity_unit": quantity_unit,
+        "entry_sizing_parameters": sizing_parameters,
+    }
 
 
 class CoinMLongTakeProfitLadderSimulationPlugin:
@@ -92,6 +179,23 @@ class CoinMLongTakeProfitLadderSimulationPlugin:
             "display_name": "COIN-M 阶梯止盈多头",
             "family": "BTC 建仓与退出",
             "version": "v1",
+            "strategy_definition_type": ENTRY_THEN_LADDER_EXIT_V1,
+            "strategy_parameter_mapping": {
+                "strategy_id": "strategy_id",
+                "instrument": "instrument",
+                "entry_sizing_mode": "entry_sizing_policy",
+                "target_liquidation_price": (
+                    "entry_sizing_parameters.target_liquidation_price"
+                ),
+                "entry_effective_leverage": (
+                    "entry_sizing_parameters.entry_effective_leverage"
+                ),
+                "first_take_profit_ratio": "first_exit_ratio",
+                "take_profit_end_price": "exit_end_price",
+                "take_profit_count": "exit_level_count",
+                "tick_size": "tick_size",
+                "quantity_step": "quantity_step",
+            },
             "research_focus": {
                 "primary_rule_key": TAKE_PROFIT_RULE_KEY,
                 "primary_rule_type": "ladder-take-profit/v1",
@@ -171,10 +275,39 @@ class CoinMLongTakeProfitLadderSimulationPlugin:
         }
 
     def resolve(self, component: ComponentSpec) -> ComponentSpec:
+        raw = dict(component.parameters)
+        if "strategy_definition_type" not in raw:
+            raise ValueError(
+                f"{self.strategy_type} requires strategy_definition_type"
+            )
+        declared_type = text(
+            raw,
+            "strategy_definition_type",
+            context=self.strategy_type,
+        )
+        if "strategy_parameters" in raw:
+            legacy_fields = (
+                set(raw)
+                - {"strategy_definition_type", "strategy_parameters"}
+            )
+            if legacy_fields:
+                raise ValueError(
+                    f"{self.strategy_type} cannot mix strategy_parameters "
+                    f"with legacy parameters: {sorted(legacy_fields)}"
+                )
+            translated, strategy_parameters = _nested_strategy_parameters(raw)
+            resolved = {
+                **_DEFAULTS,
+                **translated,
+                "strategy_definition_type": declared_type,
+                "strategy_parameters": strategy_parameters,
+            }
+        else:
+            resolved = {**_DEFAULTS, **raw}
         return ComponentSpec(
             key=component.key,
             type=component.type,
-            parameters={**_DEFAULTS, **dict(component.parameters)},
+            parameters=resolved,
         )
 
     def build(
@@ -293,6 +426,16 @@ class CoinMLongTakeProfitLadderSimulationPlugin:
         strategy_spec = CoinMLongTakeProfitLadderStrategyDefinition().bind(
             config
         )
+        declared_definition_type = text(
+            parameters,
+            "strategy_definition_type",
+            context=self.strategy_type,
+        )
+        if declared_definition_type != strategy_spec.strategy_type:
+            raise ValueError(
+                "declared strategy_definition_type does not match the "
+                "StrategySpec produced by the simulation adapter"
+            )
         account = context.ledger_factory()
         initial_equity = getattr(account, "initial_equity", None)
         if initial_equity is None:
@@ -363,6 +506,7 @@ class CoinMLongTakeProfitLadderSimulationPlugin:
             target_leverage = config.entry_effective_leverage
             return {
                 "strategy_type": self.strategy_type,
+                "strategy_definition_type": strategy_spec.strategy_type,
                 "strategy_id": config.strategy_id,
                 "application_id": application.application_id,
                 "strategy_instance_id": instance.strategy_instance_id,

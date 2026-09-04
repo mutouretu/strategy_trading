@@ -34,15 +34,24 @@
           "key": "btc-effective-leverage-ladder",
           "type": "coinm-long-take-profit-ladder/v1",
           "parameters": {
-            "strategy_id": "btc-effective-leverage-ladder-scan",
-            "instrument": "BTCUSD_PERP",
-            "entry_sizing_mode": "EFFECTIVE_LEVERAGE",
-            "entry_effective_leverage": "0.5",
-            "first_take_profit_ratio": "1.10",
-            "take_profit_end_price": "150000",
-            "take_profit_count": 10,
-            "tick_size": "0.1",
-            "quantity_step": "1"
+            "strategy_definition_type": "entry-then-ladder-exit/v1",
+            "strategy_parameters": {
+              "strategy_id": "btc-effective-leverage-ladder-scan",
+              "instrument": "BTCUSD_PERP",
+              "direction": "LONG",
+              "product_type": "INVERSE_PERPETUAL",
+              "entry_sizing_policy": "EFFECTIVE_LEVERAGE",
+              "entry_sizing_parameters": {
+                "entry_effective_leverage": "0.5",
+                "sizing_safety_buffer_ratio": "0"
+              },
+              "first_exit_ratio": "1.10",
+              "exit_end_price": "150000",
+              "exit_level_count": 10,
+              "tick_size": "0.1",
+              "quantity_step": "1",
+              "quantity_unit": "contracts"
+            }
           }
         }
       ],
@@ -79,7 +88,7 @@
       ],
       "parameter_axes": [
         {
-          "path": "/strategy/parameters/entry_effective_leverage",
+          "path": "/strategy/parameters/strategy_parameters/entry_sizing_parameters/entry_effective_leverage",
           "values": ["0.5", "1.0", "1.5", "2.0", "2.5", "3.0"]
         }
       ]
@@ -95,6 +104,7 @@
     "continue_on_error": false
   },
   "metadata": {
+    "experiment_kind": "PARAMETER_STUDY",
     "purpose": "coinm-position-size-sensitivity",
     "formal_baseline": false,
     "market_assumption": "btc-base-bull-v1",

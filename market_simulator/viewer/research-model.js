@@ -131,6 +131,72 @@
     );
   }
 
+  function canonicalStrategyDefinitionType(strategyType, aliases) {
+    if (!strategyType || typeof strategyType !== "string") return null;
+    return aliases.get(strategyType) || strategyType;
+  }
+
+  function explicitStrategyDefinitionTypes(detail, aliases = new Map()) {
+    const types = new Set();
+    (detail?.spec?.scenario_groups || []).forEach((group) => {
+      (group.strategies || []).forEach((strategy) => {
+        const strategyType = canonicalStrategyDefinitionType(
+          strategy.parameters?.strategy_definition_type,
+          aliases,
+        );
+        if (strategyType) types.add(strategyType);
+      });
+    });
+    return [...types].sort();
+  }
+
+  function summaryStrategyDefinitionTypes(runs, aliases = new Map()) {
+    const types = new Set();
+    (runs || []).forEach((run) => {
+      const application = applicationSummary(run)?.application;
+      (application?.strategies || []).forEach((strategy) => {
+        const strategyType = canonicalStrategyDefinitionType(
+          strategy.strategy_type,
+          aliases,
+        );
+        if (strategyType) types.add(strategyType);
+      });
+    });
+    return [...types].sort();
+  }
+
+  function experimentKind(record) {
+    const declared = record?.detail?.spec?.metadata?.experiment_kind;
+    if (typeof declared === "string" && declared.trim()) {
+      return declared.trim().toUpperCase();
+    }
+    const hasAxes = (record?.detail?.spec?.scenario_groups || []).some(
+      (group) => (group.parameter_axes || []).length > 0,
+    );
+    return hasAxes ? "PARAMETER_STUDY" : "UNCLASSIFIED";
+  }
+
+  function ensureStrategyDefinitionEntry(
+    strategyDefinitionMap,
+    strategyDefinitionType,
+    descriptors,
+  ) {
+    if (!strategyDefinitionMap.has(strategyDefinitionType)) {
+      strategyDefinitionMap.set(strategyDefinitionType, {
+        id: strategyDefinitionType,
+        type: strategyDefinitionType,
+        descriptor: descriptors.get(strategyDefinitionType) || null,
+        experiments: new Set(),
+        experiment_records: [],
+        instances: new Set(),
+        configurations: new Map(),
+        run_instances: [],
+        runs: [],
+      });
+    }
+    return strategyDefinitionMap.get(strategyDefinitionType);
+  }
+
   function buildCatalog(rawRecords, descriptors = []) {
     const strategyMap = new Map();
     const marketMap = new Map();
@@ -138,6 +204,9 @@
       (item) => item.kind === "strategy-definition",
     );
     const strategyDefinitionAliases = new Map();
+    const strategyDefinitionDescriptors = new Map(
+      strategyDefinitionItems.map((descriptor) => [descriptor.type, descriptor]),
+    );
     const strategyDefinitionMap = new Map(
       strategyDefinitionItems.map((descriptor) => {
         (descriptor.aliases || []).forEach((alias) => {
@@ -150,6 +219,7 @@
             type: descriptor.type,
             descriptor,
             experiments: new Set(),
+            experiment_records: [],
             instances: new Set(),
             configurations: new Map(),
             run_instances: [],
@@ -186,28 +256,80 @@
         strategyTypeAliases.set(alias, descriptor.type);
       });
     });
-    const records = rawRecords.map(decorateRecord).map((record) => ({
-      ...record,
-      runs: record.runs.map((run) => {
+    const records = rawRecords.map(decorateRecord).map((record) => {
+      const runs = record.runs.map((run) => {
         const strategy = run.resolved_components.strategy;
         const canonicalType = strategyTypeAliases.get(strategy.type)
           || strategy.type;
-        if (canonicalType === strategy.type) return run;
-        return {
-          ...run,
-          resolved_components: {
-            ...run.resolved_components,
-            strategy: {
+        const resolvedStrategy = canonicalType === strategy.type
+          ? strategy
+          : {
               ...strategy,
               source_type: strategy.type,
               type: canonicalType,
-            },
+            };
+        const definitionType = canonicalStrategyDefinitionType(
+          resolvedStrategy.parameters?.strategy_definition_type,
+          strategyDefinitionAliases,
+        );
+        const fallbackDefinitionTypes = definitionType
+          ? []
+          : summaryStrategyDefinitionTypes(
+              [run],
+              strategyDefinitionAliases,
+            );
+        return {
+          ...run,
+          strategy_definition_type: definitionType,
+          strategy_definition_types: definitionType
+            ? [definitionType]
+            : fallbackDefinitionTypes,
+          resolved_components: {
+            ...run.resolved_components,
+            strategy: resolvedStrategy,
           },
         };
-      }),
-    }));
+      });
+      const explicitTypes = explicitStrategyDefinitionTypes(
+        record.detail,
+        strategyDefinitionAliases,
+      );
+      const fallbackTypes = explicitTypes.length
+        ? []
+        : summaryStrategyDefinitionTypes(runs, strategyDefinitionAliases);
+      const associationSource = explicitTypes.length
+        ? "EXPERIMENT_SPEC"
+        : fallbackTypes.length
+          ? "PROVIDER_SUMMARY"
+          : null;
+      return {
+        ...record,
+        runs,
+        experiment_kind: experimentKind(record),
+        strategy_definition_types: explicitTypes.length
+          ? explicitTypes
+          : fallbackTypes,
+        strategy_definition_associations: (
+          explicitTypes.length ? explicitTypes : fallbackTypes
+        ).map((strategyDefinitionType) => ({
+          strategy_definition_type: strategyDefinitionType,
+          source: associationSource,
+        })),
+      };
+    });
 
     records.forEach((record) => {
+      record.strategy_definition_associations.forEach((association) => {
+        const definitionEntry = ensureStrategyDefinitionEntry(
+          strategyDefinitionMap,
+          association.strategy_definition_type,
+          strategyDefinitionDescriptors,
+        );
+        definitionEntry.experiments.add(record.experiment.experiment_id);
+        if (!definitionEntry.experiment_records.includes(record)) {
+          definitionEntry.experiment_records.push(record);
+        }
+      });
       record.runs.forEach((run) => {
         const strategy = run.resolved_components.strategy;
         const strategyId = strategy.type || strategy.key;
@@ -242,6 +364,23 @@
         }
         strategyEntry.configurations.get(configurationId).run_count += 1;
 
+        if (run.strategy_definition_type) {
+          const definitionEntry = ensureStrategyDefinitionEntry(
+            strategyDefinitionMap,
+            run.strategy_definition_type,
+            strategyDefinitionDescriptors,
+          );
+          definitionEntry.experiments.add(record.experiment.experiment_id);
+          if (!definitionEntry.experiment_records.includes(record)) {
+            definitionEntry.experiment_records.push(record);
+          }
+          if (!definitionEntry.runs.some(
+            (item) => item.run.run_id === run.run_id,
+          )) {
+            definitionEntry.runs.push({record, run});
+          }
+        }
+
         const application = applicationSummary(run)?.application;
         (application?.strategies || []).forEach((applicationStrategy) => {
           const sourceStrategyType = applicationStrategy.strategy_type
@@ -249,28 +388,25 @@
           const applicationStrategyType = strategyDefinitionAliases.get(
             sourceStrategyType,
           ) || sourceStrategyType;
-          if (!strategyDefinitionMap.has(applicationStrategyType)) {
-            strategyDefinitionMap.set(applicationStrategyType, {
-              id: applicationStrategyType,
-              type: applicationStrategyType,
-              descriptor: null,
-              experiments: new Set(),
-              instances: new Set(),
-              configurations: new Map(),
-              run_instances: [],
-              runs: [],
-            });
-          }
-          const definitionEntry = strategyDefinitionMap.get(
+          const definitionEntry = ensureStrategyDefinitionEntry(
+            strategyDefinitionMap,
             applicationStrategyType,
+            strategyDefinitionDescriptors,
           );
           definitionEntry.experiments.add(record.experiment.experiment_id);
+          if (!definitionEntry.experiment_records.includes(record)) {
+            definitionEntry.experiment_records.push(record);
+          }
           if (applicationStrategy.strategy_instance_id) {
             definitionEntry.instances.add(
               applicationStrategy.strategy_instance_id,
             );
           }
-          definitionEntry.runs.push({record, run});
+          if (!definitionEntry.runs.some(
+            (item) => item.run.run_id === run.run_id,
+          )) {
+            definitionEntry.runs.push({record, run});
+          }
           definitionEntry.run_instances.push({
             record,
             run,
@@ -449,11 +585,62 @@
     );
   }
 
+  function marketAssetFromInstrument(instrument) {
+    const normalized = String(instrument || "").trim().toUpperCase();
+    const match = normalized.match(
+      /^([A-Z0-9]+?)(?:USDT|USDC|USD)(?:_|$)/,
+    );
+    return match?.[1] || normalized.split(/[-_/]/)[0] || "OTHER";
+  }
+
+  function marketAsset(market) {
+    const explicit = market?.asset
+      || market?.definition?.metadata?.asset
+      || market?.parameters?.asset;
+    if (explicit) return String(explicit).trim().toUpperCase();
+    return marketAssetFromInstrument(
+      market?.parameters?.instrument || market?.definition?.instrument,
+    );
+  }
+
+  function marketAssetGroups(markets) {
+    const groups = new Map();
+    (markets || []).forEach((market) => {
+      const asset = marketAsset(market);
+      if (!groups.has(asset)) {
+        groups.set(asset, {
+          asset,
+          markets: [],
+          scenario_count: 0,
+          path_count: 0,
+        });
+      }
+      const group = groups.get(asset);
+      group.markets.push(market);
+      group.scenario_count += 1;
+      group.path_count += (market.paths || []).length;
+    });
+    const preferredOrder = new Map(
+      ["BTC", "ETH", "AAVE"].map((asset, index) => [asset, index]),
+    );
+    return [...groups.values()].map((group) => ({
+      ...group,
+      markets: group.markets.sort((left, right) =>
+        left.key.localeCompare(right.key),
+      ),
+    })).sort((left, right) => {
+      const leftOrder = preferredOrder.get(left.asset) ?? 100;
+      const rightOrder = preferredOrder.get(right.asset) ?? 100;
+      return leftOrder - rightOrder || left.asset.localeCompare(right.asset);
+    });
+  }
+
   function pathSetMarkets(pathSets) {
     return (pathSets || []).flatMap((pathSet) =>
       (pathSet.scenarios || []).map((scenario) => ({
         id: `path-set:${pathSet.path_set_id}:${scenario.scenario_id}`,
         source: "PATH_SET",
+        asset: marketAssetFromInstrument(scenario.instrument),
         key: scenario.name || scenario.scenario_id,
         type: `PathSet · ${pathSet.path_set_id}`,
         description: scenario.description || pathSet.description || "",
@@ -516,9 +703,17 @@
   const IDENTITY_PARAMETER_KEYS = new Set([
     "strategy_id",
     "grid_id",
+    "strategy_definition_type",
   ]);
 
   function researchParameters(value) {
+    if (
+      value?.strategy_parameters
+      && typeof value.strategy_parameters === "object"
+      && !Array.isArray(value.strategy_parameters)
+    ) {
+      return researchParameters(value.strategy_parameters);
+    }
     if (Array.isArray(value)) return value.map(researchParameters);
     if (value && typeof value === "object") {
       return Object.fromEntries(
@@ -551,6 +746,68 @@
     return record.runs.filter(
       (run) => run.resolved_components.strategy.type === strategyType,
     );
+  }
+
+  function runStrategyDefinitionTypes(run) {
+    if (Array.isArray(run.strategy_definition_types)) {
+      return run.strategy_definition_types;
+    }
+    const types = new Set();
+    if (run.strategy_definition_type) {
+      types.add(run.strategy_definition_type);
+    }
+    const application = applicationSummary(run)?.application;
+    (application?.strategies || []).forEach((strategy) => {
+      if (strategy.strategy_type) types.add(strategy.strategy_type);
+    });
+    return [...types];
+  }
+
+  function strategyDefinitionRuns(record, strategyDefinitionType) {
+    return record.runs.filter((run) =>
+      runStrategyDefinitionTypes(run).includes(strategyDefinitionType),
+    );
+  }
+
+  function strategyExperimentGroups(strategyDefinition) {
+    const experimentVersions = new Map();
+    (strategyDefinition?.experiment_records || []).forEach((record) => {
+      const id = record.experiment.experiment_id;
+      if (!experimentVersions.has(id)) experimentVersions.set(id, []);
+      experimentVersions.get(id).push(record);
+    });
+    return [...experimentVersions.entries()].map(
+      ([experimentId, versions]) => {
+        versions.sort((left, right) => {
+          const rank = revisionSummary(right).rank - revisionSummary(left).rank;
+          if (rank) return rank;
+          return String(right.experiment.updated_at || "").localeCompare(
+            String(left.experiment.updated_at || ""),
+          );
+        });
+        const preferred = versions[0];
+        return {
+          experiment_id: experimentId,
+          preferred,
+          versions,
+          runs: strategyDefinitionRuns(
+            preferred,
+            strategyDefinition.type,
+          ),
+        };
+      },
+    ).sort((left, right) =>
+      String(right.preferred.experiment.updated_at || "").localeCompare(
+        String(left.preferred.experiment.updated_at || ""),
+      ),
+    );
+  }
+
+  function isParameterStudy(record) {
+    return record.experiment_kind === "PARAMETER_STUDY"
+      || (record.detail?.spec?.scenario_groups || []).some(
+        (group) => (group.parameter_axes || []).length > 0,
+      );
   }
 
   function revisionSummary(record) {
@@ -599,8 +856,8 @@
     return {type: component.type, parameters};
   }
 
-  function studyContext(record, strategyType) {
-    const runs = strategyRuns(record, strategyType);
+  function studyContext(record, strategyDefinitionType) {
+    const runs = strategyDefinitionRuns(record, strategyDefinitionType);
     return Object.fromEntries(
       ["market", "execution", "account"].map((componentName) => [
         componentName,
@@ -619,15 +876,18 @@
     );
   }
 
-  function studyGroups(records, strategyType) {
+  function studyGroups(records, strategyDefinitionType) {
     const experimentVersions = new Map();
     records.forEach((record) => {
-      if (!strategyRuns(record, strategyType).length) return;
+      if (!isParameterStudy(record)) return;
+      if (!record.strategy_definition_types.includes(strategyDefinitionType)) {
+        return;
+      }
       const id = record.experiment.experiment_id;
       if (!experimentVersions.has(id)) experimentVersions.set(id, []);
       experimentVersions.get(id).push(record);
     });
-    const logicalExperiments = [...experimentVersions.entries()].map(
+    return [...experimentVersions.entries()].map(
       ([experimentId, versions]) => {
         versions.sort((left, right) => {
           const rank = revisionSummary(right).rank - revisionSummary(left).rank;
@@ -637,44 +897,114 @@
           );
         });
         return {
+          id: experimentId,
           experiment_id: experimentId,
+          strategy_definition_type: strategyDefinitionType,
+          strategy_type: strategyDefinitionType,
+          context: studyContext(versions[0], strategyDefinitionType),
           preferred: versions[0],
+          preferred_records: [versions[0]],
+          experiments: [{
+            experiment_id: experimentId,
+            preferred: versions[0],
+            versions,
+          }],
           versions,
+          revision: revisionSummary(versions[0]),
         };
       },
-    );
-    const contextGroups = new Map();
-    logicalExperiments.forEach((experiment) => {
-      const context = studyContext(experiment.preferred, strategyType);
-      const contextId = stableJson(context);
-      if (!contextGroups.has(contextId)) {
-        contextGroups.set(contextId, {context, experiments: []});
-      }
-      contextGroups.get(contextId).experiments.push(experiment);
-    });
-    return [...contextGroups.entries()].map(([id, group]) => {
-      const preferredRecords = group.experiments.map((item) => item.preferred);
-      preferredRecords.sort((left, right) =>
-        String(right.experiment.updated_at).localeCompare(
-          String(left.experiment.updated_at),
-        ),
-      );
-      const versions = group.experiments.flatMap((item) => item.versions);
-      return {
-        id,
-        strategy_type: strategyType,
-        context: group.context,
-        preferred: preferredRecords[0],
-        preferred_records: preferredRecords,
-        experiments: group.experiments,
-        versions,
-        revision: revisionSummary(preferredRecords[0]),
-      };
-    }).sort((left, right) =>
+    ).sort((left, right) =>
       String(right.preferred.experiment.updated_at).localeCompare(
         String(left.preferred.experiment.updated_at),
       ),
     );
+  }
+
+  function strategyParameterPath(axisPath) {
+    const parts = String(axisPath || "").split("/").filter(Boolean);
+    if (parts[0] !== "strategy" || parts[1] !== "parameters") {
+      return null;
+    }
+    const parameterParts = parts.slice(2);
+    if (parameterParts[0] === "strategy_parameters") {
+      parameterParts.shift();
+    }
+    return parameterParts.length ? parameterParts.join(".") : null;
+  }
+
+  function strategyParameterAxisGroups(record, strategyDescriptor) {
+    const composition = strategyDescriptor?.rule_composition || [];
+    const parameterDefinitions = new Map(
+      (strategyDescriptor?.parameters || []).map((item) => [item.key, item]),
+    );
+    const groups = new Map();
+    (record?.detail?.spec?.scenario_groups || []).forEach((scenarioGroup) => {
+      (scenarioGroup.parameter_axes || []).forEach((axis) => {
+        const parameterPath = strategyParameterPath(axis.path);
+        if (!parameterPath) {
+          const parts = String(axis.path || "").split("/").filter(Boolean);
+          const componentName = parts[0] || "component";
+          const componentParts = parts.slice(
+            parts[1] === "parameters" ? 2 : 1,
+          );
+          const componentPath = componentParts.join(".") || axis.path;
+          const groupId = `component:${componentName}`;
+          if (!groups.has(groupId)) {
+            groups.set(groupId, {
+              id: groupId,
+              scope: componentName.toUpperCase(),
+              component_name: componentName,
+              rules: [],
+              axes: [],
+            });
+          }
+          groups.get(groupId).axes.push({
+            path: axis.path,
+            parameter_path: `${componentName}.${componentPath}`,
+            parameter_key: componentParts[0] || componentPath,
+            name: `${componentName}.${componentPath}`,
+            values: axis.values || [],
+            maps_to: [],
+          });
+          return;
+        }
+        const parameterKey = parameterPath.split(".")[0];
+        const definition = parameterDefinitions.get(parameterKey) || null;
+        const mappedRuleKeys = [...new Set(
+          (definition?.maps_to || []).flatMap((target) =>
+            composition
+              .filter((rule) => target.startsWith(`${rule.rule_key}.`))
+              .map((rule) => rule.rule_key),
+          ),
+        )];
+        const groupId = mappedRuleKeys.length
+          ? mappedRuleKeys.join("+")
+          : "strategy";
+        if (!groups.has(groupId)) {
+          const rules = composition.filter((rule) =>
+            mappedRuleKeys.includes(rule.rule_key),
+          );
+          groups.set(groupId, {
+            id: groupId,
+            scope: mappedRuleKeys.length ? "RULE" : "STRATEGY",
+            rules,
+            axes: [],
+          });
+        }
+        const suffix = parameterPath.split(".").slice(1).join(".");
+        groups.get(groupId).axes.push({
+          path: axis.path,
+          parameter_path: parameterPath,
+          parameter_key: parameterKey,
+          name: definition?.name
+            ? `${definition.name}${suffix ? ` · ${suffix}` : ""}`
+            : parameterPath,
+          values: axis.values || [],
+          maps_to: definition?.maps_to || [],
+        });
+      });
+    });
+    return [...groups.values()];
   }
 
   function metricScalar(run, metricKey, dimensions = {}) {
@@ -697,6 +1027,7 @@
 
   function median(values) {
     const sorted = values
+      .filter((value) => value !== null && value !== undefined)
       .map(Number)
       .filter(Number.isFinite)
       .sort((left, right) => left - right);
@@ -717,6 +1048,18 @@
   }
 
   function valuationAsset(runs) {
+    const configuredBase = runs.map((run) =>
+      run.resolved_components.account.parameters?.base_asset
+      || run.resolved_components.account.parameters?.settlement_asset,
+    ).find(Boolean);
+    if (
+      configuredBase
+      && runs.some((run) =>
+        runReturn(run, String(configuredBase).toUpperCase()) !== null,
+      )
+    ) {
+      return String(configuredBase).toUpperCase();
+    }
     const hasBtc = runs.some(
       (run) => metricScalar(
         run,
@@ -755,6 +1098,12 @@
     const baseline = matchingBaseline(record, run);
     const totalReturn = runReturn(run, asset);
     const baselineReturn = baseline ? runReturn(baseline, asset) : null;
+    const liquidationValue = metricScalar(run, "run.liquidated");
+    const fundingAsset = String(
+      run.resolved_components.account.parameters?.base_asset
+      || run.resolved_components.account.parameters?.settlement_asset
+      || asset,
+    ).toUpperCase();
     return {
       record,
       run,
@@ -766,12 +1115,22 @@
           : null
       ),
       max_drawdown_rate: runDrawdown(run, asset),
-      liquidated: [true, 1, "true"].includes(
-        metricScalar(run, "run.liquidated"),
-      ),
+      liquidated: liquidationValue === null
+        ? null
+        : [true, 1, "true"].includes(liquidationValue),
       fill_count: metricScalar(run, "execution.fill_count"),
       completed_cycles: metricScalar(run, "grid.completed_cycles"),
       fees: metricScalar(run, "cost.total_fees", {valuation_asset: asset}),
+      funding: metricScalar(
+        run,
+        "funding.net_wallet_delta",
+        {valuation_asset: fundingAsset},
+      ),
+      funding_asset: fundingAsset,
+      funding_settlement_count: metricScalar(
+        run,
+        "funding.settlement_count",
+      ),
       entry_contracts: metricScalar(run, "strategy.entry_contracts"),
       estimated_liquidation_price: metricScalar(
         run,
@@ -809,16 +1168,25 @@
     const initialMarginUtilizations = selected
       .map((sample) => Number(sample.peak_initial_margin_utilization))
       .filter(Number.isFinite);
+    const liquidationObservations = selected
+      .map((sample) => sample.liquidated)
+      .filter((value) => typeof value === "boolean");
     return {
       sample_count: selected.length,
       return_median: median(selected.map((sample) => sample.return_rate)),
       excess_median: median(selected.map((sample) => sample.excess_vs_hodl)),
       drawdown_worst: drawdowns.length ? Math.max(...drawdowns) : null,
-      liquidation_rate: selected.filter((sample) => sample.liquidated).length
-        / selected.length,
+      liquidation_rate: liquidationObservations.length
+        ? liquidationObservations.filter(Boolean).length
+          / liquidationObservations.length
+        : null,
       fill_median: median(selected.map((sample) => sample.fill_count)),
       cycle_median: median(selected.map((sample) => sample.completed_cycles)),
       fee_median: median(selected.map((sample) => sample.fees)),
+      funding_median: median(selected.map((sample) => sample.funding)),
+      funding_settlement_count_median: median(
+        selected.map((sample) => sample.funding_settlement_count),
+      ),
       entry_contracts_median: median(
         selected.map((sample) => sample.entry_contracts),
       ),
@@ -837,19 +1205,48 @@
     };
   }
 
-  function candidateRows(recordOrRecords, strategyType, preferredPaths = []) {
+  function candidateRows(
+    recordOrRecords,
+    strategyDefinitionType,
+    preferredPaths = [],
+  ) {
     const records = Array.isArray(recordOrRecords)
       ? recordOrRecords
       : [recordOrRecords];
     const grouped = new Map();
     records.forEach((record) => {
-      strategyRuns(record, strategyType).forEach((run) => {
+      strategyDefinitionRuns(record, strategyDefinitionType).forEach((run) => {
         const parameters = researchParameters(
           run.resolved_components.strategy.parameters,
         );
-        const id = stableJson(parameters);
+        const axisParameters = Object.fromEntries(
+          Object.entries(run.parameter_values || {}).map(([path, value]) => {
+            const parts = String(path).split("/").filter(Boolean);
+            const componentName = parts[0] || "component";
+            const parameterParts = parts.slice(
+              parts[1] === "parameters" ? 2 : 1,
+            );
+            if (
+              componentName === "strategy"
+              && parameterParts[0] === "strategy_parameters"
+            ) {
+              parameterParts.shift();
+            }
+            const suffix = parameterParts.join(".") || path;
+            const key = componentName === "strategy"
+              ? suffix
+              : `${componentName}.${suffix}`;
+            return [key, value];
+          }),
+        );
+        const id = stableJson({parameters, axis_parameters: axisParameters});
         if (!grouped.has(id)) {
-          grouped.set(id, {id, parameters, samples_with_records: []});
+          grouped.set(id, {
+            id,
+            parameters,
+            axis_parameters: axisParameters,
+            samples_with_records: [],
+          });
         }
         grouped.get(id).samples_with_records.push({record, run});
       });
@@ -857,9 +1254,10 @@
     const candidates = [...grouped.values()].sort((left, right) =>
       left.id.localeCompare(right.id),
     );
-    const flattened = candidates.map((candidate) =>
-      flattenParameters(candidate.parameters),
-    );
+    const flattened = candidates.map((candidate) => ({
+      ...flattenParameters(candidate.parameters),
+      ...candidate.axis_parameters,
+    }));
     const allPaths = [...new Set(flattened.flatMap(Object.keys))].sort();
     const varyingPaths = allPaths.filter((path) =>
       new Set(flattened.map((parameters) => stableJson(parameters[path]))).size > 1,
@@ -877,7 +1275,10 @@
       const samples = candidate.samples_with_records.map(({record, run}) =>
         runSummary(record, run, asset),
       );
-      const flat = flattenParameters(candidate.parameters);
+      const flat = {
+        ...flattenParameters(candidate.parameters),
+        ...candidate.axis_parameters,
+      };
       const label = displayPaths
         .map((path) => `${path.split(".").at(-1)}=${flat[path]}`)
         .join(" · ");
@@ -944,14 +1345,22 @@
     candidateRows,
     companionStrategies,
     decorateRecord,
+    experimentKind,
+    explicitStrategyDefinitionTypes,
     flattenParameters,
     metricScalar,
+    marketAsset,
+    marketAssetFromInstrument,
+    marketAssetGroups,
     pathSetMarkets,
     revisionSummary,
     resolvedParameters,
     researchFocusGroups,
     scenarioRows,
     stableJson,
+    strategyDefinitionRuns,
+    strategyExperimentGroups,
+    strategyParameterAxisGroups,
     strategyRuns,
     studyContext,
     studyGroups,

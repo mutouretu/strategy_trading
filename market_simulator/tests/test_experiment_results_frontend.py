@@ -53,6 +53,9 @@ class ExperimentResultsFrontendTests(unittest.TestCase):
         script = (self.viewer / "experiment-api.js").read_text(
             encoding="utf-8"
         )
+        styles = (self.viewer / "experiments.css").read_text(
+            encoding="utf-8"
+        )
 
         for page in (
             "strategy-overview",
@@ -85,17 +88,13 @@ class ExperimentResultsFrontendTests(unittest.TestCase):
         self.assertIn('id="strategy-run-select"', html)
         self.assertIn('id="strategy-run-head"', html)
         self.assertIn('id="strategy-run-body"', html)
-        self.assertIn("策略实验与运行实例", html)
+        self.assertIn("每个 Experiment 只占一行", html)
         self.assertIn('strategyRuleName(rule)).join("&")', script)
-        self.assertIn("BTC 收益", script)
-        self.assertIn("USDT 收益", script)
-        self.assertIn("仓位 / 预计强平价", script)
-        self.assertIn("function ruleConfigSummary", script)
-        self.assertIn("descriptor?.config_fields || []", script)
-        self.assertIn(
-            "appendCell(row, record.experiment.experiment_id);",
-            script,
-        )
+        self.assertIn("Runs / 版本", script)
+        self.assertIn("function openStrategyExperiment", script)
+        self.assertIn("Model.strategyExperimentGroups(strategy)", script)
+        self.assertIn("查看参数研究 →", script)
+        self.assertIn("experimentOverviewHref(record.experiment)", script)
         self.assertIn('id="rule-formulae"', html)
         self.assertIn('id="rule-constraints"', html)
         self.assertIn('id="rule-parameters"', html)
@@ -122,11 +121,17 @@ class ExperimentResultsFrontendTests(unittest.TestCase):
         self.assertIn("Model.scenarioRows(record)", script)
         self.assertIn("Model.aggregateBars(", script)
         self.assertIn("Model.pathSetMarkets(state.pathSets)", script)
+        self.assertIn("Model.marketAssetGroups(state.markets)", script)
+        self.assertIn('"market-asset-group"', script)
+        self.assertIn("币种与行情类型", html)
         self.assertIn('request("/api/market-path-sets")', script)
         self.assertIn("HOLDOUT 路径已经物化并锁定", script)
         self.assertIn("renderExperimentOverview()", script)
         self.assertIn("Model.studyGroups(state.records, strategy.type)", script)
-        self.assertIn("Model.researchFocusGroups(state.strategies)", script)
+        self.assertNotIn("Model.researchFocusGroups(state.strategies)", script)
+        self.assertIn("state.strategyDefinitions.forEach((strategy)", script)
+        self.assertIn("Model.strategyDefinitionRuns(", script)
+        self.assertIn("Model.strategyParameterAxisGroups(", script)
         self.assertIn("Model.companionStrategies(", script)
         self.assertIn("规则组成：", script)
         self.assertIn("配合策略：", script)
@@ -136,16 +141,19 @@ class ExperimentResultsFrontendTests(unittest.TestCase):
         self.assertIn("用于比较", script)
         self.assertIn("function tearSheetCharts(candidates)", script)
         self.assertIn("function tearSheetMetrics(candidates)", script)
+        self.assertIn("指标尚未评估；完成 MetricSet 计算后", script)
         self.assertIn("收益、最差回撤与保证金风险", script)
         self.assertIn("峰值保证金风险", script)
         self.assertIn("峰值初始保证金占用", script)
         self.assertIn("最大实际仓位倍率", script)
         self.assertIn("成交与完整循环", script)
+        self.assertIn("资金费净变动", script)
+        self.assertIn('path === "execution.funding_rate"', script)
         self.assertIn("参数组合与 Run 明细", script)
         self.assertIn("loadSelectedRun()", script)
         self.assertIn('"performance"', script)
         self.assertIn("function renderPerformanceCharts()", script)
-        self.assertIn("strategy.run_instances.forEach", script)
+        self.assertIn("experimentGroups.forEach", script)
         self.assertIn('performanceSeries(asset, "return_rate")', script)
         self.assertIn("function liquidationDistanceSeries()", script)
         self.assertIn("function marginPriceSeries(field)", script)
@@ -188,7 +196,13 @@ class ExperimentResultsFrontendTests(unittest.TestCase):
         self.assertIn("交易规则目录", html)
         self.assertIn("策略定义目录", html)
         self.assertIn("strategyDefinitions", script)
-        self.assertIn("大分组按核心 Rule Type 建立", html)
+        self.assertIn("一级按 StrategyDefinition 分组", html)
+        self.assertIn("PARAMETER_STUDY 实验", html)
+        self.assertRegex(
+            styles,
+            r"\.tearsheet-layout\s*\{[^}]*"
+            r"grid-template-columns:\s*minmax\(0,\s*1fr\);",
+        )
 
         model = (self.viewer / "research-model.js").read_text(
             encoding="utf-8"
@@ -198,13 +212,32 @@ class ExperimentResultsFrontendTests(unittest.TestCase):
         self.assertNotIn("strategyDescriptors.forEach", model)
         self.assertIn("runs: []", model)
         self.assertIn("function pathSetMarkets(pathSets)", model)
-        self.assertIn("function studyGroups(records, strategyType)", model)
+        self.assertIn("function marketAssetFromInstrument(instrument)", model)
+        self.assertIn("function marketAssetGroups(markets)", model)
+        self.assertIn(
+            "function studyGroups(records, strategyDefinitionType)",
+            model,
+        )
+        self.assertIn(
+            "function strategyDefinitionRuns(record, strategyDefinitionType)",
+            model,
+        )
+        self.assertIn(
+            "function strategyExperimentGroups(strategyDefinition)",
+            model,
+        )
+        self.assertIn("function strategyParameterAxisGroups(", model)
+        self.assertIn('"EXPERIMENT_SPEC"', model)
+        self.assertIn('"PROVIDER_SUMMARY"', model)
+        self.assertIn('record.experiment_kind === "PARAMETER_STUDY"', model)
         self.assertIn("function candidateRows(", model)
+        self.assertIn("funding_median", model)
+        self.assertIn('"execution.funding_rate"', script)
         self.assertIn("function applicationSummary(run)", model)
         self.assertIn("function companionStrategies(run)", model)
         self.assertIn("function researchFocusGroups(strategies)", model)
         self.assertIn("IDENTITY_PARAMETER_KEYS", model)
-        self.assertIn("Study 与参数对比", html)
+        self.assertIn("策略参数实验", html)
 
 
 if __name__ == "__main__":

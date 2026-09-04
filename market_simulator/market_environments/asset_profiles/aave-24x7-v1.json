@@ -1,0 +1,17 @@
+{
+  "schema_version": "asset-profile/v1",
+  "profile_id": "aave-24x7/v1",
+  "name": "AAVE 24×7 市场",
+  "calendar": "24x7",
+  "periods_per_year": 365,
+  "price_quantum": "0.01",
+  "default_interval": "1h",
+  "metadata": {
+    "asset": "AAVE",
+    "timezone": "UTC",
+    "description": "连续交易的 AAVE 价格参考，用于持仓、强平和资金费研究；不承担项目估值",
+    "reference_price": "93.28",
+    "reference_timestamp": "2026-08-19T16:08:19.630622Z",
+    "reference_source": "Binance COIN-M AAVEUSD_PERP mark price live snapshot"
+  }
+}

@@ -91,7 +91,7 @@ def scenario(*, volatility: str = "0.6") -> MarketScenario:
 
 
 class MarketEnvironmentSchemaTests(unittest.TestCase):
-    def test_locked_catalog_contains_btc_and_eth_path_sets(self) -> None:
+    def test_locked_catalog_contains_btc_eth_and_aave_path_sets(self) -> None:
         definitions = (
             (
                 "btc-three-year-market-baseline-v1.json",
@@ -104,6 +104,12 @@ class MarketEnvironmentSchemaTests(unittest.TestCase):
                 "eth-24x7/v1",
                 "ETHUSD_PERP",
                 Decimal("1859.83"),
+            ),
+            (
+                "aave-three-year-market-baseline-v1.json",
+                "aave-24x7/v1",
+                "AAVEUSD_PERP",
+                Decimal("93.28"),
             ),
         )
         all_seeds: set[int] = set()
@@ -153,6 +159,11 @@ class MarketEnvironmentSchemaTests(unittest.TestCase):
             eth_profile.metadata["reference_archive_sha256"],
             "d71f014b80f59b8146c1c3a89934a88c63db1c32aab051850f4be8e6c87c59f5",
         )
+        aave_profile = load_asset_profile(
+            ENVIRONMENTS / "asset_profiles" / "aave-24x7-v1.json"
+        )
+        self.assertEqual(aave_profile.metadata["reference_price"], "93.28")
+        self.assertEqual(aave_profile.metadata["asset"], "AAVE")
 
     def test_unknown_fields_and_strategy_content_are_rejected(self) -> None:
         document = scenario().to_document()

@@ -1,0 +1,29 @@
+{
+  "schema_version": "market-scenario/v1",
+  "scenario_id": "aave-deep-bear-then-recovery-v1",
+  "name": "AAVE 深跌后复苏",
+  "description": "先发生山寨币高贝塔深跌并在低位停留，随后恢复但保留较大不确定性",
+  "origin": "SYNTHETIC",
+  "asset_profile_id": "aave-24x7/v1",
+  "instrument": "AAVEUSD_PERP",
+  "horizon": {"start": "2026-08-20", "end": "2029-08-20"},
+  "interval": "1h",
+  "model": {"type": "anchored-regime-bridge/v1", "price_quantum": "0.01", "periods_per_year": 365, "substeps_per_bar": 6},
+  "anchors": [
+    {"date": "2026-08-20", "target": {"type": "HARD", "price": "93.28"}},
+    {"date": "2027-02-20", "target": {"type": "BAND", "minimum": "25", "maximum": "50"}},
+    {"date": "2027-10-20", "target": {"type": "BAND", "minimum": "18", "maximum": "45"}},
+    {"date": "2028-08-20", "target": {"type": "BAND", "minimum": "70", "maximum": "140"}},
+    {"date": "2029-04-20", "target": {"type": "BAND", "minimum": "220", "maximum": "400"}},
+    {"date": "2029-08-20", "target": {"type": "BAND", "minimum": "140", "maximum": "280"}}
+  ],
+  "volatility_regimes": [
+    {"start": "2026-08-20", "end_exclusive": "2027-02-20", "annual_volatility": {"minimum": "1.10", "maximum": "1.65"}},
+    {"start": "2027-02-20", "end_exclusive": "2027-10-20", "annual_volatility": {"minimum": "0.85", "maximum": "1.30"}},
+    {"start": "2027-10-20", "end_exclusive": "2028-08-20", "annual_volatility": {"minimum": "0.95", "maximum": "1.45"}},
+    {"start": "2028-08-20", "end_exclusive": "2029-04-20", "annual_volatility": {"minimum": "1.10", "maximum": "1.65"}},
+    {"start": "2029-04-20", "end_exclusive": "2029-08-20", "annual_volatility": {"minimum": "0.95", "maximum": "1.40"}}
+  ],
+  "status": "LOCKED",
+  "metadata": {"family": "DEEP_BEAR_THEN_RECOVERY", "thesis": "条件市场假设，不是价格预测", "starting_price_source": "Binance AAVEUSD_PERP 2026-08-19 16:08 UTC mark price"}
+}

@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from experiment_system import ProviderRegistry, RunSpec, ScenarioConfiguration
+from experiment_system import (
+    ComponentSpec,
+    ExperimentSpec,
+    ProviderRegistry,
+    RunSpec,
+    ScenarioConfiguration,
+)
 from market_protocol import MarketSource
 from simulation_runtime import SimulationResult, SimulationRunner
 from trading_strategies.catalog import build_strategy_definition_registry
@@ -36,6 +42,9 @@ from ..registry import (
 
 
 STRATEGIES_SIMULATION_PROVIDER_V1 = "strategies-simulation/v1"
+EXPERIMENT_KINDS = frozenset(
+    {"BASELINE", "PARAMETER_STUDY", "MARKET_VALIDATION", "ROBUSTNESS"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,11 +93,12 @@ class StrategiesSimulationProvider:
 
     def __init__(self, strategies: SimulationStrategyRegistry) -> None:
         self.strategies = strategies
+        self.strategy_definitions = build_strategy_definition_registry()
 
     def component_descriptors(self) -> tuple[dict[str, object], ...]:
         strategy_definition_descriptors = tuple(
             definition.to_document()
-            for definition in build_strategy_definition_registry().definitions
+            for definition in self.strategy_definitions.definitions
         )
         rule_descriptors = tuple(
             definition.to_document()
@@ -100,16 +110,69 @@ class StrategiesSimulationProvider:
             *rule_descriptors,
         )
 
+    def validate_experiment_spec(self, spec: ExperimentSpec) -> None:
+        """Validate research metadata owned by strategies_system."""
+
+        raw_kind = spec.metadata.get("experiment_kind")
+        if raw_kind is None:
+            return
+        if not isinstance(raw_kind, str) or not raw_kind.strip():
+            raise ValueError("metadata.experiment_kind must be a string")
+        experiment_kind = raw_kind.strip().upper()
+        if experiment_kind not in EXPERIMENT_KINDS:
+            raise ValueError(
+                "metadata.experiment_kind must be one of "
+                + ", ".join(sorted(EXPERIMENT_KINDS))
+            )
+        if experiment_kind == "PARAMETER_STUDY" and not any(
+            group.parameter_axes
+            for group in spec.scenario_groups
+            if group.run_provider == self.provider_id
+        ):
+            raise ValueError(
+                "PARAMETER_STUDY requires at least one parameter axis"
+            )
+
     def resolve(
         self,
         configuration: ScenarioConfiguration,
     ) -> ScenarioConfiguration:
+        strategy = self._resolve_strategy_definition_reference(
+            self.strategies.resolve(configuration.strategy)
+        )
         return replace(
             configuration,
             market=resolve_market_component(configuration.market),
-            strategy=self.strategies.resolve(configuration.strategy),
+            strategy=strategy,
             execution=resolve_execution_component(configuration.execution),
             account=resolve_account_component(configuration.account),
+        )
+
+    def _resolve_strategy_definition_reference(
+        self,
+        component: ComponentSpec,
+    ) -> ComponentSpec:
+        """Validate and canonicalize an optional StrategyDefinition reference."""
+
+        raw_type = component.parameters.get("strategy_definition_type")
+        if raw_type is None:
+            return component
+        if not isinstance(raw_type, str) or not raw_type.strip():
+            raise ValueError(
+                "strategy_definition_type must be a non-empty string"
+            )
+        canonical_type = self.strategy_definitions.canonical_type(
+            raw_type.strip()
+        )
+        if canonical_type == raw_type:
+            return component
+        return ComponentSpec(
+            key=component.key,
+            type=component.type,
+            parameters={
+                **dict(component.parameters),
+                "strategy_definition_type": canonical_type,
+            },
         )
 
     def validate(self, configuration: ScenarioConfiguration) -> None:

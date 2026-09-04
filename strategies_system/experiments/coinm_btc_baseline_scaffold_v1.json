@@ -60,6 +60,7 @@
           "key": "target-liquidation-ladder",
           "type": "coinm-long-take-profit-ladder/v1",
           "parameters": {
+            "strategy_definition_type": "entry-then-ladder-exit/v1",
             "strategy_id": "target-liquidation-ladder-6a-baseline",
             "instrument": "BTCUSD_PERP",
             "entry_sizing_mode": "TARGET_LIQUIDATION_PRICE",

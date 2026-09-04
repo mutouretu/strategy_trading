@@ -8,9 +8,11 @@ from experiment_system import (
     DuplicateProviderError,
     ProviderRegistry,
     UnknownProviderError,
+    parse_experiment_spec,
+    validate_experiment,
 )
 
-from experiment_test_support import TestProvider
+from experiment_test_support import TestProvider, experiment_document
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -53,6 +55,26 @@ class ProviderRegistryTests(unittest.TestCase):
         self.assertNotIn("grid_trading", imported_roots)
         self.assertNotIn("grid_rule", imported_roots)
         self.assertNotIn("grid_strategies", imported_roots)
+
+    def test_optional_provider_experiment_validator_is_called_once(self) -> None:
+        class ValidatingProvider(TestProvider):
+            def __init__(self) -> None:
+                super().__init__()
+                self.spec_calls = 0
+
+            def validate_experiment_spec(self, spec) -> None:
+                self.spec_calls += 1
+                if spec.metadata.get("forbidden"):
+                    raise ValueError("host metadata is invalid")
+
+        provider = ValidatingProvider()
+        registry = ProviderRegistry()
+        registry.register(provider)
+        document = experiment_document()
+        document["metadata"]["forbidden"] = True
+        with self.assertRaisesRegex(ValueError, "host metadata"):
+            validate_experiment(parse_experiment_spec(document), registry)
+        self.assertEqual(provider.spec_calls, 1)
 
 
 if __name__ == "__main__":

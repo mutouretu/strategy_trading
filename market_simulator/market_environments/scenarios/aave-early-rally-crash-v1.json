@@ -1,0 +1,29 @@
+{
+  "schema_version": "market-scenario/v1",
+  "scenario_id": "aave-early-rally-crash-v1",
+  "name": "AAVE 提前拉升后暴跌",
+  "description": "较早出现高贝塔拉升，随后发生大幅去杠杆并只实现部分恢复",
+  "origin": "SYNTHETIC",
+  "asset_profile_id": "aave-24x7/v1",
+  "instrument": "AAVEUSD_PERP",
+  "horizon": {"start": "2026-08-20", "end": "2029-08-20"},
+  "interval": "1h",
+  "model": {"type": "anchored-regime-bridge/v1", "price_quantum": "0.01", "periods_per_year": 365, "substeps_per_bar": 6},
+  "anchors": [
+    {"date": "2026-08-20", "target": {"type": "HARD", "price": "93.28"}},
+    {"date": "2027-04-20", "target": {"type": "BAND", "minimum": "180", "maximum": "320"}},
+    {"date": "2027-10-20", "target": {"type": "BAND", "minimum": "280", "maximum": "500"}},
+    {"date": "2028-04-20", "target": {"type": "BAND", "minimum": "45", "maximum": "90"}},
+    {"date": "2029-02-20", "target": {"type": "BAND", "minimum": "100", "maximum": "220"}},
+    {"date": "2029-08-20", "target": {"type": "BAND", "minimum": "70", "maximum": "160"}}
+  ],
+  "volatility_regimes": [
+    {"start": "2026-08-20", "end_exclusive": "2027-04-20", "annual_volatility": {"minimum": "1.05", "maximum": "1.55"}},
+    {"start": "2027-04-20", "end_exclusive": "2027-10-20", "annual_volatility": {"minimum": "1.15", "maximum": "1.70"}},
+    {"start": "2027-10-20", "end_exclusive": "2028-04-20", "annual_volatility": {"minimum": "1.25", "maximum": "1.80"}},
+    {"start": "2028-04-20", "end_exclusive": "2029-02-20", "annual_volatility": {"minimum": "0.90", "maximum": "1.35"}},
+    {"start": "2029-02-20", "end_exclusive": "2029-08-20", "annual_volatility": {"minimum": "0.85", "maximum": "1.25"}}
+  ],
+  "status": "LOCKED",
+  "metadata": {"family": "EARLY_RALLY_CRASH", "thesis": "条件市场假设，不是价格预测", "starting_price_source": "Binance AAVEUSD_PERP 2026-08-19 16:08 UTC mark price"}
+}

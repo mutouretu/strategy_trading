@@ -34,16 +34,24 @@
           "key": "btc-hold-coinm-ladder",
           "type": "coinm-long-take-profit-ladder/v1",
           "parameters": {
-            "strategy_id": "btc-hold-coinm-ladder-baseline",
-            "instrument": "BTCUSD_PERP",
-            "entry_sizing_mode": "TARGET_LIQUIDATION_PRICE",
-            "target_liquidation_price": "20000",
-            "first_take_profit_ratio": "1.10",
-            "take_profit_end_price": "150000",
-            "take_profit_count": 10,
-            "tick_size": "0.1",
-            "quantity_step": "1",
-            "sizing_safety_buffer_ratio": "0"
+            "strategy_definition_type": "entry-then-ladder-exit/v1",
+            "strategy_parameters": {
+              "strategy_id": "btc-hold-coinm-ladder-baseline",
+              "instrument": "BTCUSD_PERP",
+              "direction": "LONG",
+              "product_type": "INVERSE_PERPETUAL",
+              "entry_sizing_policy": "TARGET_LIQUIDATION_PRICE",
+              "entry_sizing_parameters": {
+                "target_liquidation_price": "20000",
+                "sizing_safety_buffer_ratio": "0"
+              },
+              "first_exit_ratio": "1.10",
+              "exit_end_price": "150000",
+              "exit_level_count": 10,
+              "tick_size": "0.1",
+              "quantity_step": "1",
+              "quantity_unit": "contracts"
+            }
           }
         }
       ],
@@ -90,6 +98,7 @@
     "continue_on_error": false
   },
   "metadata": {
+    "experiment_kind": "BASELINE",
     "purpose": "single-btc-hold-coinm-ladder-baseline",
     "formal_baseline": true,
     "market_assumption": "btc-base-bull-v1",

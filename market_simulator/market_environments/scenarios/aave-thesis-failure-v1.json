@@ -1,0 +1,29 @@
+{
+  "schema_version": "market-scenario/v1",
+  "scenario_id": "aave-thesis-failure-v1",
+  "name": "AAVE 项目逻辑失效",
+  "description": "价格持续走弱并长期停留在起点下方，用于检验项目特有的永久损失风险",
+  "origin": "SYNTHETIC",
+  "asset_profile_id": "aave-24x7/v1",
+  "instrument": "AAVEUSD_PERP",
+  "horizon": {"start": "2026-08-20", "end": "2029-08-20"},
+  "interval": "1h",
+  "model": {"type": "anchored-regime-bridge/v1", "price_quantum": "0.01", "periods_per_year": 365, "substeps_per_bar": 6},
+  "anchors": [
+    {"date": "2026-08-20", "target": {"type": "HARD", "price": "93.28"}},
+    {"date": "2027-02-20", "target": {"type": "BAND", "minimum": "55", "maximum": "85"}},
+    {"date": "2027-10-20", "target": {"type": "BAND", "minimum": "25", "maximum": "55"}},
+    {"date": "2028-08-20", "target": {"type": "BAND", "minimum": "10", "maximum": "30"}},
+    {"date": "2029-04-20", "target": {"type": "BAND", "minimum": "12", "maximum": "35"}},
+    {"date": "2029-08-20", "target": {"type": "BAND", "minimum": "8", "maximum": "25"}}
+  ],
+  "volatility_regimes": [
+    {"start": "2026-08-20", "end_exclusive": "2027-02-20", "annual_volatility": {"minimum": "0.95", "maximum": "1.40"}},
+    {"start": "2027-02-20", "end_exclusive": "2027-10-20", "annual_volatility": {"minimum": "1.05", "maximum": "1.60"}},
+    {"start": "2027-10-20", "end_exclusive": "2028-08-20", "annual_volatility": {"minimum": "1.00", "maximum": "1.55"}},
+    {"start": "2028-08-20", "end_exclusive": "2029-04-20", "annual_volatility": {"minimum": "0.85", "maximum": "1.35"}},
+    {"start": "2029-04-20", "end_exclusive": "2029-08-20", "annual_volatility": {"minimum": "0.80", "maximum": "1.25"}}
+  ],
+  "status": "LOCKED",
+  "metadata": {"family": "THESIS_FAILURE", "thesis": "条件市场假设，不是价格预测", "starting_price_source": "Binance AAVEUSD_PERP 2026-08-19 16:08 UTC mark price"}
+}

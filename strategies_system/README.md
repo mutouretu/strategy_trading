@@ -84,6 +84,28 @@ DTO 和策略侧 `GridRulePort`，不创建具体 `GridRuleEngine`，也不依�
 
 ## 验证与实验
 
+新的 Ladder 实验必须显式声明其领域策略定义，并通过 Strategy 外部参数进入规则组合：
+
+```json
+{
+  "type": "coinm-long-take-profit-ladder/v1",
+  "parameters": {
+    "strategy_definition_type": "entry-then-ladder-exit/v1",
+    "strategy_parameters": {
+      "strategy_id": "example",
+      "instrument": "BTCUSD_PERP",
+      "direction": "LONG",
+      "product_type": "INVERSE_PERPETUAL"
+    }
+  }
+}
+```
+
+实际配置还需提供完整的建仓定量、退出阶梯、价格步长和数量步长参数。研究类型写入
+Experiment metadata：基线使用 `BASELINE`，参数扫描使用 `PARAMETER_STUDY`；后者至少
+需要一个 ParameterAxis。结果前端按 StrategyDefinition 建立实验索引，旧数据库才从
+Provider Summary 回退。
+
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 
@@ -122,6 +144,19 @@ PYTHONPATH=src python3 -m strategy_simulation \
   --database experiments/experiment_results/usdm-fixed-short-grid-pionex-frequency-v1.sqlite3 \
   --market-root experiments/market_data \
   --allow-dirty
+
+PYTHONPATH=src python3 -m strategy_simulation \
+  run experiments/aave_coinm_funding_rate_study_v1.json \
+  --database experiments/experiment_results/aave-coinm-funding-rate-study-v1.sqlite3 \
+  --allow-dirty
+
+PYTHONPATH=src python3 -m strategy_simulation.metrics \
+  evaluate-experiment experiments/experiment_results/aave-coinm-funding-rate-study-v1.sqlite3 \
+  --metric-set core --version v1
+
+PYTHONPATH=src python3 -m strategy_simulation.metrics \
+  evaluate-experiment experiments/experiment_results/aave-coinm-funding-rate-study-v1.sqlite3 \
+  --metric-set btc-accumulation --version v1
 ```
 
 `usdm_fixed_short_grid_structure_v1.json` 用 5 分钟可执行路径验证 U 本位固定
@@ -134,6 +169,12 @@ SHA-256 身份校验的 Binance USD-M 永续 1 分钟历史 Parquet，使用约 
 等比空头网格和固定 USDT 下单。运行期间 Maker/Taker 费率均为零；派网盈利结算时
 收取的 20% 服务费不参与该实验，因为它不改变成交次数。10,000 USDT 钱包用于避免
 资金约束干扰频次，实验结果不能据此评价真实资金收益率。
+
+`aave_coinm_funding_rate_study_v1.json` 是资金费敏感性实验：固定同一条 AAVE
+三年路径、同一 LONG 仓位和退出规则，只扫描日资金费率。账户初始资产和 730 张仓位
+规模取自一次 Binance COIN-M 只读快照；最近 270 个八小时资金费样本的均值仅用于建立
+一个对照档位，延伸为三年常数费率不是预测。正费率表示多头支付，负费率表示多头收取。
+该实验用于回答资金费对权益和保证金的数量级影响，不用于推断未来资金费路径。
 
 基线是三策略 × Seed 42、43，共 6 个 Run。三个策略共用相同市场、账户和执行配置。
 

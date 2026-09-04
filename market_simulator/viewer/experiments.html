@@ -9,7 +9,7 @@
       content="Read-only strategy, market environment and simulation experiment research workspace."
     >
     <link rel="stylesheet" href="./styles.css">
-    <link rel="stylesheet" href="./experiments.css?v=20260819-readable-type">
+    <link rel="stylesheet" href="./experiments.css?v=20260820-funding-study-layout">
   </head>
   <body class="research-app">
     <aside class="app-sidebar">
@@ -181,8 +181,8 @@
           </div>
           <div class="page-intro compact-page-intro">
             <div>
-              <h2>策略实验与运行实例</h2>
-              <p>按当前 StrategyDefinition 汇总基本绑定、各 Rule 的最终配置和关键结果。</p>
+              <h2>策略实验</h2>
+              <p>每个 Experiment 只占一行；参数组合、收益和风险差异统一在“参数研究”中比较。</p>
             </div>
           </div>
           <section class="data-panel">
@@ -302,7 +302,7 @@
           <div class="page-intro">
             <div>
               <h2>市场环境</h2>
-              <p>直接浏览已锁定 PathSet；实验记录只说明哪些策略使用过这些路径。</p>
+              <p>按币种与行情类型浏览已锁定 PathSet；实验记录只说明哪些策略使用过这些路径。</p>
             </div>
             <div class="interval-switch" id="market-interval-switch">
               <button data-interval="1w" class="active" type="button">周线</button>
@@ -343,8 +343,8 @@
         <section class="workspace-page" data-page-panel="experiment-overview">
           <div class="page-intro">
             <div>
-              <h2>Study 与参数对比</h2>
-              <p>大分组按核心 Rule Type 建立；标的、参数和市场在 Study 内比较，规则组成与配合 Strategy 随结果展示。</p>
+              <h2>策略参数实验</h2>
+              <p>一级按 StrategyDefinition 分组，二级列出 PARAMETER_STUDY 实验；参数轴按 Strategy 到 Rule 的映射归组。</p>
             </div>
             <a id="download-current-comparison" class="button" href="#" hidden>导出当前实验</a>
           </div>
@@ -442,7 +442,7 @@
     </div>
 
     <div id="page-message" class="page-message" role="status"></div>
-    <script src="./research-model.js?v=20260819-strategy-runs-page"></script>
-    <script src="./experiment-api.js?v=20260819-rule-config-runs"></script>
+    <script src="./research-model.js?v=20260820-funding-study-layout"></script>
+    <script src="./experiment-api.js?v=20260820-funding-study-layout"></script>
   </body>
 </html>

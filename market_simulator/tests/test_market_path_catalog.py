@@ -158,7 +158,7 @@ class MarketPathCatalogTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def test_repository_catalog_contains_locked_btc_and_eth_sets(self) -> None:
+    def test_repository_catalog_contains_locked_asset_path_sets(self) -> None:
         path_sets = {
             item["path_set_id"]: item
             for item in MarketPathSetCatalog(REAL_ENVIRONMENTS).path_sets()
@@ -166,6 +166,7 @@ class MarketPathCatalogTests(unittest.TestCase):
         self.assertEqual(
             set(path_sets),
             {
+                "aave-three-year-market-baseline-v1",
                 "btc-three-year-market-baseline-v1",
                 "eth-three-year-market-baseline-v1",
             },
@@ -187,6 +188,20 @@ class MarketPathCatalogTests(unittest.TestCase):
         )
         self.assertEqual(holdout["availability"], "LOCKED")
         self.assertNotIn("market_profile", holdout)
+
+        aave = path_sets["aave-three-year-market-baseline-v1"]
+        self.assertEqual(aave["scenario_count"], 6)
+        self.assertEqual(aave["path_count"], 96)
+        self.assertEqual(
+            aave["role_counts"],
+            {"TRAIN": 48, "VALIDATION": 24, "HOLDOUT": 24},
+        )
+        self.assertTrue(
+            all(
+                scenario["instrument"] == "AAVEUSD_PERP"
+                for scenario in aave["scenarios"]
+            )
+        )
 
     def test_catalog_redacts_holdout_and_aggregates_visible_paths(self) -> None:
         catalog = MarketPathSetCatalog(self.environment_root)

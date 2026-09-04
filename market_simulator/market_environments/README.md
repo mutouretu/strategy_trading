@@ -19,6 +19,12 @@ COIN-M `BTCUSD_PERP` 2026-07-31 23:59 UTC 分钟收盘价。
 2026-07-31 23:59 UTC 分钟收盘价；其 Anchor 和波动率按 ETH 自身尺度定义，不是把
 BTC 路径按价格比例缩放。
 
+`aave-three-year-market-baseline-v1` 使用 2026-08-20 至 2029-08-20 的绝对
+AAVE 美元价格，包含 6 个高波动场景和 96 条小时路径。起点 `93.28` 来自 Binance
+COIN-M `AAVEUSD_PERP` 2026-08-19 16:08 UTC 的实盘 Mark Price 快照。该 PathSet
+用于持仓、强平和资金费研究，不承担 AAVE 项目估值；场景 Anchor 与较高的分段波动率
+都是条件假设，不是对未来价格的单一路径预测。
+
 在仓库根目录执行：
 
 ```bash
@@ -30,6 +36,9 @@ python3 scripts/materialize_market_path_set.py
 
 python3 scripts/materialize_market_path_set.py \
   market_environments/path_sets/eth-three-year-market-baseline-v1.json
+
+python3 scripts/materialize_market_path_set.py \
+  market_environments/path_sets/aave-three-year-market-baseline-v1.json
 ```
 
 相同配置、模型版本和 Seed 会得到相同身份。脚本发现已有相同内容锁时保持幂等；内容
@@ -66,9 +75,9 @@ PYTHONPATH=src python3 -m strategy_simulation \
   --port 8088
 ```
 
-打开 `http://127.0.0.1:8088/experiments.html?page=market-overview`。页面按六个
-Scenario 展示 PathSet，可分别切换 TRAIN、VALIDATION、Seed、周线和月线，并显示
-期初/期末价格、区间高低点、最大回撤及实现波动率。
+打开 `http://127.0.0.1:8088/experiments.html?page=market-overview`。页面先按币种、
+再按六类 Scenario 展开 PathSet，可分别切换 TRAIN、VALIDATION、Seed、周线和月线，
+并显示期初/期末价格、区间高低点、最大回撤及实现波动率。
 
 服务端从 Manifest 解析路径身份，读取时再次校验 Parquet 的文件哈希和内容哈希，再在
 内存中聚合周线或月线。HOLDOUT 只返回场景、Seed、路径 ID 和锁定状态；价格、画像及

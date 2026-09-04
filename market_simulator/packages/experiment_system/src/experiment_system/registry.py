@@ -13,7 +13,7 @@ from .errors import (
     UnknownProviderError,
 )
 from .json_values import JsonValue
-from .models import RunSpec, ScenarioConfiguration
+from .models import ExperimentSpec, RunSpec, ScenarioConfiguration
 
 
 @runtime_checkable
@@ -75,6 +75,26 @@ class ProviderRegistry:
             raise UnknownProviderError(
                 f"provider {provider_id!r} is not registered"
             ) from exc
+
+    def validate_experiment_spec(self, spec: ExperimentSpec) -> None:
+        """Run optional host-owned validation without learning host semantics."""
+
+        checked: set[str] = set()
+        for group in spec.scenario_groups:
+            provider_id = group.run_provider
+            if provider_id in checked:
+                continue
+            checked.add(provider_id)
+            provider = self.get(provider_id)
+            validator = getattr(provider, "validate_experiment_spec", None)
+            if validator is None:
+                continue
+            if not callable(validator):
+                raise ExperimentValidationError(
+                    f"provider {provider_id!r} validate_experiment_spec "
+                    "must be callable"
+                )
+            validator(spec)
 
     @property
     def provider_ids(self) -> tuple[str, ...]:

@@ -42,12 +42,16 @@ _USDM_DEFAULTS: dict[str, object] = {
 _COINM_BASE_FIELDS = {
     "instrument",
     "contract_size",
-    "spot_btc",
-    "futures_wallet_btc",
     "base_asset",
     "quote_asset",
     "notional_asset",
     "margin_model",
+}
+_COINM_BALANCE_FIELDS = {
+    "spot_base",
+    "futures_wallet_base",
+    "spot_btc",
+    "futures_wallet_btc",
 }
 _USDM_BASE_FIELDS = {
     "instrument",
@@ -178,20 +182,49 @@ def _build_coinm_account(component: ComponentSpec) -> CoinMAccountRuntime:
     check_fields(
         parameters,
         required=_COINM_BASE_FIELDS,
-        optional=_MARGIN_FIELDS,
+        optional=_MARGIN_FIELDS | _COINM_BALANCE_FIELDS,
         context=context,
     )
     instrument = string(parameters, "instrument", context=context)
     contract_size = decimal_value(
         parameters, "contract_size", context=context
     )
-    spot_btc = decimal_value(parameters, "spot_btc", context=context)
-    futures_wallet_btc = decimal_value(
-        parameters, "futures_wallet_btc", context=context
-    )
     base_asset = string(parameters, "base_asset", context=context).upper()
-    if base_asset != "BTC":
-        raise ValueError(f"{context} supports only BTC settlement")
+    generic_fields = {"spot_base", "futures_wallet_base"} & set(parameters)
+    legacy_fields = {"spot_btc", "futures_wallet_btc"} & set(parameters)
+    if generic_fields and legacy_fields:
+        raise ValueError(
+            f"{context} cannot mix generic and legacy balance parameters"
+        )
+    if generic_fields:
+        missing = {"spot_base", "futures_wallet_base"} - set(parameters)
+        if missing:
+            raise ValueError(
+                f"{context} is missing parameters: {sorted(missing)}"
+            )
+        spot_base = decimal_value(parameters, "spot_base", context=context)
+        futures_wallet_base = decimal_value(
+            parameters, "futures_wallet_base", context=context
+        )
+    elif legacy_fields:
+        missing = {"spot_btc", "futures_wallet_btc"} - set(parameters)
+        if missing:
+            raise ValueError(
+                f"{context} is missing parameters: {sorted(missing)}"
+            )
+        if base_asset != "BTC":
+            raise ValueError(
+                f"{context} legacy BTC balance parameters require "
+                "base_asset='BTC'"
+            )
+        spot_base = decimal_value(parameters, "spot_btc", context=context)
+        futures_wallet_base = decimal_value(
+            parameters, "futures_wallet_btc", context=context
+        )
+    else:
+        raise ValueError(
+            f"{context} requires spot_base and futures_wallet_base"
+        )
     quote_asset = string(parameters, "quote_asset", context=context).upper()
     notional_asset = string(
         parameters, "notional_asset", context=context
@@ -201,8 +234,8 @@ def _build_coinm_account(component: ComponentSpec) -> CoinMAccountRuntime:
         return InverseContractLedger(
             instrument=instrument,
             contract_size=contract_size,
-            spot_base_balance=spot_btc,
-            futures_wallet_balance=futures_wallet_btc,
+            spot_base_balance=spot_base,
+            futures_wallet_balance=futures_wallet_base,
             base_asset=base_asset,
             quote_asset=quote_asset,
             notional_asset=notional_asset,
