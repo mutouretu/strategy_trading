@@ -2345,6 +2345,37 @@ class SQLiteTradingLedgerApplication:
                 "primary-cny",
                 writable=True,
             )
+            if command.require_fresh_prices:
+                if valuation_time.date() != self._now().date():
+                    raise ApplicationError(
+                        ErrorCode.INVALID_INPUT, "自动估值只能记录当天，不能用当前持仓补算历史。"
+                    )
+                stale_symbols = []
+                for position in connection.execute(
+                    """
+                    SELECT p.instrument_id, i.symbol FROM positions p
+                    JOIN instruments i ON i.instrument_id = p.instrument_id
+                    WHERE p.account_id = ? AND CAST(p.quantity AS NUMERIC) > 0
+                    """,
+                    (account["account_id"],),
+                ):
+                    latest = self._latest_price(connection, int(position["instrument_id"]))
+                    price_time = (
+                        self._time(datetime.fromisoformat(latest["price_time"]))
+                        if latest else None
+                    )
+                    if (
+                        price_time is None
+                        or bool(latest["is_manual"])
+                        or price_time.date() != valuation_time.date()
+                        or price_time > valuation_time
+                    ):
+                        stale_symbols.append(str(position["symbol"]))
+                if stale_symbols:
+                    raise ApplicationError(
+                        ErrorCode.INVALID_INPUT,
+                        "缺少当天有效持仓价格，未记录估值：" + "、".join(stale_symbols),
+                    )
             summary = self._account_summary(connection, command.project_key, account)
             positions = self._positions(connection, command.project_key, account)
             missing = tuple(

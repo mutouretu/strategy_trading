@@ -418,6 +418,7 @@ class RecordDailyValuationCommand:
     project_key: str
     actor: str
     valuation_time: datetime | None = None
+    require_fresh_prices: bool = False
 
     def __post_init__(self) -> None:
         _require_project_key(self.project_key)

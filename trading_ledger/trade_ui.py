@@ -38,6 +38,38 @@ def pct(value: Decimal | None) -> str:
     return "—" if value is None else f"{value:.2%}"
 
 
+def _operation_style(value: str) -> str:
+    if value in {"买入", "冲正买入"}:
+        return "background-color: #183A4C; color: #7DD3FC; font-weight: 700;"
+    if value in {"卖出", "冲正卖出"}:
+        return "background-color: #423C26; color: #FCD34D; font-weight: 700;"
+    return "background-color: #292F38; color: #B6BEC9; font-weight: 700;"
+
+
+def _profit_color(value) -> str:
+    if value is None or pd.isna(value):
+        return MARKET_FLAT_COLOR
+    if value > 0:
+        return MARKET_UP_COLOR
+    if value < 0:
+        return MARKET_DOWN_COLOR
+    return MARKET_FLAT_COLOR
+
+
+def _profit_style(value) -> str:
+    return f"color: {_profit_color(value)}; font-weight: 700;"
+
+
+def _profit_metric(label: str, text: str, value, key: str) -> None:
+    with st.container(key=key):
+        st.markdown(
+            f'<style>.st-key-{key} [data-testid="stMetricValue"] '
+            f'{{ color: {_profit_color(value)}; }}</style>',
+            unsafe_allow_html=True,
+        )
+        st.metric(label, text)
+
+
 def _show_error(error: ApplicationError) -> None:
     st.error(error.detail.message)
 
@@ -558,7 +590,19 @@ def operation_history_page(
             for row in result.rows
         ]
     )
-    st.dataframe(frame, width="stretch", hide_index=True)
+    st.dataframe(
+        frame.style.map(_operation_style, subset=["操作"]).format(
+            {
+                "成交价格": "{:.2f}",
+                "交易数量": "{:,.0f}",
+                "交易金额": "{:,.2f}",
+                "资金变动": "{:,.2f}",
+            },
+            na_rep="—",
+        ),
+        width="stretch",
+        hide_index=True,
+    )
     st.caption(f"第 {result.page}/{result.page_count} 页 · 共 {result.total_count} 条")
     if result.page_count > 1:
         columns = st.columns([1, 1, 2, 1, 1])
@@ -657,7 +701,7 @@ def monthly_trade_statistics_page(
     _show_notice()
     st.markdown(
         '<div class="beili-note">按月查看交易、外部资金流、收益和风险指标。'
-        "“记录今日估值”是显式写入，不会在查询页面自动发生。</div>",
+        "启用服务器定时任务后，工作日 15:15 自动记录估值；补录交易后可手动更新。</div>",
         unsafe_allow_html=True,
     )
     if st.button("记录今日估值", type="primary", icon=":material/calculate:"):
@@ -685,11 +729,18 @@ def monthly_trade_statistics_page(
     first[3].metric("外部资金净流入", money(report.external_net_flow))
     second = st.columns(4)
     second[0].metric("期初资金", money(report.opening_capital))
-    second[1].metric("本月盈亏", money(report.pnl))
+    with second[1]:
+        _profit_metric("本月盈亏", money(report.pnl), report.pnl, "monthly_pnl")
     second[2].metric("期末资金", money(report.closing_capital))
-    second[3].metric("本月收益率", pct(report.return_rate))
+    with second[3]:
+        _profit_metric(
+            "本月收益率", pct(report.return_rate), report.return_rate, "monthly_return"
+        )
     risk = st.columns(2)
-    risk[0].metric("最大回撤", pct(report.max_drawdown))
+    with risk[0]:
+        _profit_metric(
+            "最大回撤", pct(report.max_drawdown), report.max_drawdown, "monthly_drawdown"
+        )
     risk[1].metric("年化波动率", pct(report.annualized_volatility))
     if report.is_partial:
         detail = (
@@ -709,7 +760,7 @@ def monthly_trade_statistics_page(
             {
                 "mark": {
                     "type": "line",
-                    "color": "#A78BFA",
+                    "color": _profit_color(report.pnl),
                     "point": True,
                 },
                 "encoding": {
@@ -763,7 +814,24 @@ def monthly_trade_statistics_page(
                 for row in report.rows
             ]
         )
-        st.dataframe(frame, width="stretch", hide_index=True)
+        st.dataframe(
+            frame.style.map(
+                _profit_style,
+                subset=["已实现盈亏", "未实现盈亏变动", "本月盈亏", "收益率"],
+            ).format(
+                {
+                    "月末仓位": "{:.2%}",
+                    "卖出金额": "{:,.2f}",
+                    "已实现盈亏": "{:,.2f}",
+                    "未实现盈亏变动": "{:,.2f}",
+                    "本月盈亏": "{:,.2f}",
+                    "收益率": "{:.2%}",
+                },
+                na_rep="—",
+            ),
+            width="stretch",
+            hide_index=True,
+        )
     else:
         st.info("本月暂无交易或持仓记录。")
     st.download_button(

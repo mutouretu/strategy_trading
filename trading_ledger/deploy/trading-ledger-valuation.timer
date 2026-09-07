@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Trading Ledger valuation at 15:15 China time on weekdays
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 15:15:00 Asia/Shanghai
+AccuracySec=1min
+Persistent=false
+Unit=trading-ledger-valuation.service
+
+[Install]
+WantedBy=timers.target
