@@ -81,8 +81,9 @@ class PublicQuoteProvider:
                     price_time = datetime.fromtimestamp(
                         int(data["f86"]), tz=self.timezone
                     )
-                except (KeyError, TypeError, ValueError, OSError, OverflowError):
-                    price_time = datetime.now(self.timezone)
+                except (KeyError, TypeError, ValueError, OSError, OverflowError) as exc:
+                    # Missing timestamps cannot be relabelled as today's quotes.
+                    raise QuoteError("东方财富行情缺少有效时间。") from exc
                 return RealtimeQuote(
                     normalized,
                     str(data.get("f58") or "").strip(),

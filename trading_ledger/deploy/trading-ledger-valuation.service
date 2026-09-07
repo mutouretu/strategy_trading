@@ -1,0 +1,13 @@
+[Unit]
+Description=Trading Ledger daily valuation
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=admin
+WorkingDirectory=/opt/strategy_trading_ledger/trading_ledger
+Environment=TRADING_LEDGER_DB_PATH=/opt/strategy_trading_ledger/trading_ledger/data/trading_ledger.sqlite3
+Environment=TRADING_LEDGER_TIMEZONE=Asia/Shanghai
+ExecStart=/opt/strategy_trading_ledger/trading_ledger/.venv/bin/python scripts/record_daily_valuations.py
+TimeoutStartSec=30min

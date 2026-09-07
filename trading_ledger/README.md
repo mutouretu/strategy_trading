@@ -59,6 +59,39 @@ python3 scripts/seed_august_demo.py
 - 交易、现金、批次、持仓和审计在同一 SQLite 事务中更新；
 - 查询不会隐式清理观察、刷新价格或写估值。
 
+## 自动每日估值
+
+Linux 服务器可以启用独立的 systemd 定时任务，不依赖浏览器或 Streamlit 页面保持打开。
+默认北京时间周一至周五 15:15 刷新各活动项目的行情并记录当天估值，已归档项目跳过。
+现金项目无需行情；有持仓的项目若刷新失败、价格日期不是当天或价格时间在未来，则跳过并记录错误。
+单个项目失败不会中断其他项目。同一项目同一天重复执行更新原快照，不新增重复记录。
+
+目前没有交易所节假日日历：周末跳过；节假日或停牌导致价格日期较旧时，有关持仓项目跳过，现金项目仍可生成快照。
+任务记录执行时的持仓和资金，不能自动补算漏掉的历史日期。当天 15:15 之后补录交易时，使用页面“记录今日估值”更新，或重新运行当天任务。
+
+服务器路径为 `/opt/strategy_trading_ledger/trading_ledger`、运行用户为 `admin` 时，更新代码后执行：
+
+```bash
+cd /opt/strategy_trading_ledger/trading_ledger
+sudo install -m 644 deploy/trading-ledger-valuation.service /etc/systemd/system/
+sudo install -m 644 deploy/trading-ledger-valuation.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now trading-ledger-valuation.timer
+sudo systemctl list-timers --all trading-ledger-valuation.timer
+```
+
+配置使用与网页服务相同的 `TRADING_LEDGER_DB_PATH`。自定义数据库、目录、用户或时区时，需同步修改 service 和 timer。
+首次使用先打开账本创建项目。定时任务不会因错误的数据库路径创建一个空账本。
+
+查看执行日志，或在工作日 15:15 之后手动重试当天任务：
+
+```bash
+sudo journalctl -u trading-ledger-valuation.service -n 60 --no-pager
+sudo systemctl start trading-ledger-valuation.service
+```
+
+进程退出码非零表示存在失败项目。服务未运行期间错过的时间不会在重启后补写历史；定时器下一工作日继续执行。
+
 ## 测试
 
 ```bash

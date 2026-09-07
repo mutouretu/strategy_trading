@@ -47,7 +47,7 @@
 | 预览买卖 | `PreviewManualTradeCommand` | 项目、标的、方向、比例、成交价、必填信号 |
 | 确认买卖 | `ConfirmManualTradeCommand` | 与预览相同并增加操作者 |
 | 清理到期观察 | `ExpireTrackingCommand` | 项目、操作者、可选执行时间 |
-| 记录每日估值 | `RecordDailyValuationCommand` | 项目、操作者、估值时间 |
+| 记录每日估值 | `RecordDailyValuationCommand` | 项目、操作者、估值时间、`require_fresh_prices`（自动任务启用当天价格校验） |
 
 预览仅用于展示，不锁定现金、持仓、价格或数量。确认时必须在同一事务中重新读取现金和可卖持仓、重新计算数量及费税并再次校验；不能直接信任前端预览值。
 
@@ -62,6 +62,10 @@
 | 交易统计 | `ListStatisticsMonthsQuery`、`GetMonthlyStatisticsQuery` | `MonthlyStatisticsView` |
 
 所有项目内 Query 必须显式传入 `project_key`。查询没有隐式写入；观察到期、价格刷新和状态重算均由显式 Command 触发。
+
+每日估值可以由独立定时任务调用，默认北京时间工作日 15:15 运行，不依赖页面访问。
+自动任务先刷新行情，使用 `require_fresh_prices=True` 在估值事务内验证持仓价格为当天且不晚于估值时间；失败不覆盖已有快照。
+该模式只记录当天，不提供历史回填；人工按钮仍使用原有估值行为。相同项目和日期沿用同一快照。
 
 操作历史的 `source_or_signal` 规则固定为：
 
