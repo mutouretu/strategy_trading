@@ -11,9 +11,46 @@ if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
 import trade_ui
+from streamlit.testing.v1 import AppTest
 
 
 class TradeUiTest(unittest.TestCase):
+    def test_tracking_background_state_follows_position_and_sales(self) -> None:
+        for quantity, sell_price, expected in (
+            ("0", None, "watching"),
+            ("100", None, "holding"),
+            ("100", Decimal("24"), "holding"),
+            ("0", Decimal("24"), "closed"),
+        ):
+            with self.subTest(quantity=quantity, sell_price=sell_price):
+                row = SimpleNamespace(quantity=Decimal(quantity), average_sell_price=sell_price)
+                self.assertEqual(trade_ui._tracking_row_state(row), expected)
+
+    def test_buy_dialog_caption_uses_amount_with_parenthesized_ratio(self) -> None:
+        app = AppTest.from_string(
+            'from decimal import Decimal\n'
+            'from trade_ui import render_buy_dialog\n'
+            'render_buy_dialog(None, "test", "tester", "300750.SZ", "宁德时代", '
+            'Decimal("50000"), Decimal("200"), Decimal("100000"))'
+        ).run()
+        self.assertEqual(app.exception, [])
+        self.assertEqual(app.caption[0].value, "300750.SZ · 宁德时代 · 可用资金 ¥50,000.00（50.00%）")
+
+    def test_sell_dialog_caption_uses_market_value_not_share_count(self) -> None:
+        for price, ratio, expected in (
+            ('Decimal("200")', 'Decimal("0.2")', '¥20,000.00（20.00%）'),
+            ('None', 'None', '—（—）'),
+        ):
+            with self.subTest(price=price):
+                app = AppTest.from_string(
+                    'from decimal import Decimal\n'
+                    'from trade_ui import render_sell_dialog\n'
+                    'render_sell_dialog(None, "test", "tester", "300750.SZ", "宁德时代", '
+                    f'Decimal("100"), {price}, {ratio})'
+                ).run()
+                self.assertEqual(app.exception, [])
+                self.assertEqual(app.caption[0].value, f"300750.SZ · 宁德时代 · 持仓市值 {expected}")
+
     def test_money_and_percentage_formatting(self) -> None:
         self.assertEqual(trade_ui.money(Decimal("1234.5")), "¥1,234.50")
         self.assertEqual(trade_ui.pct(Decimal("0.125")), "12.50%")

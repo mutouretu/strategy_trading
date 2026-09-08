@@ -579,6 +579,11 @@ class TrackingRowView:
     average_cost: Decimal | None
     position_ratio: Decimal
     pnl_ratio: Decimal | None
+    average_buy_price: Decimal | None = None
+    average_sell_price: Decimal | None = None
+    realized_pnl_ratio: Decimal | None = None
+    unrealized_pnl_ratio: Decimal | None = None
+    reference_price_is_trade: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -641,7 +646,7 @@ class OperationHistoryRowView:
     name: str
     side: TradeSide | None
     source_or_signal: str
-    position_ratio: Decimal | None
+    position_ratio: Decimal | None  # 本笔成交金额 / 交易前总权益，非输入的买卖比例。
     price: Decimal | None
     quantity: Decimal | None
     gross_amount: Decimal | None

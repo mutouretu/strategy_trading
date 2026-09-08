@@ -14,9 +14,11 @@ from streamlit.testing.v1 import AppTest
 from trading_ledger.application.contracts import (
     AddTrackedInstrumentCommand,
     CreateProjectCommand,
+    ConfirmManualTradeCommand,
     RecordDailyValuationCommand,
 )
 from trading_ledger.bootstrap import get_application, get_settings
+from trading_ledger.domain import TradeSide
 
 
 class StreamlitAppTests(unittest.TestCase):
@@ -155,6 +157,48 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertIn(f"tracking_archive_{tracking.tracking_id}", button_keys)
         self.assertNotIn("清理到期观察", [button.label for button in app.button])
         self.assertEqual(app.button[-1].key, "tracking_add_instrument")
+
+    def test_history_shows_total_equity_ratio_instead_of_cash_change(self) -> None:
+        application = get_application()
+        project = application.create_project(CreateProjectCommand("历史占比测试", Decimal("100000"), "test-user"))
+        application.add_tracking(AddTrackedInstrumentCommand(project.project_key, "600000", "浦发银行", "观察来源", "test-user"))
+        application.confirm_manual_trade(ConfirmManualTradeCommand(
+            project_key=project.project_key,
+            symbol="600000.SH",
+            side=TradeSide.BUY,
+            allocation_ratio=Decimal("0.5"),
+            price=Decimal("10"),
+            signal_text="测试买入",
+            actor="test-user",
+        ))
+        app = self._app().run()
+        app.radio[0].set_value("操作历史").run()
+        self.assertEqual(app.exception, [])
+        frame = app.dataframe[0].value
+        self.assertNotIn("资金变动", frame.columns)
+        self.assertIn("总仓占比", frame.columns)
+        self.assertEqual(frame.loc[frame["操作"] == "买入", "总仓占比"].iloc[0], 0.49)
+
+    def test_tracking_displays_buy_sell_prices_and_profit_after_liquidation(self) -> None:
+        application = get_application()
+        project = application.create_project(CreateProjectCommand("清仓均价测试", Decimal("100000"), "test-user"))
+        application.add_tracking(AddTrackedInstrumentCommand(project.project_key, "600000", "浦发银行", "观察来源", "test-user"))
+        for side, price, ratio in ((TradeSide.BUY, "10", "0.5"), (TradeSide.SELL, "11", "1")):
+            application.confirm_manual_trade(ConfirmManualTradeCommand(
+                project_key=project.project_key,
+                symbol="600000.SH", side=side, allocation_ratio=Decimal(ratio),
+                price=Decimal(price), signal_text="均价测试", actor="test-user",
+            ))
+        app = self._app().run()
+        self.assertEqual(app.exception, [])
+        markdown = [item.value for item in app.markdown]
+        self.assertIn("**买入/卖出均价**", markdown)
+        self.assertIn("**实盈/浮盈**", markdown)
+        self.assertNotIn("**盈亏**", markdown)
+        self.assertIn("¥10.00 / ¥11.00", markdown)
+        self.assertIn("¥11.00", markdown)
+        self.assertTrue(any("+9.9%" in value and " / " in value and "+0.0%" in value for value in markdown))
+        self.assertTrue(any(item.value == "成交参考" for item in app.caption))
 
 
 if __name__ == "__main__":

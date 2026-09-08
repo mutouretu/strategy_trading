@@ -226,6 +226,55 @@ class SQLiteLedgerTests(unittest.TestCase):
         self.assertEqual(updated.name, "")
         self.assertEqual(updated.source_text, "更新来源")
 
+    def test_after_hours_trade_price_does_not_override_closing_quote(self) -> None:
+        self.application._now = Mock(return_value=datetime(2026, 9, 8, 22, 30, tzinfo=TZ))
+        self.application.add_tracking(AddTrackedInstrumentCommand(
+            self.project.project_key, "301551", "测试股票", "收盘后记账测试", "test-user"
+        ))
+        provider = Mock()
+        provider.fetch_many.return_value = ({
+            "301551.SZ": RealtimeQuote("301551.SZ", "测试股票", Decimal("22.76"),
+                datetime(2026, 9, 8, 15, 34, 45, tzinfo=TZ), "测试收盘行情")
+        }, {})
+        self.application.quote_provider = provider
+        refresh = RefreshTrackingPricesCommand(self.project.project_key, "test-user")
+        self.application.refresh_tracking_prices(refresh)
+        for side, price in ((TradeSide.BUY, "22.5"), (TradeSide.SELL, "24")):
+            trade = self.application.confirm_manual_trade(ConfirmManualTradeCommand(
+                project_key=self.project.project_key, symbol="301551.SZ", side=side,
+                allocation_ratio=Decimal("0.5"), price=Decimal(price),
+                signal_text="盘后手工成交", actor="test-user",
+                trade_time=datetime(2026, 9, 8, 22, 5 if side == TradeSide.BUY else 6, tzinfo=TZ),
+            ))
+        for _ in range(2):
+            row = self.application.list_tracking(ListTrackingQuery(self.project.project_key, keyword="301551")).rows[0]
+            self.assertEqual(row.reference_price, Decimal("22.76"))
+            self.assertFalse(row.reference_price_is_trade)
+            self.assertEqual(row.average_sell_price, Decimal("24"))
+            self.assertEqual(row.unrealized_pnl_ratio, (Decimal("22.76") - row.average_cost) / row.average_cost)
+            self.assertEqual(row.realized_pnl_ratio, trade.realized_pnl / (trade.net_cash_amount - trade.realized_pnl))
+            self.application.refresh_tracking_prices(refresh)
+        valuation = self.application.record_daily_valuation(RecordDailyValuationCommand(
+            project_key=self.project.project_key, actor="test-user", require_fresh_prices=True,
+        ))
+        summary = self.application.account_summary(GetAccountSummaryQuery(self.project.project_key))
+        self.assertEqual(valuation.equity, summary.cash_balance + row.quantity * Decimal("22.76"))
+        self.assertFalse(valuation.is_partial)
+
+    def test_trade_price_fallback_is_marked_and_replaced_by_older_market_quote(self) -> None:
+        self._buy()
+        row = self.application.list_tracking(ListTrackingQuery(self.project.project_key)).rows[0]
+        self.assertEqual(row.reference_price, Decimal("10"))
+        self.assertTrue(row.reference_price_is_trade)
+        self.application.record_reference_price(RecordReferencePriceCommand(
+            market="CN_STOCK", venue="SSE", symbol="600000.SH", price=Decimal("9.5"),
+            price_time=datetime(2026, 9, 1, 15, tzinfo=TZ), source_name="前日收盘行情",
+            request_id="market-priority", actor="test-user",
+        ))
+        row = self.application.list_tracking(ListTrackingQuery(self.project.project_key)).rows[0]
+        self.assertEqual(row.reference_price, Decimal("9.5"))
+        self.assertFalse(row.reference_price_is_trade)
+
     def test_buy_uses_cash_percentage_and_charges_commission(self) -> None:
         trade = self._buy()
         summary = self.application.account_summary(
@@ -344,6 +393,85 @@ class SQLiteLedgerTests(unittest.TestCase):
         self.assertEqual(by_kind[OperationKind.TRACKING].source_or_signal, "基本面观察")
         self.assertEqual(by_kind[OperationKind.TRADE].source_or_signal, "突破平台")
 
+    def test_history_ratio_uses_total_equity_not_input_allocation(self) -> None:
+        buy = self._buy()
+        sell = self._sell()
+        self._sell_all("12", datetime(2026, 9, 4, 10, tzinfo=TZ))
+        rows = self.application.operation_history(
+            ListOperationHistoryQuery(self.project.project_key)
+        ).rows
+        buy_row = next(row for row in rows if row.side == TradeSide.BUY)
+        sell_row = next(row for row in rows if row.source_or_signal == "达到止盈位")
+        self.assertEqual(buy_row.position_ratio, Decimal("0.49"))
+        self.assertEqual(
+            sell_row.position_ratio,
+            sell.gross_amount / (Decimal("100000") + buy.net_cash_amount + buy.quantity * sell.price),
+        )
+        self.assertNotEqual(sell_row.position_ratio, Decimal("0.5"))
+        self.assertIsNone(next(row for row in rows if row.side is None).position_ratio)
+
+    def test_legacy_history_ratio_is_reconstructed_without_writing(self) -> None:
+        buy = self._buy()
+        sell = self._sell()
+        with self.application.database.transaction() as connection:
+            connection.execute("UPDATE trade_records SET metadata_json = '{}'")
+        rows = self.application.operation_history(
+            ListOperationHistoryQuery(self.project.project_key)
+        ).rows
+        self.assertEqual(next(row for row in rows if row.side == TradeSide.BUY).position_ratio, Decimal("0.49"))
+        self.assertEqual(
+            next(row for row in rows if row.side == TradeSide.SELL).position_ratio,
+            sell.gross_amount / (Decimal("100000") + buy.net_cash_amount + buy.quantity * sell.price),
+        )
+        with self.application.database.read() as connection:
+            self.assertEqual(
+                {row[0] for row in connection.execute("SELECT metadata_json FROM trade_records")},
+                {"{}"},
+            )
+
+    def test_history_ratio_includes_other_holdings_and_preserves_snapshot(self) -> None:
+        buy = self._buy()
+        self.application.add_tracking(AddTrackedInstrumentCommand(
+            self.project.project_key, "300750", "宁德时代", "另一只股票", "test-user"
+        ))
+        second = self.application.confirm_manual_trade(ConfirmManualTradeCommand(
+            project_key=self.project.project_key,
+            symbol="300750.SZ",
+            side=TradeSide.BUY,
+            allocation_ratio=Decimal("0.5"),
+            price=Decimal("20"),
+            signal_text="第二只买入",
+            actor="test-user",
+            trade_time=datetime(2026, 9, 3, 10, tzinfo=TZ),
+        ))
+        expected = second.gross_amount / (Decimal("100000") + buy.net_cash_amount + buy.gross_amount)
+        def second_ratio():
+            return next(row.position_ratio for row in self.application.operation_history(
+                ListOperationHistoryQuery(self.project.project_key)
+            ).rows if row.symbol == "300750.SZ" and row.side == TradeSide.BUY)
+        self.assertEqual(second_ratio(), expected)
+        # 删除临时数据库中的旧行情，验证新记录有快照、旧记录缺依据时不编造占比。
+        with self.application.database.transaction() as connection:
+            connection.execute(
+                "DELETE FROM reference_prices WHERE instrument_id = (SELECT instrument_id FROM instruments WHERE symbol = '600000.SH')"
+            )
+        self.assertEqual(second_ratio(), expected)
+        with self.application.database.transaction() as connection:
+            connection.execute("UPDATE trade_records SET metadata_json = '{}' WHERE trade_id = ?", (second.trade_id,))
+        self.assertIsNone(second_ratio())
+
+    def test_history_ratio_handles_reversal_without_counting_it_as_a_trade(self) -> None:
+        buy = self._buy()
+        self.application.reverse_trade(ReverseTradeCommand(
+            self.project.project_key, buy.trade_id, "reverse-history-ratio", "录错", "test-user"
+        ))
+        self._buy(datetime(2026, 9, 4, 10, tzinfo=TZ))
+        with self.application.database.transaction() as connection:
+            connection.execute("UPDATE trade_records SET metadata_json = '{}'")
+        rows = self.application.operation_history(ListOperationHistoryQuery(self.project.project_key)).rows
+        self.assertTrue(all(row.position_ratio == Decimal("0.49") for row in rows if row.operation_kind == OperationKind.TRADE))
+        self.assertIsNone(next(row for row in rows if row.operation_kind == OperationKind.REVERSAL).position_ratio)
+
     def test_project_data_is_isolated(self) -> None:
         second = self.application.create_project(
             CreateProjectCommand(
@@ -357,6 +485,93 @@ class SQLiteLedgerTests(unittest.TestCase):
         )
         self.assertEqual(second_tracking.rows, ())
         self.assertEqual(second_tracking.account.cash_balance, Decimal("50000.00"))
+
+    def test_tracking_keeps_weighted_prices_and_realized_return_after_liquidation(self) -> None:
+        watching = self.application.list_tracking(ListTrackingQuery(self.project.project_key)).rows[0]
+        self.assertIsNone(watching.average_buy_price)
+        self.assertIsNone(watching.average_sell_price)
+        self.assertIsNone(watching.pnl_ratio)
+        self.assertIsNone(watching.realized_pnl_ratio)
+        self.assertIsNone(watching.unrealized_pnl_ratio)
+        first_buy = self._buy()
+        second_buy = self.application.confirm_manual_trade(ConfirmManualTradeCommand(
+            project_key=self.project.project_key,
+            symbol="600000.SH",
+            side=TradeSide.BUY,
+            allocation_ratio=Decimal("0.5"),
+            price=Decimal("20"),
+            signal_text="分批买入",
+            actor="test-user",
+            trade_time=datetime(2026, 9, 2, 11, tzinfo=TZ),
+        ))
+        partial_sell = self._sell()
+        holding = self.application.list_tracking(ListTrackingQuery(self.project.project_key)).rows[0]
+        expected_buy_price = (first_buy.gross_amount + second_buy.gross_amount) / (first_buy.quantity + second_buy.quantity)
+        self.assertEqual(holding.average_buy_price, expected_buy_price)
+        self.assertEqual(holding.average_sell_price, partial_sell.price)
+        self.assertEqual(
+            holding.realized_pnl_ratio,
+            partial_sell.realized_pnl / (partial_sell.net_cash_amount - partial_sell.realized_pnl),
+        )
+        self.assertEqual(holding.unrealized_pnl_ratio, (partial_sell.price - holding.average_cost) / holding.average_cost)
+        self.assertGreater(holding.quantity, 0)
+        final_sell = self._sell_all("12", datetime(2026, 9, 4, 10, tzinfo=TZ))
+        self.application.record_reference_price(RecordReferencePriceCommand(
+            market="CN_STOCK", venue="SSE", symbol="600000.SH", price=Decimal("99"),
+            price_time=datetime(2026, 9, 5, 15, tzinfo=TZ), source_name="测试行情",
+            request_id="after-liquidation-price", actor="test-user",
+        ))
+        restarted = SQLiteTradingLedgerApplication(LedgerDatabase(self.database_path))
+        restarted.initialize()
+        closed = restarted.list_tracking(ListTrackingQuery(self.project.project_key)).rows[0]
+        buy_cost = -first_buy.net_cash_amount - second_buy.net_cash_amount
+        sell_proceeds = partial_sell.net_cash_amount + final_sell.net_cash_amount
+        self.assertEqual(closed.quantity, 0)
+        self.assertEqual(closed.average_buy_price, expected_buy_price)
+        self.assertEqual(closed.average_sell_price, (partial_sell.gross_amount + final_sell.gross_amount) / (partial_sell.quantity + final_sell.quantity))
+        self.assertEqual(closed.pnl_ratio, (sell_proceeds - buy_cost) / buy_cost)
+        self.assertEqual(closed.realized_pnl_ratio, (sell_proceeds - buy_cost) / buy_cost)
+        self.assertEqual(closed.unrealized_pnl_ratio, Decimal("0"))
+        self.assertEqual(closed.reference_price, Decimal("99"))
+
+    def test_tracking_sell_average_excludes_reversed_sales(self) -> None:
+        buy = self._buy()
+        wrong_sell = self._sell_all("9", datetime(2026, 9, 3, 10, tzinfo=TZ))
+        self.application.reverse_trade(ReverseTradeCommand(
+            self.project.project_key, wrong_sell.trade_id, "reverse-tracking-average", "卖价错误", "test-user"
+        ))
+        holding = self.application.list_tracking(ListTrackingQuery(self.project.project_key)).rows[0]
+        self.assertIsNone(holding.average_sell_price)
+        self.assertEqual(holding.realized_pnl_ratio, Decimal("0"))
+        sell = self._sell_all("11", datetime(2026, 9, 4, 10, tzinfo=TZ))
+        closed = self.application.list_tracking(ListTrackingQuery(self.project.project_key)).rows[0]
+        self.assertEqual(closed.average_buy_price, Decimal("10"))
+        self.assertEqual(closed.average_sell_price, Decimal("11"))
+        self.assertEqual(closed.pnl_ratio, (sell.net_cash_amount + buy.net_cash_amount) / -buy.net_cash_amount)
+        self.assertEqual(closed.realized_pnl_ratio, closed.pnl_ratio)
+        self.assertEqual(closed.unrealized_pnl_ratio, Decimal("0"))
+
+    def test_tracking_realized_return_does_not_change_with_market_price(self) -> None:
+        self._buy()
+        holding = self.application.list_tracking(ListTrackingQuery(self.project.project_key)).rows[0]
+        self.assertEqual(holding.realized_pnl_ratio, Decimal("0"))
+        self.assertLess(holding.unrealized_pnl_ratio, Decimal("0"))  # 买入费用形成浮亏。
+        sell = self._sell()
+        self.application.record_reference_price(RecordReferencePriceCommand(
+            market="CN_STOCK", venue="SSE", symbol="600000.SH", price=Decimal("9"),
+            price_time=datetime(2026, 9, 5, 15, tzinfo=TZ), source_name="测试行情",
+            request_id="floating-loss-price", actor="test-user",
+        ))
+        holding = self.application.list_tracking(ListTrackingQuery(self.project.project_key)).rows[0]
+        expected_realized = sell.realized_pnl / (sell.net_cash_amount - sell.realized_pnl)
+        self.assertEqual(holding.realized_pnl_ratio, expected_realized)
+        self.assertGreater(holding.realized_pnl_ratio, Decimal("0"))
+        self.assertLess(holding.unrealized_pnl_ratio, Decimal("0"))
+        with self.application.database.transaction() as connection:
+            connection.execute("DELETE FROM reference_prices")  # 仅临时测试数据库。
+        holding = self.application.list_tracking(ListTrackingQuery(self.project.project_key)).rows[0]
+        self.assertEqual(holding.realized_pnl_ratio, expected_realized)
+        self.assertIsNone(holding.unrealized_pnl_ratio)
 
     def test_cash_flow_is_not_counted_as_profit(self) -> None:
         self.application.record_cash_entry(

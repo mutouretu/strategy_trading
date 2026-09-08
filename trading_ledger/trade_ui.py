@@ -201,8 +201,7 @@ def render_buy_dialog(
 ) -> None:
     cash_ratio = available_cash / total_equity if total_equity > 0 else None
     st.caption(
-        f"{symbol} · {name} · 当前可用资金 {money(available_cash)}"
-        f" · 可用资金占总权益 {pct(cash_ratio)}"
+        f"{symbol} · {name} · 可用资金 {money(available_cash)}（{pct(cash_ratio)}）"
     )
     percentage = st.number_input(
         "买入比例（%） *",
@@ -280,9 +279,9 @@ def render_sell_dialog(
     current_price: Decimal | None,
     position_ratio: Decimal | None,
 ) -> None:
+    market_value = sellable_quantity * current_price if current_price is not None else None
     st.caption(
-        f"{symbol} · {name} · 当前可卖持仓 {sellable_quantity:,.0f} 股"
-        f" · 该股市值占总权益 {pct(position_ratio)}"
+        f"{symbol} · {name} · 持仓市值 {money(market_value)}（{pct(position_ratio)}）"
     )
     percentage = st.number_input(
         "卖出比例（%） *",
@@ -356,7 +355,16 @@ def _pnl_markup(value: Decimal | None) -> str:
     if value is None:
         return "—"
     color = MARKET_UP_COLOR if value > 0 else MARKET_DOWN_COLOR if value < 0 else MARKET_FLAT_COLOR
-    return f'<span style="color:{color};font-weight:700;">{value:+.1%}</span>'
+    tone = "up" if value > 0 else "down" if value < 0 else "flat"
+    return f'<span class="ledger-pnl-{tone}" style="color:{color};font-weight:700;">{value:+.1%}</span>'
+
+
+def _tracking_row_state(row) -> str:
+    if row.quantity > 0:
+        return "holding"
+    if row.average_sell_price is not None:
+        return "closed"
+    return "watching"
 
 
 def render_tracking_table(
@@ -365,11 +373,32 @@ def render_tracking_table(
     actor: str,
     tracking_page,
 ) -> None:
-    ratios = [1.25, 1.0, 1.65, 0.72, 0.78, 0.8, 0.75, 2.2]
+    st.markdown(
+        """<style>
+        [class*="st-key-tracking_row_"] {
+            margin: 0.18rem 0;
+            padding: 0.45rem 0.6rem 0.25rem;
+            border: 1px solid transparent;
+            border-radius: 0.75rem;
+        }
+        [class*="st-key-tracking_row_holding_"] {
+            background: rgba(245, 215, 140, 0.17);
+            border-color: rgba(232, 198, 106, 0.38);
+            box-shadow: inset 3px 0 0 #E8C66A;
+        }
+        [class*="st-key-tracking_row_closed_"] {
+            background: rgba(125, 190, 245, 0.13);
+            border-color: rgba(125, 190, 245, 0.30);
+            box-shadow: inset 3px 0 0 #7DBEF5;
+        }
+        </style>""",
+        unsafe_allow_html=True,
+    )
+    ratios = [1.25, 1.0, 1.4, 0.72, 0.78, 1.6, 1.5, 2.2]
     headers = st.columns(ratios, vertical_alignment="center")
     for column, label in zip(
         headers[:7],
-        ["股票", "加入时间", "来源", "当前仓位", "当前价格", "买入均价", "盈亏"],
+        ["股票", "加入时间", "来源", "当前仓位", "当前价格", "买入/卖出均价", "实盈/浮盈"],
     ):
         column.markdown(f"**{label}**")
     header_actions = headers[7].columns([2.4, 1])
@@ -392,14 +421,22 @@ def render_tracking_table(
             st.rerun()
     st.divider()
     for row in tracking_page.rows:
-        columns = st.columns(ratios, vertical_alignment="center")
+        row_container = st.container(
+            key=f"tracking_row_{_tracking_row_state(row)}_{row.tracking_id}"
+        )
+        columns = row_container.columns(ratios, vertical_alignment="center")
         columns[0].markdown(f"**{row.symbol}**  \n{html.escape(row.name)}")
         columns[1].markdown(row.added_at.strftime("%Y-%m-%d  \n%H:%M"))
         columns[2].markdown(html.escape(row.source_text))
         columns[3].markdown(f"**{row.position_ratio:.1%}**")
         columns[4].markdown(money(row.reference_price))
-        columns[5].markdown(money(row.average_cost))
-        columns[6].markdown(_pnl_markup(row.pnl_ratio), unsafe_allow_html=True)
+        if row.reference_price_is_trade:
+            columns[4].caption("成交参考")
+        columns[5].markdown(f"{money(row.average_buy_price)} / {money(row.average_sell_price)}")
+        columns[6].markdown(
+            f"{_pnl_markup(row.realized_pnl_ratio)} / {_pnl_markup(row.unrealized_pnl_ratio)}",
+            unsafe_allow_html=True,
+        )
         actions = columns[7].columns(4)
         if actions[0].button(
             ":material/add_shopping_cart:",
@@ -602,7 +639,7 @@ def operation_history_page(
                 "成交价格": float(row.price) if row.price is not None else None,
                 "交易数量": float(row.quantity) if row.quantity is not None else None,
                 "交易金额": float(row.gross_amount) if row.gross_amount is not None else None,
-                "资金变动": float(row.cash_change) if row.cash_change is not None else None,
+                "总仓占比": float(row.position_ratio) if row.position_ratio is not None else None,
             }
             for row in result.rows
         ]
@@ -613,10 +650,16 @@ def operation_history_page(
                 "成交价格": "{:.2f}",
                 "交易数量": "{:,.0f}",
                 "交易金额": "{:,.2f}",
-                "资金变动": "{:,.2f}",
+                "总仓占比": "{:.2%}",
             },
             na_rep="—",
         ),
+        column_config={
+            "总仓占比": st.column_config.NumberColumn(
+                help="本笔成交金额（不含税费）÷ 交易前总权益。该股按成交价估值，"
+                "其他持仓按当时已有参考价估值；观察、冲正或历史依据不足时显示 —。"
+            ),
+        },
         width="stretch",
         hide_index=True,
     )
