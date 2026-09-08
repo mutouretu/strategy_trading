@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
 from trading_ledger.application.contracts import (
@@ -27,6 +28,7 @@ from trading_ledger.application.contracts import (
     RecordConfirmedTradeCommand,
     RecordDailyValuationCommand,
     RecordReferencePriceCommand,
+    RefreshTrackingPricesCommand,
     ReverseTradeCommand,
     UpdateProjectCommand,
     UpdateTrackedInstrumentCommand,
@@ -46,6 +48,7 @@ from trading_ledger.infrastructure.database import (
 from trading_ledger.infrastructure.sqlite_application import (
     SQLiteTradingLedgerApplication,
 )
+from trading_ledger.infrastructure.quotes import RealtimeQuote
 
 
 TZ = ZoneInfo("Asia/Shanghai")
@@ -158,6 +161,68 @@ class SQLiteLedgerTests(unittest.TestCase):
             ListTrackingQuery(project_key=self.project.project_key)
         ).rows[0]
         self.assertEqual(row.source_text, "更新后的观察说明")
+
+    def test_code_only_tracking_is_normalized_and_name_is_filled_by_quotes(self) -> None:
+        provider = Mock()
+        self.application.quote_provider = provider
+        for code, normalized in (
+            ("300377", "300377.SZ"), ("600036", "600036.SH"), ("920001", "920001.BJ")
+        ):
+            with self.subTest(code=code):
+                row = self.application.add_tracking(AddTrackedInstrumentCommand(
+                    project_key=self.project.project_key, symbol=code, name="",
+                    source_text="只填代码", actor="test-user",
+                ))
+                self.assertEqual(row.symbol, normalized)
+                self.assertEqual(row.name, "")
+                provider.fetch_many.return_value = ({
+                    normalized: RealtimeQuote(
+                        normalized, "行情返回名称", Decimal("12.34"),
+                        datetime(2026, 9, 8, 15, tzinfo=TZ), "测试行情",
+                    )
+                }, {})
+                self.application.refresh_tracking_prices(RefreshTrackingPricesCommand(
+                    self.project.project_key, "test-user"
+                ))
+                restarted = SQLiteTradingLedgerApplication(LedgerDatabase(self.database_path))
+                result = restarted.list_tracking(ListTrackingQuery(
+                    self.project.project_key, keyword=code
+                )).rows[0]
+                self.assertEqual(result.name, "行情返回名称")
+                self.assertEqual(result.reference_price, Decimal("12.34"))
+
+    def test_empty_name_does_not_erase_shared_instrument_name(self) -> None:
+        second = self.application.create_project(CreateProjectCommand(
+            "另一个项目", Decimal("10000"), "test-user"
+        ))
+        row = self.application.add_tracking(AddTrackedInstrumentCommand(
+            second.project_key, "600000", "", "新的来源", "test-user"
+        ))
+        self.assertEqual(row.name, "浦发银行")
+        updated = self.application.update_tracking(UpdateTrackedInstrumentCommand(
+            second.project_key, row.tracking_id, "600000", "", "更新来源", "test-user"
+        ))
+        self.assertEqual(updated.name, "浦发银行")
+        original = self.application.list_tracking(ListTrackingQuery(self.project.project_key))
+        self.assertEqual(original.rows[0].name, "浦发银行")
+
+    def test_quote_failure_keeps_code_only_tracking_editable(self) -> None:
+        row = self.application.add_tracking(AddTrackedInstrumentCommand(
+            self.project.project_key, "300377", "", "待刷新", "test-user"
+        ))
+        provider = Mock()
+        provider.fetch_many.return_value = ({}, {"300377.SZ": "请求失败"})
+        self.application.quote_provider = provider
+        result = self.application.refresh_tracking_prices(RefreshTrackingPricesCommand(
+            self.project.project_key, "test-user"
+        ))
+        self.assertIn("300377.SZ", result.failed_symbols)
+        updated = self.application.update_tracking(UpdateTrackedInstrumentCommand(
+            self.project.project_key, row.tracking_id, "300377", "", "更新来源", "test-user"
+        ))
+        self.assertEqual(updated.symbol, "300377.SZ")
+        self.assertEqual(updated.name, "")
+        self.assertEqual(updated.source_text, "更新来源")
 
     def test_buy_uses_cash_percentage_and_charges_commission(self) -> None:
         trade = self._buy()
