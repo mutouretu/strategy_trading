@@ -10,7 +10,6 @@ from trading_ledger.application.contracts import (
     AddTrackedInstrumentCommand,
     ApplicationError,
     ArchiveTrackedInstrumentCommand,
-    CloseTrackedInstrumentCommand,
     ConfirmManualTradeCommand,
     GetMonthlyStatisticsQuery,
     ListOperationHistoryQuery,
@@ -401,7 +400,7 @@ def render_tracking_table(
         columns[4].markdown(money(row.reference_price))
         columns[5].markdown(money(row.average_cost))
         columns[6].markdown(_pnl_markup(row.pnl_ratio), unsafe_allow_html=True)
-        actions = columns[7].columns(5)
+        actions = columns[7].columns(4)
         if actions[0].button(
             ":material/add_shopping_cart:",
             help="买入",
@@ -474,26 +473,6 @@ def render_tracking_table(
                     st.rerun()
         has_position = row.quantity > 0
         if actions[3].button(
-            ":material/remove_circle_outline:",
-            help=("移出当前跟踪" if not has_position else "有持仓时不能移出"),
-            disabled=has_position,
-            key=f"tracking_close_{row.tracking_id}",
-            width="stretch",
-        ):
-            try:
-                application.close_tracking(
-                    CloseTrackedInstrumentCommand(
-                        project_key=project_key,
-                        tracking_id=row.tracking_id,
-                        actor=actor,
-                    )
-                )
-            except ApplicationError as error:
-                _show_error(error)
-            else:
-                _set_notice(f"{row.name} 已移出当前跟踪。")
-                st.rerun()
-        if actions[4].button(
             ":material/archive:",
             help=("归档" if not has_position else "有持仓时不能归档"),
             disabled=has_position,
@@ -788,6 +767,7 @@ def monthly_trade_statistics_page(
         )
         st.warning(f"当前报告为部分估值：{detail}。")
     st.markdown("#### 估值走势")
+    st.caption("当月汇总和股票状态按最新账本显示；历史月份及走势图按已记录估值显示。")
     valuation_frame = _valuation_chart_frame(report)
     if valuation_frame.empty:
         st.caption("本月记录每日估值后显示走势。")
@@ -806,7 +786,11 @@ def monthly_trade_statistics_page(
                         "field": "日期",
                         "type": "temporal",
                         "title": None,
-                        "axis": {"format": "%m-%d"},
+                        "axis": {
+                            "format": "%m-%d",
+                            "tickCount": "day",
+                            "labelOverlap": "greedy",
+                        },
                     },
                     "y": {
                         "field": "总权益",
@@ -867,6 +851,12 @@ def monthly_trade_statistics_page(
                 },
                 na_rep="—",
             ),
+            column_config={
+                "收益率": st.column_config.NumberColumn(
+                    help="已清仓：截至所选月末，该股票累计净收益 ÷ 累计买入支出（含税费）；"
+                    "持仓中：本月盈亏 ÷ 剩余持仓成本。"
+                ),
+            },
             width="stretch",
             hide_index=True,
         )

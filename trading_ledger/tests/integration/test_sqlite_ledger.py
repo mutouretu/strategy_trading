@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from trading_ledger.application.contracts import (
     AddTrackedInstrumentCommand,
     ApplicationError,
+    ArchiveTrackedInstrumentCommand,
     ConfirmManualTradeCommand,
     CreateProjectCommand,
     ErrorCode,
@@ -38,6 +39,7 @@ from trading_ledger.domain import (
     ExecutionSource,
     OperationKind,
     TradeSide,
+    TrackingStatus,
 )
 from trading_ledger.infrastructure.database import (
     DATABASE_IDENTITY,
@@ -83,7 +85,7 @@ class SQLiteLedgerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
-    def _buy(self):
+    def _buy(self, trade_time: datetime | None = None):
         return self.application.confirm_manual_trade(
             ConfirmManualTradeCommand(
                 project_key=self.project.project_key,
@@ -93,7 +95,7 @@ class SQLiteLedgerTests(unittest.TestCase):
                 price=Decimal("10.00"),
                 signal_text="突破平台",
                 actor="test-user",
-                trade_time=datetime(2026, 9, 2, 10, 0, tzinfo=TZ),
+                trade_time=trade_time or datetime(2026, 9, 2, 10, 0, tzinfo=TZ),
             )
         )
 
@@ -434,6 +436,187 @@ class SQLiteLedgerTests(unittest.TestCase):
         self.assertEqual(summary.cash_balance, Decimal("50995.00"))
         self.assertEqual(positions[0].quantity, Decimal("4900"))
         self.assertEqual(self.application.integrity_check(), ())
+
+    def _sell_all(self, price: str, trade_time: datetime):
+        return self.application.confirm_manual_trade(
+            ConfirmManualTradeCommand(
+                project_key=self.project.project_key,
+                symbol="600000.SH",
+                side=TradeSide.SELL,
+                allocation_ratio=Decimal("1"),
+                price=Decimal(price),
+                signal_text="清仓",
+                actor="test-user",
+                trade_time=trade_time,
+            )
+        )
+
+    def test_closed_return_includes_fees_and_multiple_round_trips(self) -> None:
+        total_cost = Decimal("0")
+        total_proceeds = Decimal("0")
+        for day, price in ((3, "9"), (5, "12")):
+            with self.subTest(sell_price=price):
+                buy = self._buy(datetime(2026, 9, day - 1, 10, tzinfo=TZ))
+                sell = self._sell_all(price, datetime(2026, 9, day, 10, tzinfo=TZ))
+                total_cost -= buy.net_cash_amount
+                total_proceeds += sell.net_cash_amount
+                self.application.record_daily_valuation(
+                    RecordDailyValuationCommand(
+                        project_key=self.project.project_key,
+                        actor="test-user",
+                        valuation_time=datetime(2026, 9, day, 15, tzinfo=TZ),
+                    )
+                )
+                row = self.application.monthly_statistics(
+                    GetMonthlyStatisticsQuery(self.project.project_key, "2026-09")
+                ).rows[0]
+                self.assertEqual(row.closing_status, "已清仓")
+                self.assertEqual(
+                    row.return_rate, (total_proceeds - total_cost) / total_cost
+                )
+
+    def test_liquidation_keeps_tracking_and_current_statistics_ignore_stale_snapshot(self) -> None:
+        self.application._now = Mock(return_value=datetime(2026, 9, 8, 16, tzinfo=TZ))
+        buy = self._buy()
+        snapshot = self.application.record_daily_valuation(
+            RecordDailyValuationCommand(
+                project_key=self.project.project_key,
+                actor="test-user",
+                valuation_time=datetime(2026, 9, 2, 15, tzinfo=TZ),
+            )
+        )
+        sell = self._sell_all("11", datetime(2026, 9, 3, 10, tzinfo=TZ))
+        tracking = self.application.list_tracking(ListTrackingQuery(self.project.project_key))
+        self.assertEqual(len(tracking.rows), 1)
+        row = tracking.rows[0]
+        self.assertEqual(row.tracking_id, self.tracking.tracking_id)
+        self.assertEqual(row.source_text, self.tracking.source_text)
+        self.assertEqual(row.tracking_status, TrackingStatus.WATCHING)
+        self.assertEqual(row.quantity, Decimal("0"))
+        self.assertIsNone(row.expires_at)
+        report = self.application.monthly_statistics(
+            GetMonthlyStatisticsQuery(self.project.project_key, "2026-09")
+        )
+        self.assertEqual(report.rows[0].closing_status, "已清仓")
+        self.assertEqual(report.rows[0].closing_position_ratio, Decimal("0"))
+        self.assertEqual(report.rows[0].unrealized_pnl_change, Decimal("0"))
+        net_profit = buy.net_cash_amount + sell.net_cash_amount
+        self.assertEqual(report.pnl, net_profit)
+        self.assertEqual(report.closing_capital, Decimal("100000") + net_profit)
+        self.assertEqual(report.rows[0].return_rate, net_profit / -buy.net_cash_amount)
+        self.assertEqual(len(report.valuation_points), 1)
+        self.assertEqual(report.valuation_points[0].equity, snapshot.equity)
+        self.application.archive_tracking(
+            ArchiveTrackedInstrumentCommand(
+                project_key=self.project.project_key,
+                tracking_id=row.tracking_id,
+                actor="test-user",
+            )
+        )
+        self.assertEqual(
+            self.application.list_tracking(ListTrackingQuery(self.project.project_key)).rows, ()
+        )
+        self.assertEqual(
+            self.application.monthly_statistics(
+                GetMonthlyStatisticsQuery(self.project.project_key, "2026-09")
+            ).rows[0].closing_status,
+            "已清仓",
+        )
+
+    def test_historical_month_keeps_its_position_after_current_month_liquidation(self) -> None:
+        self.application._now = Mock(return_value=datetime(2026, 10, 8, 16, tzinfo=TZ))
+        self._buy()
+        self.application.record_daily_valuation(
+            RecordDailyValuationCommand(
+                project_key=self.project.project_key,
+                actor="test-user",
+                valuation_time=datetime(2026, 9, 30, 15, tzinfo=TZ),
+            )
+        )
+        self._sell_all("11", datetime(2026, 10, 3, 10, tzinfo=TZ))
+        historical = self.application.monthly_statistics(
+            GetMonthlyStatisticsQuery(self.project.project_key, "2026-09")
+        )
+        current = self.application.monthly_statistics(
+            GetMonthlyStatisticsQuery(self.project.project_key, "2026-10")
+        )
+        self.assertEqual(historical.rows[0].closing_status, "持仓中")
+        self.assertEqual(current.rows[0].closing_status, "已清仓")
+
+    def test_reversing_buy_keeps_empty_instrument_in_tracking(self) -> None:
+        buy = self._buy()
+        self.application.reverse_trade(
+            ReverseTradeCommand(
+                project_key=self.project.project_key,
+                trade_id=buy.trade_id,
+                request_id="reverse-only-buy",
+                reason="买入录错",
+                actor="test-user",
+            )
+        )
+        tracking = self.application.list_tracking(ListTrackingQuery(self.project.project_key))
+        self.assertEqual(tracking.rows[0].quantity, Decimal("0"))
+        self.assertEqual(tracking.rows[0].tracking_status, TrackingStatus.WATCHING)
+
+    def test_closed_return_includes_prior_month_sales_not_later_trades(self) -> None:
+        buy = self._buy()
+        partial_sell = self._sell()
+        final_sell = self._sell_all("12", datetime(2026, 10, 3, 10, tzinfo=TZ))
+        self.application.record_daily_valuation(
+            RecordDailyValuationCommand(
+                project_key=self.project.project_key,
+                actor="test-user",
+                valuation_time=datetime(2026, 10, 3, 15, tzinfo=TZ),
+            )
+        )
+        self.application.confirm_manual_trade(
+            ConfirmManualTradeCommand(
+                project_key=self.project.project_key,
+                symbol="600000.SH",
+                side=TradeSide.BUY,
+                allocation_ratio=Decimal("0.5"),
+                price=Decimal("8"),
+                signal_text="下月重新买入",
+                actor="test-user",
+                trade_time=datetime(2026, 11, 2, 10, tzinfo=TZ),
+            )
+        )
+        row = self.application.monthly_statistics(
+            GetMonthlyStatisticsQuery(self.project.project_key, "2026-10")
+        ).rows[0]
+        expected_profit = (
+            buy.net_cash_amount + partial_sell.net_cash_amount + final_sell.net_cash_amount
+        )
+        self.assertEqual(row.closing_status, "已清仓")
+        self.assertEqual(row.return_rate, expected_profit / -buy.net_cash_amount)
+
+    def test_closed_return_excludes_reversed_trades(self) -> None:
+        buy = self._buy()
+        reversed_sell = self._sell_all("9", datetime(2026, 9, 3, 10, tzinfo=TZ))
+        self.application.reverse_trade(
+            ReverseTradeCommand(
+                project_key=self.project.project_key,
+                trade_id=reversed_sell.trade_id,
+                request_id="reverse-closed-return",
+                reason="卖价录错",
+                actor="test-user",
+            )
+        )
+        sell = self._sell_all("11", datetime(2026, 9, 3, 11, tzinfo=TZ))
+        self.application.record_daily_valuation(
+            RecordDailyValuationCommand(
+                project_key=self.project.project_key,
+                actor="test-user",
+                valuation_time=datetime(2026, 9, 3, 15, tzinfo=TZ),
+            )
+        )
+        row = self.application.monthly_statistics(
+            GetMonthlyStatisticsQuery(self.project.project_key, "2026-09")
+        ).rows[0]
+        self.assertEqual(
+            row.return_rate,
+            (sell.net_cash_amount + buy.net_cash_amount) / -buy.net_cash_amount,
+        )
 
     def test_daily_valuation_and_monthly_statistics(self) -> None:
         self._buy()
