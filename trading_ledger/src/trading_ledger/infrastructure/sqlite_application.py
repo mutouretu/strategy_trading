@@ -1584,7 +1584,7 @@ class SQLiteTradingLedgerApplication:
             WHERE project_id = ? AND instrument_id = ?
             """,
             (
-                TrackingStatus.HOLDING if current_quantity > 0 else TrackingStatus.CLOSED,
+                TrackingStatus.HOLDING if current_quantity > 0 else TrackingStatus.WATCHING,
                 trade_time.isoformat(),
                 project["project_id"],
                 instrument["instrument_id"],
@@ -2102,7 +2102,7 @@ class SQLiteTradingLedgerApplication:
             if quantity > 0:
                 next_status = TrackingStatus.HOLDING
             elif row["tracking_status"] == TrackingStatus.HOLDING:
-                next_status = TrackingStatus.CLOSED
+                next_status = TrackingStatus.WATCHING
             else:
                 continue
             connection.execute(
@@ -2616,13 +2616,8 @@ class SQLiteTradingLedgerApplication:
             )
             current_month = self._now().strftime("%Y-%m")
             current_summary: AccountSummaryView | None = None
-            if valuations:
-                closing_valuation = valuations[-1]
-                closing_capital = _decimal(closing_valuation["equity"])
-                missing_symbols = tuple(
-                    json.loads(closing_valuation["missing_symbols_json"] or "[]")
-                )
-            elif query.month == current_month:
+            if query.month == current_month:
+                # 当月汇总使用实时账本；每日快照只用于历史月份和走势图。
                 closing_valuation = None
                 current_summary = self._account_summary(
                     connection, query.project_key, account
@@ -2637,6 +2632,12 @@ class SQLiteTradingLedgerApplication:
                         for item in current_positions
                         if item.last_price is None
                     )
+                )
+            elif valuations:
+                closing_valuation = valuations[-1]
+                closing_capital = _decimal(closing_valuation["equity"])
+                missing_symbols = tuple(
+                    json.loads(closing_valuation["missing_symbols_json"] or "[]")
                 )
             else:
                 closing_valuation = None
@@ -2796,6 +2797,35 @@ class SQLiteTradingLedgerApplication:
                     if position
                     else Decimal("0")
                 )
+                instrument_return = (
+                    instrument_pnl / cost_basis if cost_basis > 0 else None
+                )
+                if quantity == 0:
+                    # 清仓后按累计实际收支计算，不能再使用剩余持仓成本。
+                    buy_cost = Decimal("0")
+                    net_proceeds = Decimal("0")
+                    for trade in connection.execute(
+                        """
+                        SELECT tr.side, tr.net_cash_amount
+                        FROM trade_records tr
+                        JOIN instruments i ON i.instrument_id = tr.instrument_id
+                        WHERE tr.account_id = ? AND i.symbol = ?
+                          AND tr.trade_time < ?
+                          AND tr.record_status = 'CONFIRMED'
+                          AND tr.reversal_of_trade_id IS NULL
+                        """,
+                        (account["account_id"], symbol, end_date.isoformat()),
+                    ):
+                        net_cash = _decimal(trade["net_cash_amount"])
+                        if trade["side"] == TradeSide.BUY:
+                            buy_cost -= net_cash
+                        else:
+                            net_proceeds += net_cash
+                    instrument_return = (
+                        (net_proceeds - buy_cost) / buy_cost
+                        if buy_cost > 0
+                        else None
+                    )
                 detail_rows.append(
                     MonthlyInstrumentStatisticsView(
                         symbol=symbol,
@@ -2811,9 +2841,7 @@ class SQLiteTradingLedgerApplication:
                         realized_pnl=realized,
                         unrealized_pnl_change=unrealized_change,
                         pnl=instrument_pnl,
-                        return_rate=(
-                            instrument_pnl / cost_basis if cost_basis > 0 else None
-                        ),
+                        return_rate=instrument_return,
                         closing_status="持仓中" if quantity > 0 else "已清仓",
                     )
                 )
@@ -2844,7 +2872,7 @@ class SQLiteTradingLedgerApplication:
                 if valuations
                 else None
             )
-            is_partial = not valuations or any(
+            is_partial = bool(missing_symbols) or not valuations or any(
                 bool(row["is_partial"]) for row in valuations
             )
             return MonthlyStatisticsView(

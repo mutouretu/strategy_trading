@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from streamlit.testing.v1 import AppTest
 
 from trading_ledger.application.contracts import (
     AddTrackedInstrumentCommand,
     CreateProjectCommand,
+    RecordDailyValuationCommand,
 )
 from trading_ledger.bootstrap import get_application, get_settings
 
@@ -62,6 +66,37 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertEqual(app.exception, [])
         self.assertEqual(app.radio[0].value, "交易统计")
         self.assertTrue(any(button.label == "记录今日估值" for button in app.button))
+
+    def test_short_valuation_chart_uses_daily_ticks(self) -> None:
+        application = get_application()
+        project = application.create_project(
+            CreateProjectCommand(
+                project_name="日期轴测试",
+                initial_capital=Decimal("100000.00"),
+                actor="test-user",
+            )
+        )
+        for day in (7, 8):
+            with self.subTest(valuation_days=day - 6):
+                application.record_daily_valuation(
+                    RecordDailyValuationCommand(
+                        project_key=project.project_key,
+                        actor="test-user",
+                        valuation_time=datetime(
+                            2026, 9, day, 15, 15, tzinfo=ZoneInfo("Asia/Shanghai")
+                        ),
+                    )
+                )
+                app = self._app().run()
+                app.radio[0].set_value("交易统计").run()
+                app.selectbox(key="trade_statistics_month").set_value("2026-09").run()
+                self.assertEqual(app.exception, [])
+                chart = app.get("vega_lite_chart")[0]
+                spec = json.loads(chart.proto.spec)
+                axis = spec["encoding"]["x"]["axis"]
+                self.assertEqual(axis["format"], "%m-%d")
+                self.assertEqual(axis["tickCount"], "day")
+                self.assertEqual(axis["labelOverlap"], "greedy")
 
     def test_entering_another_project_loads_its_tracking_page(self) -> None:
         application = get_application()
@@ -116,7 +151,7 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertEqual(app.exception, [])
         button_keys = [button.key for button in app.button]
         self.assertIn("tracking_refresh_prices", button_keys)
-        self.assertIn(f"tracking_close_{tracking.tracking_id}", button_keys)
+        self.assertNotIn(f"tracking_close_{tracking.tracking_id}", button_keys)
         self.assertIn(f"tracking_archive_{tracking.tracking_id}", button_keys)
         self.assertNotIn("清理到期观察", [button.label for button in app.button])
         self.assertEqual(app.button[-1].key, "tracking_add_instrument")
