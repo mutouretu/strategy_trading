@@ -84,6 +84,18 @@ class DailyValuationJobTests(unittest.TestCase):
         self.quotes.fetch_many.assert_not_called()
         self.assertEqual(self.snapshots(), [])
 
+    def test_trade_later_than_market_quote_does_not_block_daily_valuation(self):
+        self.app.confirm_manual_trade(ConfirmManualTradeCommand(
+            project_key=self.project.project_key, symbol="600000.SH", side=TradeSide.SELL,
+            allocation_ratio=Decimal("0.5"), price=Decimal("24"), signal_text="手填卖价",
+            actor="test", trade_time=NOW.replace(minute=14),
+        ))
+        self.assertEqual(self.run_job(), 0)
+        rows = self.snapshots()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["is_partial"], 0)
+        self.assertEqual(Decimal(rows[0]["market_value"]), Decimal("27500"))
+
     def test_stale_or_future_quotes_do_not_create_valuation(self):
         for timestamp in (NOW - timedelta(days=3), NOW + timedelta(minutes=1)):
             with self.subTest(timestamp=timestamp):

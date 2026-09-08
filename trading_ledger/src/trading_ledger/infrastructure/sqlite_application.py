@@ -785,7 +785,7 @@ class SQLiteTradingLedgerApplication:
             """
             SELECT * FROM reference_prices
             WHERE instrument_id = ?
-            ORDER BY price_time DESC, reference_price_id DESC
+            ORDER BY is_manual ASC, price_time DESC, reference_price_id DESC
             LIMIT 1
             """,
             (instrument_id,),
@@ -965,6 +965,40 @@ class SQLiteTradingLedgerApplication:
             pnl_ratio = None
             if quantity > 0 and average_cost > 0 and price is not None:
                 pnl_ratio = (price - average_cost) / average_cost
+            buy_quantity = sell_quantity = Decimal("0")
+            buy_amount = sell_amount = Decimal("0")
+            buy_cost = sell_proceeds = Decimal("0")
+            for trade in connection.execute(
+                """
+                SELECT side, quantity, gross_amount, net_cash_amount
+                FROM trade_records
+                WHERE account_id = ? AND instrument_id = ?
+                  AND record_status = 'CONFIRMED' AND reversal_of_trade_id IS NULL
+                """,
+                (account["account_id"], row["instrument_id"]),
+            ):
+                if trade["side"] == TradeSide.BUY:
+                    buy_quantity += _decimal(trade["quantity"])
+                    buy_amount += _decimal(trade["gross_amount"])
+                    buy_cost -= _decimal(trade["net_cash_amount"])
+                else:
+                    sell_quantity += _decimal(trade["quantity"])
+                    sell_amount += _decimal(trade["gross_amount"])
+                    sell_proceeds += _decimal(trade["net_cash_amount"])
+            if quantity == 0 and buy_cost > 0:
+                pnl_ratio = (sell_proceeds - buy_cost) / buy_cost
+            realized_pnl = _decimal(row["realized_pnl"])
+            sold_cost = sell_proceeds - realized_pnl
+            realized_pnl_ratio = (
+                realized_pnl / sold_cost
+                if sold_cost > 0
+                else Decimal("0") if buy_quantity > 0 else None
+            )
+            unrealized_pnl_ratio = (
+                (price - average_cost) / average_cost
+                if quantity > 0 and price is not None and average_cost > 0
+                else Decimal("0") if quantity == 0 and buy_quantity > 0 else None
+            )
             return TrackingRowView(
                 tracking_id=int(row["tracking_id"]),
                 project_key=project_key,
@@ -979,6 +1013,7 @@ class SQLiteTradingLedgerApplication:
                     else None
                 ),
                 reference_price=price,
+                reference_price_is_trade=bool(latest["is_manual"]) if latest else False,
                 quantity=quantity,
                 sellable_quantity=self._sellable_quantity(
                     connection,
@@ -992,6 +1027,10 @@ class SQLiteTradingLedgerApplication:
                     else Decimal("0")
                 ),
                 pnl_ratio=pnl_ratio,
+                average_buy_price=buy_amount / buy_quantity if buy_quantity > 0 else None,
+                average_sell_price=sell_amount / sell_quantity if sell_quantity > 0 else None,
+                realized_pnl_ratio=realized_pnl_ratio,
+                unrealized_pnl_ratio=unrealized_pnl_ratio,
             )
 
     def list_tracking(self, query: ListTrackingQuery) -> TrackingPageView:
@@ -1428,6 +1467,26 @@ class SQLiteTradingLedgerApplication:
     ) -> TradeView:
         cash_before = _decimal(account["cash_balance"])
         gross = round_money(quantity * price)
+        created_at = self._now().isoformat()
+        equity_before = self._trade_equity_before(
+            connection,
+            cash_before,
+            {
+                int(row["instrument_id"]): _decimal(row["quantity"])
+                for row in connection.execute(
+                    "SELECT instrument_id, quantity FROM positions WHERE account_id = ?",
+                    (account["account_id"],),
+                )
+            },
+            int(instrument["instrument_id"]),
+            price,
+            trade_time.isoformat(),
+            created_at,
+        )
+        trade_metadata = dict(metadata or {})
+        trade_metadata["_ledger_equity_before"] = (
+            _decimal_text(equity_before) if equity_before is not None else None
+        )
         if side is TradeSide.BUY:
             net_cash = -(gross + commission + stamp_tax + transfer_fee)
             if cash_before + net_cash < 0:
@@ -1457,7 +1516,6 @@ class SQLiteTradingLedgerApplication:
             realized = round_money(net_cash - consumed_cost)
 
         trade_id = _identifier("trade")
-        created_at = self._now().isoformat()
         connection.execute(
             """
             INSERT INTO trade_records (
@@ -1493,7 +1551,7 @@ class SQLiteTradingLedgerApplication:
                 external_trade_id,
                 request_id,
                 request_fingerprint,
-                _json(metadata or {}),
+                _json(trade_metadata),
                 actor.strip(),
                 created_at,
             ),
@@ -2242,22 +2300,86 @@ class SQLiteTradingLedgerApplication:
             ).fetchone()
             return self._trade_view(row)
 
+    @staticmethod
+    def _trade_equity_before(
+        connection: sqlite3.Connection,
+        cash: Decimal,
+        quantities: dict[int, Decimal],
+        traded_instrument_id: int,
+        execution_price: Decimal,
+        trade_time: str,
+        recorded_at: str,
+    ) -> Decimal | None:
+        equity = cash
+        for instrument_id, quantity in quantities.items():
+            if quantity == 0:
+                continue
+            if quantity < 0:
+                return None
+            if instrument_id == traded_instrument_id:
+                price = execution_price
+            else:
+                quote = connection.execute(
+                    """
+                    SELECT price FROM reference_prices
+                    WHERE instrument_id = ? AND price_time <= ? AND collected_at <= ?
+                    ORDER BY is_manual ASC, price_time DESC, reference_price_id DESC LIMIT 1
+                    """,
+                    (instrument_id, trade_time, recorded_at),
+                ).fetchone()
+                if quote is None:
+                    return None
+                price = _decimal(quote["price"])
+            equity += round_money(quantity * price)
+        return round_money(equity)
+
     def operation_history(
         self, query: ListOperationHistoryQuery
     ) -> OperationHistoryPageView:
         with self.database.read() as connection:
             project = self._project(connection, query.project_key)
             items: list[OperationHistoryRowView] = []
+            quantities_by_account: dict[int, dict[int, Decimal]] = {}
             for row in connection.execute(
                 """
-                SELECT tr.*, i.symbol, i.name
+                SELECT tr.*, i.symbol, i.name, cl.balance_after
                 FROM trade_records tr
                 JOIN instruments i ON i.instrument_id = tr.instrument_id
+                LEFT JOIN cash_ledger cl ON cl.trade_id = tr.trade_id
                 WHERE tr.project_id = ?
+                ORDER BY tr.rowid
                 """,
                 (project["project_id"],),
             ):
                 is_reversal = row["reversal_of_trade_id"] is not None
+                quantities = quantities_by_account.setdefault(int(row["account_id"]), {})
+                instrument_id = int(row["instrument_id"])
+                position_ratio = None
+                if not is_reversal and row["record_status"] != TradeRecordStatus.DRAFT:
+                    metadata = json.loads(row["metadata_json"] or "{}")
+                    equity_before = None
+                    if "_ledger_equity_before" in metadata:
+                        if metadata["_ledger_equity_before"] is not None:
+                            equity_before = _decimal(metadata["_ledger_equity_before"])
+                    elif row["balance_after"] is not None:
+                        equity_before = self._trade_equity_before(
+                            connection,
+                            _decimal(row["balance_after"]) - _decimal(row["net_cash_amount"]),
+                            quantities,
+                            instrument_id,
+                            _decimal(row["price"]),
+                            str(row["trade_time"]),
+                            str(row["created_at"]),
+                        )
+                    if equity_before is not None and equity_before > 0:
+                        position_ratio = _decimal(row["gross_amount"]) / equity_before
+                if row["record_status"] != TradeRecordStatus.DRAFT:
+                    change = _decimal(row["quantity"])
+                    if row["side"] == TradeSide.SELL:
+                        change = -change
+                    if is_reversal:
+                        change = -change
+                    quantities[instrument_id] = quantities.get(instrument_id, Decimal("0")) + change
                 items.append(
                     OperationHistoryRowView(
                         operation_kind=(
@@ -2268,11 +2390,7 @@ class SQLiteTradingLedgerApplication:
                         name=str(row["name"]),
                         side=TradeSide(row["side"]),
                         source_or_signal=str(row["signal_text"]),
-                        position_ratio=(
-                            _decimal(row["allocation_ratio"])
-                            if row["allocation_ratio"] is not None
-                            else None
-                        ),
+                        position_ratio=position_ratio,
                         price=_decimal(row["price"]),
                         quantity=_decimal(row["quantity"]),
                         gross_amount=_decimal(row["gross_amount"]),
