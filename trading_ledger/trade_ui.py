@@ -89,27 +89,46 @@ def _price_placeholder(current_price: Decimal | None) -> str:
     return f"请输入成交价格，如 {current_price:.2f}"
 
 
+def _fill_tracking_identity(application: TradingLedgerApplication) -> None:
+    st.session_state.pop("tracking_add_lookup_error", None)
+    try:
+        identity = application.lookup_instrument(st.session_state["tracking_add_symbol"])
+    except ApplicationError as error:
+        st.session_state["tracking_add_lookup_error"] = error.detail.message
+    else:
+        st.session_state["tracking_add_symbol"] = identity.symbol
+        st.session_state["tracking_add_name"] = identity.name
+
+
 @st.dialog("添加观察股", icon=":material/add:")
 def render_add_tracking_dialog(
     application: TradingLedgerApplication, project_key: str, actor: str
 ) -> None:
     with st.form("add_tracking_form"):
-        identity = st.columns(2)
-        symbol = identity[0].text_input(
-            "股票代码 *", placeholder="例如：300377 或 300377.SZ"
+        code_column, fetch_column = st.columns([4, 1], vertical_alignment="bottom")
+        symbol = code_column.text_input(
+            "股票代码 *", placeholder="例如：300377", key="tracking_add_symbol"
         )
-        name = identity[1].text_input("股票名称 *", placeholder="例如：赢时胜")
+        fetch_column.form_submit_button(
+            "获取", on_click=_fill_tracking_identity, args=(application,), width="stretch"
+        )
+        name = st.text_input(
+            "股票名称（选填）", placeholder="点击获取自动填写，也可手动输入",
+            key="tracking_add_name",
+        )
+        if error := st.session_state.get("tracking_add_lookup_error"):
+            st.warning(error)
         source_text = st.text_input(
             "来源 *", placeholder="例如：选股理由、研究员、策略或信息渠道"
         )
         submitted = st.form_submit_button("保存到观察中", type="primary")
     if not submitted:
         return
-    if not symbol.strip() or not name.strip() or not source_text.strip():
-        st.error("股票代码、股票名称和来源不能为空。")
+    if not symbol.strip() or not source_text.strip():
+        st.error("股票代码和来源不能为空。")
         return
     try:
-        application.add_tracking(
+        tracking = application.add_tracking(
             AddTrackedInstrumentCommand(
                 project_key=project_key,
                 symbol=symbol,
@@ -121,7 +140,7 @@ def render_add_tracking_dialog(
     except ApplicationError as error:
         _show_error(error)
     else:
-        _set_notice(f"{name.strip()} 已加入观察中。")
+        _set_notice(f"{tracking.name or tracking.symbol} 已加入观察中。")
         st.rerun()
 
 
@@ -179,8 +198,13 @@ def render_buy_dialog(
     name: str,
     available_cash: Decimal,
     current_price: Decimal | None,
+    total_equity: Decimal,
 ) -> None:
-    st.caption(f"{symbol} · {name} · 当前可用资金 {money(available_cash)}")
+    cash_ratio = available_cash / total_equity if total_equity > 0 else None
+    st.caption(
+        f"{symbol} · {name} · 当前可用资金 {money(available_cash)}"
+        f" · 可用资金占总权益 {pct(cash_ratio)}"
+    )
     percentage = st.number_input(
         "买入比例（%） *",
         min_value=0.01,
@@ -255,8 +279,12 @@ def render_sell_dialog(
     name: str,
     sellable_quantity: Decimal,
     current_price: Decimal | None,
+    position_ratio: Decimal | None,
 ) -> None:
-    st.caption(f"{symbol} · {name} · 当前可卖持仓 {sellable_quantity:,.0f} 股")
+    st.caption(
+        f"{symbol} · {name} · 当前可卖持仓 {sellable_quantity:,.0f} 股"
+        f" · 该股市值占总权益 {pct(position_ratio)}"
+    )
     percentage = st.number_input(
         "卖出比例（%） *",
         min_value=0.01,
@@ -388,6 +416,7 @@ def render_tracking_table(
                 row.name,
                 tracking_page.account.cash_balance,
                 row.reference_price,
+                total_equity=tracking_page.account.equity,
             )
         if actions[1].button(
             ":material/sell:",
@@ -408,11 +437,18 @@ def render_tracking_table(
                 row.name,
                 row.sellable_quantity,
                 row.reference_price,
+                position_ratio=(
+                    row.position_ratio
+                    if tracking_page.account.equity > 0 and row.reference_price is not None
+                    else None
+                ),
             )
         with actions[2].popover(":material/edit:", help="编辑"):
             with st.form(f"tracking_edit_{row.tracking_id}"):
                 symbol = st.text_input("股票代码 *", value=row.symbol)
-                name = st.text_input("股票名称 *", value=row.name)
+                name = st.text_input(
+                    "股票名称（选填）", value=row.name, placeholder="刷新价格后自动补全"
+                )
                 source = st.text_input("来源 *", value=row.source_text)
                 submitted = st.form_submit_button("保存", type="primary")
             if submitted:
@@ -434,7 +470,7 @@ def render_tracking_table(
                         else str(error)
                     )
                 else:
-                    _set_notice(f"{name.strip()} 已更新。")
+                    _set_notice(f"{name.strip() or symbol.strip()} 已更新。")
                     st.rerun()
         has_position = row.quantity > 0
         if actions[3].button(
@@ -521,6 +557,8 @@ def current_tracking_page(
         icon=":material/add:",
         key="tracking_add_instrument",
     ):
+        for key in ("tracking_add_symbol", "tracking_add_name", "tracking_add_lookup_error"):
+            st.session_state.pop(key, None)
         render_add_tracking_dialog(application, project_key, actor)
 
 

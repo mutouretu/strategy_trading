@@ -19,6 +19,7 @@ from .contracts import (
     GetMonthlyStatisticsQuery,
     GetProjectQuery,
     GetTradeQuery,
+    InstrumentIdentityView,
     ListOperationHistoryQuery,
     ListPositionsQuery,
     ListProjectsQuery,
@@ -63,6 +64,8 @@ class TradingLedgerApplication(Protocol):
     def get_project(self, query: GetProjectQuery) -> ProjectView: ...
 
     def add_tracking(self, command: AddTrackedInstrumentCommand) -> TrackingRowView: ...
+
+    def lookup_instrument(self, symbol: str) -> InstrumentIdentityView: ...
 
     def update_tracking(
         self, command: UpdateTrackedInstrumentCommand

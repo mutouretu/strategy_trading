@@ -31,6 +31,7 @@ from trading_ledger.application.contracts import (
     GetMonthlyStatisticsQuery,
     GetProjectQuery,
     GetTradeQuery,
+    InstrumentIdentityView,
     ListOperationHistoryQuery,
     ListPositionsQuery,
     ListProjectsQuery,
@@ -126,7 +127,7 @@ class SQLiteTradingLedgerApplication:
     def _normalize_symbol(symbol: str) -> tuple[str, str, str]:
         value = symbol.strip().upper().replace(".SS", ".SH")
         if value.isdigit() and len(value) == 6:
-            if value.startswith(("4", "8")):
+            if value.startswith(("4", "8", "920")):
                 value += ".BJ"
             elif value.startswith(("5", "6", "9")):
                 value += ".SH"
@@ -508,7 +509,8 @@ class SQLiteTradingLedgerApplication:
         if row:
             connection.execute(
                 """
-                UPDATE instruments SET name = ?, status = 'ACTIVE', updated_at = ?
+                UPDATE instruments SET name = COALESCE(NULLIF(?, ''), name),
+                    status = 'ACTIVE', updated_at = ?
                 WHERE instrument_id = ?
                 """,
                 (name.strip(), occurred_at, row["instrument_id"]),
@@ -530,6 +532,19 @@ class SQLiteTradingLedgerApplication:
             "SELECT * FROM instruments WHERE instrument_id = ?",
             (cursor.lastrowid,),
         ).fetchone()
+
+    def lookup_instrument(self, symbol: str) -> InstrumentIdentityView:
+        """Resolve an input code from quotes without writing any ledger data."""
+        normalized, _, _ = self._normalize_symbol(symbol)
+        quotes, _ = self.quote_provider.fetch_many((normalized,))
+        quote = quotes.get(normalized)
+        if quote is None or quote.symbol != normalized or not quote.name.strip():
+            raise ApplicationError(
+                ErrorCode.INSTRUMENT_NOT_FOUND,
+                "暂时未获取到股票信息，可重试或手动填写名称。",
+                retryable=True,
+            )
+        return InstrumentIdentityView(symbol=normalized, name=quote.name.strip())
 
     def add_tracking(self, command: AddTrackedInstrumentCommand) -> TrackingRowView:
         occurred_at = self._time(command.added_at)
@@ -605,7 +620,7 @@ class SQLiteTradingLedgerApplication:
                 actor=command.actor,
                 after={
                     "symbol": instrument["symbol"],
-                    "name": command.name.strip(),
+                    "name": instrument["name"],
                     "source_text": command.source_text.strip(),
                 },
                 occurred_at=occurred_text,
@@ -688,7 +703,7 @@ class SQLiteTradingLedgerApplication:
                 },
                 after={
                     "symbol": instrument["symbol"],
-                    "name": command.name.strip(),
+                    "name": instrument["name"],
                     "source_text": command.source_text.strip(),
                 },
                 occurred_at=now,
@@ -1108,10 +1123,10 @@ class SQLiteTradingLedgerApplication:
                         command.actor,
                     ),
                 )
-                if quote.name:
+                if quote.name.strip():
                     connection.execute(
                         "UPDATE instruments SET name = ?, updated_at = ? WHERE instrument_id = ?",
-                        (quote.name, now, instrument["instrument_id"]),
+                        (quote.name.strip(), now, instrument["instrument_id"]),
                     )
             self._audit(
                 connection,

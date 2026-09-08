@@ -39,8 +39,8 @@
 | 新建项目 | `CreateProjectCommand` | 名称、初始资金、可选说明、操作者 |
 | 编辑项目 | `UpdateProjectCommand` | `project_key`、名称、说明、操作者 |
 | 归档/恢复项目 | `ArchiveProjectCommand` / `RestoreProjectCommand` | `project_key`、操作者 |
-| 添加观察股 | `AddTrackedInstrumentCommand` | 项目、代码、名称、必填 `source_text` |
-| 编辑观察股 | `UpdateTrackedInstrumentCommand` | 项目、`tracking_id`、代码、名称、必填 `source_text` |
+| 添加观察股 | `AddTrackedInstrumentCommand` | 项目、代码、可留空的名称、必填 `source_text` |
+| 编辑观察股 | `UpdateTrackedInstrumentCommand` | 项目、`tracking_id`、代码、可留空的名称、必填 `source_text` |
 | 删除当前跟踪 | `CloseTrackedInstrumentCommand` | 关闭当前跟踪，不删除历史事实 |
 | 归档当前跟踪 | `ArchiveTrackedInstrumentCommand` | 归档当前跟踪，不删除历史事实 |
 | 刷新价格 | `RefreshTrackingPricesCommand` | 项目、操作者 |
@@ -62,6 +62,10 @@
 | 交易统计 | `ListStatisticsMonthsQuery`、`GetMonthlyStatisticsQuery` | `MonthlyStatisticsView` |
 
 所有项目内 Query 必须显式传入 `project_key`。查询没有隐式写入；观察到期、价格刷新和状态重算均由显式 Command 触发。
+
+添加观察股页面只要求股票代码和来源。六位代码在保存时自动补全 `.SH`、`.SZ` 或 `.BJ`（包括 `920` 开头的北交所代码），名称通过刷新行情补齐。名称留空时复用已有标的名称，不清空其他项目已识别的名称；行情失败时保留原记录，可稍后重试。
+
+添加框保留可编辑的代码和名称输入框。“获取”调用只读 `lookup_instrument(symbol)` 查询行情并返回 `InstrumentIdentityView`，回填后缀和名称，不创建观察记录或写入价格；用户仍需点击“保存到观察中”。获取失败时保留已输入内容，支持直接手工录入。
 
 每日估值可以由独立定时任务调用，默认北京时间工作日 15:15 运行，不依赖页面访问。
 自动任务先刷新行情，使用 `require_fresh_prices=True` 在估值事务内验证持仓价格为当天且不晚于估值时间；失败不覆盖已有快照。

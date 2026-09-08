@@ -176,7 +176,6 @@ class AddTrackedInstrumentCommand:
     def __post_init__(self) -> None:
         _require_project_key(self.project_key)
         _require_text(self.symbol, "symbol")
-        _require_text(self.name, "name")
         _require_text(self.source_text, "source_text")
         _require_text(self.actor, "actor")
 
@@ -195,7 +194,6 @@ class UpdateTrackedInstrumentCommand:
         if self.tracking_id <= 0:
             raise ValueError("tracking_id must be positive.")
         _require_text(self.symbol, "symbol")
-        _require_text(self.name, "name")
         _require_text(self.source_text, "source_text")
         _require_text(self.actor, "actor")
 
@@ -521,6 +519,12 @@ class ListPositionsQuery:
 
 
 # View models returned to Streamlit and, after serialization, to the API adapter.
+
+
+@dataclass(frozen=True, slots=True)
+class InstrumentIdentityView:
+    symbol: str
+    name: str
 
 
 @dataclass(frozen=True, slots=True)
