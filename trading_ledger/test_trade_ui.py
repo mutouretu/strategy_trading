@@ -106,6 +106,16 @@ class TradeUiTest(unittest.TestCase):
         report = SimpleNamespace(opening_capital=Decimal("100000"))
         self.assertEqual(trade_ui._valuation_chart_domain(report), (85000.0, 115000.0))
 
+    def test_valuation_chart_date_domain_covers_the_selected_month(self) -> None:
+        for month, last_day in (("2026-09", 30), ("2026-12", 31), ("2026-02", 28), ("2028-02", 29)):
+            with self.subTest(month=month):
+                domain = trade_ui._valuation_chart_date_domain(SimpleNamespace(month=month))
+                year, number = map(int, month.split("-"))
+                self.assertEqual(domain, [
+                    {"year": year, "month": number, "date": 1},
+                    {"year": year, "month": number, "date": last_day},
+                ])
+
 
 if __name__ == "__main__":
     unittest.main()

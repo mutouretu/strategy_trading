@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+from calendar import monthrange
 from decimal import Decimal
 
 import pandas as pd
@@ -61,10 +62,9 @@ def _profit_style(value) -> str:
 
 def _profit_metric(label: str, text: str, value, key: str) -> None:
     with st.container(key=key):
-        st.markdown(
+        st.html(
             f'<style>.st-key-{key} [data-testid="stMetricValue"] '
             f'{{ color: {_profit_color(value)}; }}</style>',
-            unsafe_allow_html=True,
         )
         st.metric(label, text)
 
@@ -631,14 +631,14 @@ def operation_history_page(
     frame = pd.DataFrame(
         [
             {
-                "股票代码": row.symbol,
-                "股票名称": row.name,
+                "股票": f"{row.symbol} {row.name}".strip(),
                 "记录时间": row.recorded_at.strftime("%Y-%m-%d %H:%M:%S"),
                 "操作": action_text[(row.operation_kind, row.side)],
                 "来源/信号": row.source_or_signal,
                 "成交价格": float(row.price) if row.price is not None else None,
                 "交易数量": float(row.quantity) if row.quantity is not None else None,
                 "交易金额": float(row.gross_amount) if row.gross_amount is not None else None,
+                "交易比例": float(row.allocation_ratio) if row.allocation_ratio is not None else None,
                 "总仓占比": float(row.position_ratio) if row.position_ratio is not None else None,
             }
             for row in result.rows
@@ -650,11 +650,16 @@ def operation_history_page(
                 "成交价格": "{:.2f}",
                 "交易数量": "{:,.0f}",
                 "交易金额": "{:,.2f}",
+                "交易比例": "{:.2%}",
                 "总仓占比": "{:.2%}",
             },
             na_rep="—",
         ),
         column_config={
+            "交易比例": st.column_config.NumberColumn(
+                help="当时填写的买卖比例：买入以可用资金为基数，卖出以该股可卖持仓为基数。"
+                "观察、冲正或未记录比例时显示 —。"
+            ),
             "总仓占比": st.column_config.NumberColumn(
                 help="本笔成交金额（不含税费）÷ 交易前总权益。该股按成交价估值，"
                 "其他持仓按当时已有参考价估值；观察、冲正或历史依据不足时显示 —。"
@@ -755,26 +760,23 @@ def _valuation_chart_domain(report) -> tuple[float, float]:
     return opening_capital - margin, opening_capital + margin
 
 
+def _valuation_chart_date_domain(report) -> list[dict[str, int]]:
+    year, month = (int(part) for part in report.month.split("-"))
+    return [
+        {"year": year, "month": month, "date": 1},
+        {"year": year, "month": month, "date": monthrange(year, month)[1]},
+    ]
+
+
 def monthly_trade_statistics_page(
     application: TradingLedgerApplication, project_key: str, actor: str
 ) -> None:
     _show_notice()
     st.markdown(
-        '<div class="beili-note">按月查看交易、外部资金流、收益和风险指标。'
+        '<div class="beili-note">按月查看交易、收益和回撤。'
         "启用服务器定时任务后，工作日 15:15 自动记录估值；补录交易后可手动更新。</div>",
         unsafe_allow_html=True,
     )
-    if st.button("记录今日估值", type="primary", icon=":material/calculate:"):
-        try:
-            valuation = application.record_daily_valuation(
-                RecordDailyValuationCommand(project_key=project_key, actor=actor)
-            )
-        except ApplicationError as error:
-            _show_error(error)
-        else:
-            status = "部分估值" if valuation.is_partial else "完整估值"
-            _set_notice(f"{valuation.valuation_date} {status}已记录。")
-            st.rerun()
     months = application.list_statistics_months(
         ListStatisticsMonthsQuery(project_key=project_key)
     )
@@ -786,7 +788,10 @@ def monthly_trade_statistics_page(
     first[0].metric("交易股票", f"{report.instrument_count} 只")
     first[1].metric("买入次数", f"{report.buy_count} 次")
     first[2].metric("卖出次数", f"{report.sell_count} 次")
-    first[3].metric("外部资金净流入", money(report.external_net_flow))
+    with first[3]:
+        _profit_metric(
+            "最大回撤", pct(report.max_drawdown), report.max_drawdown, "monthly_drawdown"
+        )
     second = st.columns(4)
     second[0].metric("期初资金", money(report.opening_capital))
     with second[1]:
@@ -796,12 +801,6 @@ def monthly_trade_statistics_page(
         _profit_metric(
             "本月收益率", pct(report.return_rate), report.return_rate, "monthly_return"
         )
-    risk = st.columns(2)
-    with risk[0]:
-        _profit_metric(
-            "最大回撤", pct(report.max_drawdown), report.max_drawdown, "monthly_drawdown"
-        )
-    risk[1].metric("年化波动率", pct(report.annualized_volatility))
     if report.is_partial:
         detail = (
             "缺少价格：" + "、".join(report.missing_symbols)
@@ -809,7 +808,24 @@ def monthly_trade_statistics_page(
             else "当月还没有估值快照"
         )
         st.warning(f"当前报告为部分估值：{detail}。")
-    st.markdown("#### 估值走势")
+    with st.container(horizontal=True, vertical_alignment="center"):
+        st.markdown("#### 估值走势", width="content")
+        record_valuation = st.button(
+            ":material/add_chart:",
+            help="记录今日估值",
+            key="statistics_record_valuation",
+        )
+    if record_valuation:
+        try:
+            valuation = application.record_daily_valuation(
+                RecordDailyValuationCommand(project_key=project_key, actor=actor)
+            )
+        except ApplicationError as error:
+            _show_error(error)
+        else:
+            status = "部分估值" if valuation.is_partial else "完整估值"
+            _set_notice(f"{valuation.valuation_date} {status}已记录。")
+            st.rerun()
     st.caption("当月汇总和股票状态按最新账本显示；历史月份及走势图按已记录估值显示。")
     valuation_frame = _valuation_chart_frame(report)
     if valuation_frame.empty:
@@ -829,6 +845,10 @@ def monthly_trade_statistics_page(
                         "field": "日期",
                         "type": "temporal",
                         "title": None,
+                        "scale": {
+                            "domain": _valuation_chart_date_domain(report),
+                            "nice": False,
+                        },
                         "axis": {
                             "format": "%m-%d",
                             "tickCount": "day",

@@ -651,6 +651,7 @@ class OperationHistoryRowView:
     quantity: Decimal | None
     gross_amount: Decimal | None
     cash_change: Decimal | None
+    allocation_ratio: Decimal | None = None  # 买入占可用资金，卖出占可卖持仓。
 
 
 @dataclass(frozen=True, slots=True)
