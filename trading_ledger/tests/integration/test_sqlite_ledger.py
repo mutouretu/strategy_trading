@@ -403,6 +403,10 @@ class SQLiteLedgerTests(unittest.TestCase):
         buy_row = next(row for row in rows if row.side == TradeSide.BUY)
         sell_row = next(row for row in rows if row.source_or_signal == "达到止盈位")
         self.assertEqual(buy_row.position_ratio, Decimal("0.49"))
+        self.assertEqual(buy_row.allocation_ratio, Decimal("0.5"))
+        self.assertEqual(sell_row.allocation_ratio, Decimal("0.5"))
+        self.assertEqual(next(row for row in rows if row.source_or_signal == "清仓").allocation_ratio, Decimal("1"))
+        self.assertIsNone(next(row for row in rows if row.side is None).allocation_ratio)
         self.assertEqual(
             sell_row.position_ratio,
             sell.gross_amount / (Decimal("100000") + buy.net_cash_amount + buy.quantity * sell.price),

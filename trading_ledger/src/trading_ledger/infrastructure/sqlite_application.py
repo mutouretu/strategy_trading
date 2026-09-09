@@ -2395,6 +2395,11 @@ class SQLiteTradingLedgerApplication:
                         quantity=_decimal(row["quantity"]),
                         gross_amount=_decimal(row["gross_amount"]),
                         cash_change=_decimal(row["net_cash_amount"]),
+                        allocation_ratio=(
+                            _decimal(row["allocation_ratio"])
+                            if not is_reversal and row["allocation_ratio"] is not None
+                            else None
+                        ),
                     )
                 )
             for row in connection.execute(

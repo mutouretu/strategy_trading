@@ -67,7 +67,16 @@ class StreamlitAppTests(unittest.TestCase):
         app.radio[0].set_value("交易统计").run()
         self.assertEqual(app.exception, [])
         self.assertEqual(app.radio[0].value, "交易统计")
-        self.assertTrue(any(button.label == "记录今日估值" for button in app.button))
+        button = app.button(key="statistics_record_valuation")
+        self.assertEqual(button.label, ":material/add_chart:")
+        labels = [metric.label for metric in app.metric]
+        self.assertEqual(len(labels), 8)
+        self.assertNotIn("外部资金净流入", labels)
+        self.assertNotIn("年化波动率", labels)
+        button.click().run()
+        self.assertEqual(app.exception, [])
+        self.assertTrue(any("已记录" in item.value for item in app.success))
+        self.assertTrue(app.get("vega_lite_chart"))
 
     def test_short_valuation_chart_uses_daily_ticks(self) -> None:
         application = get_application()
@@ -99,6 +108,10 @@ class StreamlitAppTests(unittest.TestCase):
                 self.assertEqual(axis["format"], "%m-%d")
                 self.assertEqual(axis["tickCount"], "day")
                 self.assertEqual(axis["labelOverlap"], "greedy")
+                self.assertEqual(spec["encoding"]["x"]["scale"]["domain"], [
+                    {"year": 2026, "month": 9, "date": 1},
+                    {"year": 2026, "month": 9, "date": 30},
+                ])
 
     def test_entering_another_project_loads_its_tracking_page(self) -> None:
         application = get_application()
@@ -171,11 +184,26 @@ class StreamlitAppTests(unittest.TestCase):
             signal_text="测试买入",
             actor="test-user",
         ))
+        application.confirm_manual_trade(ConfirmManualTradeCommand(
+            project_key=project.project_key,
+            symbol="600000.SH",
+            side=TradeSide.SELL,
+            allocation_ratio=Decimal("0.25"),
+            price=Decimal("11"),
+            signal_text="测试卖出",
+            actor="test-user",
+        ))
         app = self._app().run()
         app.radio[0].set_value("操作历史").run()
         self.assertEqual(app.exception, [])
         frame = app.dataframe[0].value
         self.assertNotIn("资金变动", frame.columns)
+        self.assertNotIn("股票代码", frame.columns)
+        self.assertNotIn("股票名称", frame.columns)
+        self.assertTrue((frame["股票"] == "600000.SH 浦发银行").all())
+        self.assertEqual(frame.loc[frame["操作"] == "买入", "交易比例"].iloc[0], 0.5)
+        self.assertEqual(frame.loc[frame["操作"] == "卖出", "交易比例"].iloc[0], 0.25)
+        self.assertTrue(frame.loc[frame["操作"] == "观察", "交易比例"].isna().all())
         self.assertIn("总仓占比", frame.columns)
         self.assertEqual(frame.loc[frame["操作"] == "买入", "总仓占比"].iloc[0], 0.49)
 
