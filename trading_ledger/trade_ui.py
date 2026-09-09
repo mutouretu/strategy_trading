@@ -400,14 +400,14 @@ def render_tracking_table(
             border-color: transparent;
         }
         [class*="st-key-tracking_row_holding_"] {
-            background: rgba(245, 215, 140, 0.17);
-            border-color: rgba(232, 198, 106, 0.38);
-            box-shadow: inset 3px 0 0 #E8C66A;
+            background: rgba(34, 211, 238, 0.11);
+            border-color: rgba(34, 211, 238, 0.38);
+            box-shadow: inset 3px 0 0 var(--beili-violet);
         }
         [class*="st-key-tracking_row_closed_"] {
-            background: rgba(125, 190, 245, 0.13);
-            border-color: rgba(125, 190, 245, 0.30);
-            box-shadow: inset 3px 0 0 #7DBEF5;
+            background: rgba(167, 139, 250, 0.09);
+            border-color: rgba(167, 139, 250, 0.25);
+            box-shadow: inset 3px 0 0 #A78BFA;
         }
         </style>""",
         unsafe_allow_html=True,
