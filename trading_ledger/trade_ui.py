@@ -376,10 +376,28 @@ def render_tracking_table(
     st.markdown(
         """<style>
         [class*="st-key-tracking_row_"] {
-            margin: 0.18rem 0;
-            padding: 0.45rem 0.6rem 0.25rem;
-            border: 1px solid transparent;
+            margin: 0;
+            padding: 0.65rem 0.75rem;
             border-radius: 0.75rem;
+        }
+        .st-key-tracking_header {
+            padding: 0 0.75rem;
+            border-color: transparent;
+        }
+        .st-key-tracking_rows > [data-testid="stElementContainer"] {
+            min-height: 1rem;
+            display: flex;
+            align-items: center;
+        }
+        .st-key-tracking_rows > [data-testid="stElementContainer"] > [data-testid="stMarkdown"] {
+            width: 100%;
+        }
+        .st-key-tracking_rows > [data-testid="stElementContainer"] hr {
+            margin: 0;
+            border-color: rgba(132, 148, 168, 0.25);
+        }
+        [class*="st-key-tracking_row_watching_"] {
+            border-color: transparent;
         }
         [class*="st-key-tracking_row_holding_"] {
             background: rgba(245, 215, 140, 0.17);
@@ -394,8 +412,9 @@ def render_tracking_table(
         </style>""",
         unsafe_allow_html=True,
     )
-    ratios = [1.25, 1.0, 1.4, 0.72, 0.78, 1.6, 1.5, 2.2]
-    headers = st.columns(ratios, vertical_alignment="center")
+    ratios = [1.25, 1.1, 1.35, 1.0, 1.0, 1.7, 1.55, 2.2]
+    header_container = st.container(key="tracking_header", border=True)
+    headers = header_container.columns(ratios, vertical_alignment="center")
     for column, label in zip(
         headers[:7],
         ["股票", "加入时间", "来源", "当前仓位", "当前价格", "买入/卖出均价", "实盈/浮盈"],
@@ -419,10 +438,14 @@ def render_tracking_table(
                 f"已更新 {result.updated_count}/{result.requested_count} 只股票。"
             )
             st.rerun()
-    st.divider()
-    for row in tracking_page.rows:
-        row_container = st.container(
-            key=f"tracking_row_{_tracking_row_state(row)}_{row.tracking_id}"
+    rows_container = st.container(key="tracking_rows", gap=None)
+    rows_container.divider()
+    for index, row in enumerate(tracking_page.rows):
+        if index:
+            rows_container.divider()
+        row_container = rows_container.container(
+            key=f"tracking_row_{_tracking_row_state(row)}_{row.tracking_id}",
+            border=True,
         )
         columns = row_container.columns(ratios, vertical_alignment="center")
         columns[0].markdown(f"**{row.symbol}**  \n{html.escape(row.name)}")
@@ -529,10 +552,6 @@ def render_tracking_table(
             else:
                 _set_notice(f"{row.name} 已归档。")
                 st.rerun()
-        st.markdown(
-            '<div style="height:1px;background:rgba(48,55,68,0.65);margin:0.05rem 0;"></div>',
-            unsafe_allow_html=True,
-        )
 
 
 def current_tracking_page(
