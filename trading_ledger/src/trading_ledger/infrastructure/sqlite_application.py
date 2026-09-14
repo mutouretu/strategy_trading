@@ -722,8 +722,9 @@ class SQLiteTradingLedgerApplication:
             project = self._project(connection, project_key, writable=True)
             tracking = connection.execute(
                 """
-                SELECT t.*, COALESCE(p.quantity, '0') AS quantity
+                SELECT t.*, i.symbol, i.name, COALESCE(p.quantity, '0') AS quantity
                 FROM tracked_instruments t
+                JOIN instruments i ON i.instrument_id = t.instrument_id
                 LEFT JOIN accounts a ON a.project_id = t.project_id
                                     AND a.account_code = 'primary-cny'
                 LEFT JOIN positions p ON p.account_id = a.account_id
@@ -753,6 +754,11 @@ class SQLiteTradingLedgerApplication:
                 object_id=str(tracking_id),
                 action=f"TRACKING_{status}",
                 actor=actor,
+                after={
+                    "symbol": tracking["symbol"],
+                    "name": tracking["name"],
+                    "source_text": tracking["source_text"],
+                },
                 occurred_at=now,
             )
         return self._tracking_row(project_key, tracking_id)
@@ -2404,16 +2410,30 @@ class SQLiteTradingLedgerApplication:
                 )
             for row in connection.execute(
                 """
-                SELECT * FROM audit_events
-                WHERE project_id = ?
-                  AND action IN ('TRACKING_ADDED', 'TRACKING_REOPENED')
+                SELECT event.*, COALESCE(event.after_json, (
+                    SELECT prior.after_json FROM audit_events prior
+                    WHERE prior.project_id = event.project_id
+                      AND prior.object_type = event.object_type
+                      AND prior.object_id = event.object_id
+                      AND prior.rowid < event.rowid
+                      AND prior.action IN ('TRACKING_ADDED', 'TRACKING_REOPENED', 'TRACKING_UPDATED')
+                      AND prior.after_json IS NOT NULL
+                    ORDER BY prior.rowid DESC LIMIT 1
+                )) AS history_payload
+                FROM audit_events event
+                WHERE event.project_id = ? AND event.object_type = 'TRACKING'
+                  AND event.action IN ('TRACKING_ADDED', 'TRACKING_REOPENED', 'TRACKING_ARCHIVED')
                 """,
                 (project["project_id"],),
             ):
-                payload = json.loads(row["after_json"] or "{}")
+                payload = json.loads(row["history_payload"] or "{}")
                 items.append(
                     OperationHistoryRowView(
-                        operation_kind=OperationKind.TRACKING,
+                        operation_kind=(
+                            OperationKind.ARCHIVE
+                            if row["action"] == "TRACKING_ARCHIVED"
+                            else OperationKind.TRACKING
+                        ),
                         recorded_at=datetime.fromisoformat(row["created_at"]),
                         symbol=str(payload.get("symbol") or ""),
                         name=str(payload.get("name") or payload.get("symbol") or ""),
