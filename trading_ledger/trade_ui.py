@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 from calendar import monthrange
+from dataclasses import replace
 from decimal import Decimal
 
 import pandas as pd
@@ -39,6 +40,8 @@ def pct(value: Decimal | None) -> str:
 
 
 def _operation_style(value: str) -> str:
+    if value == "归档":
+        return "background-color: #292438; color: #C4B5FD; font-weight: 700;"
     if value in {"买入", "冲正买入"}:
         return "background-color: #183A4C; color: #7DD3FC; font-weight: 700;"
     if value in {"卖出", "冲正卖出"}:
@@ -554,6 +557,10 @@ def render_tracking_table(
                 st.rerun()
 
 
+def _set_tracking_page(page: int) -> None:
+    st.session_state["tracking_page_number"] = page
+
+
 def current_tracking_page(
     application: TradingLedgerApplication, project_key: str, actor: str
 ) -> None:
@@ -566,6 +573,10 @@ def current_tracking_page(
     keyword = st.text_input(
         "搜索股票", placeholder="输入股票代码或名称", key="daily_recommendation_search"
     )
+    context = (project_key, keyword.strip())
+    if st.session_state.get("tracking_page_context") != context:
+        st.session_state["tracking_page_context"] = context
+        _set_tracking_page(1)
     try:
         page = application.list_tracking(
             ListTrackingQuery(project_key=project_key, keyword=keyword)
@@ -582,10 +593,29 @@ def current_tracking_page(
         f"账户总权益 {money(page.account.equity)} · "
         f"可用资金 {money(page.account.cash_balance)}"
     )
+    page_size = 10
+    page_count = max(1, (len(page.rows) + page_size - 1) // page_size)
+    page_number = min(max(1, st.session_state.get("tracking_page_number", 1)), page_count)
+    _set_tracking_page(page_number)
     if not page.rows:
         st.info("当前没有符合条件的观察或持仓股票。")
     else:
-        render_tracking_table(application, project_key, actor, page)
+        start = (page_number - 1) * page_size
+        render_tracking_table(
+            application, project_key, actor,
+            replace(page, rows=page.rows[start:start + page_size]),
+        )
+        st.caption(f"第 {page_number}/{page_count} 页 · 共 {len(page.rows)} 个标的 · 每页 10 个")
+        if page_count > 1:
+            previous, _, following = st.columns([1, 4, 1])
+            previous.button(
+                "上一页", key="tracking_previous_page", disabled=page_number == 1,
+                on_click=_set_tracking_page, args=(page_number - 1,), width="stretch",
+            )
+            following.button(
+                "下一页", key="tracking_next_page", disabled=page_number == page_count,
+                on_click=_set_tracking_page, args=(page_number + 1,), width="stretch",
+            )
     if st.button(
         "添加观察股",
         type="primary",
@@ -642,6 +672,7 @@ def operation_history_page(
         return
     action_text = {
         (OperationKind.TRACKING, None): "观察",
+        (OperationKind.ARCHIVE, None): "归档",
         (OperationKind.TRADE, TradeSide.BUY): "买入",
         (OperationKind.TRADE, TradeSide.SELL): "卖出",
         (OperationKind.REVERSAL, TradeSide.BUY): "冲正买入",
@@ -677,11 +708,11 @@ def operation_history_page(
         column_config={
             "交易比例": st.column_config.NumberColumn(
                 help="当时填写的买卖比例：买入以可用资金为基数，卖出以该股可卖持仓为基数。"
-                "观察、冲正或未记录比例时显示 —。"
+                "观察、归档、冲正或未记录比例时显示 —。"
             ),
             "总仓占比": st.column_config.NumberColumn(
                 help="本笔成交金额（不含税费）÷ 交易前总权益。该股按成交价估值，"
-                "其他持仓按当时已有参考价估值；观察、冲正或历史依据不足时显示 —。"
+                "其他持仓按当时已有参考价估值；观察、归档、冲正或历史依据不足时显示 —。"
             ),
         },
         width="stretch",

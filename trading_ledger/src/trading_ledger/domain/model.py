@@ -46,6 +46,7 @@ class RatioBasis(StrEnum):
 
 class OperationKind(StrEnum):
     TRACKING = "TRACKING"
+    ARCHIVE = "ARCHIVE"
     TRADE = "TRADE"
     REVERSAL = "REVERSAL"
 

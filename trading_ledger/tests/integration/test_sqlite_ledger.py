@@ -308,6 +308,44 @@ class SQLiteLedgerTests(unittest.TestCase):
         self.assertEqual(trade.transfer_fee_amount, Decimal("0.26"))
         self.assertEqual(trade.net_cash_amount, Decimal("26368.34"))
 
+    def test_archive_history_preserves_snapshot_and_supports_legacy_events(self) -> None:
+        self.application.archive_tracking(ArchiveTrackedInstrumentCommand(
+            self.project.project_key, self.tracking.tracking_id, "test-user"
+        ))
+        self.application.update_tracking(UpdateTrackedInstrumentCommand(
+            project_key=self.project.project_key,
+            tracking_id=self.tracking.tracking_id,
+            symbol="600000.SH",
+            name="编辑后的名称",
+            source_text="编辑后的来源",
+            actor="test-user",
+        ))
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                if legacy:
+                    with self.application.database.transaction() as connection:
+                        connection.execute(
+                            "UPDATE audit_events SET after_json = NULL WHERE action = 'TRACKING_ARCHIVED'"
+                        )
+                history = self.application.operation_history(ListOperationHistoryQuery(
+                    self.project.project_key, keyword="浦发银行", page_size=1
+                ))
+                self.assertEqual(history.total_count, 2)
+                self.assertEqual(history.page_count, 2)
+                archive = history.rows[0]
+                self.assertEqual(archive.operation_kind, OperationKind.ARCHIVE)
+                self.assertEqual(archive.symbol, "600000.SH")
+                self.assertEqual(archive.name, "浦发银行")
+                self.assertEqual(archive.source_or_signal, "基本面观察")
+                for field in ("side", "price", "quantity", "gross_amount", "cash_change", "position_ratio", "allocation_ratio"):
+                    self.assertIsNone(getattr(archive, field))
+        other = self.application.create_project(CreateProjectCommand(
+            "其他项目", Decimal("100000"), "test-user"
+        ))
+        self.assertEqual(self.application.operation_history(
+            ListOperationHistoryQuery(other.project_key)
+        ).total_count, 0)
+
     def test_failed_trade_rolls_back_without_cash_or_trade_changes(self) -> None:
         with self.assertRaises(ApplicationError):
             self.application.preview_manual_trade(

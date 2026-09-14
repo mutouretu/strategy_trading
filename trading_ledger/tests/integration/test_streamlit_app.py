@@ -13,6 +13,7 @@ from streamlit.testing.v1 import AppTest
 
 from trading_ledger.application.contracts import (
     AddTrackedInstrumentCommand,
+    ArchiveTrackedInstrumentCommand,
     CreateProjectCommand,
     ConfirmManualTradeCommand,
     RecordDailyValuationCommand,
@@ -144,6 +145,71 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertEqual(app.radio[0].value, "当前跟踪")
         self.assertEqual(app.query_params["project"], [second.project_key])
 
+    def test_tracking_pagination_search_archive_and_project_switch(self) -> None:
+        application = get_application()
+        project = application.create_project(CreateProjectCommand(
+            "分页项目", Decimal("100000"), "test-user"
+        ))
+        tracking_ids = set()
+        for index in range(21):
+            row = application.add_tracking(AddTrackedInstrumentCommand(
+                project_key=project.project_key,
+                symbol=f"{600000 + index}.SH",
+                name=f"分页股票{index}",
+                source_text="分页测试",
+                actor="test-user",
+                added_at=datetime(2026, 9, 14, 9, 0, index, tzinfo=ZoneInfo("Asia/Shanghai")),
+            ))
+            tracking_ids.add(f"tracking_archive_{row.tracking_id}")
+
+        def visible_rows(app):
+            return {button.key for button in app.button if button.key in tracking_ids}
+
+        app = self._app().run()
+        self.assertEqual(app.exception, [])
+        first = visible_rows(app)
+        self.assertEqual(len(first), 10)
+        self.assertEqual(app.metric[0].value, "21")
+        self.assertTrue(app.button(key="tracking_previous_page").disabled)
+        app.button(key="tracking_next_page").click().run()
+        second = visible_rows(app)
+        self.assertEqual(len(second), 10)
+        self.assertFalse(first & second)
+        app.button(key="tracking_next_page").click().run()
+        last = visible_rows(app)
+        self.assertEqual(len(last), 1)
+        self.assertEqual(first | second | last, tracking_ids)
+        self.assertTrue(app.button(key="tracking_next_page").disabled)
+        application.archive_tracking(ArchiveTrackedInstrumentCommand(
+            project.project_key, int(next(iter(last)).removeprefix("tracking_archive_")), "test-user"
+        ))
+        app.run()
+        self.assertEqual(app.exception, [])
+        self.assertEqual(app.session_state["tracking_page_number"], 2)
+        self.assertEqual(len(visible_rows(app)), 10)
+        self.assertEqual(app.metric[0].value, "20")
+        app.button(key="tracking_previous_page").click().run()
+        self.assertEqual(visible_rows(app), first)
+        app.button(key="tracking_next_page").click().run()
+        app.text_input(key="daily_recommendation_search").set_value("600020").run()
+        self.assertEqual(app.session_state["tracking_page_number"], 1)
+        self.assertEqual(len(visible_rows(app)), 1)
+        app.text_input(key="daily_recommendation_search").set_value("不存在").run()
+        self.assertEqual(len(visible_rows(app)), 0)
+        self.assertTrue(any("当前没有符合条件" in item.value for item in app.info))
+        app.text_input(key="daily_recommendation_search").set_value("").run()
+        self.assertEqual(len(visible_rows(app)), 10)
+        app.button(key="tracking_next_page").click().run()
+        other = application.create_project(CreateProjectCommand(
+            "另一项目", Decimal("100000"), "test-user"
+        ))
+        app.radio[0].set_value("项目管理").run()
+        app.button(key=f"project_management_enter_{other.project_key}").click().run()
+        self.assertEqual(app.exception, [])
+        self.assertEqual(app.session_state["tracking_page_number"], 1)
+        self.assertEqual(len(visible_rows(app)), 0)
+        self.assertEqual(app.button[-1].key, "tracking_add_instrument")
+
     def test_tracking_actions_use_compact_icons_and_add_button_is_last(self) -> None:
         application = get_application()
         project = application.create_project(
@@ -170,6 +236,16 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertIn(f"tracking_archive_{tracking.tracking_id}", button_keys)
         self.assertNotIn("清理到期观察", [button.label for button in app.button])
         self.assertEqual(app.button[-1].key, "tracking_add_instrument")
+        app.button(key=f"tracking_archive_{tracking.tracking_id}").click().run()
+        self.assertEqual(app.exception, [])
+        self.assertNotIn(f"tracking_archive_{tracking.tracking_id}", [button.key for button in app.button])
+        app.radio[0].set_value("操作历史").run()
+        self.assertEqual(app.exception, [])
+        history = app.dataframe[0].value
+        archived = history[history["操作"] == "归档"]
+        self.assertEqual(len(archived), 1)
+        self.assertEqual(archived.iloc[0]["股票"], "600000.SH 浦发银行")
+        self.assertEqual(archived.iloc[0]["来源/信号"], "观察说明")
 
     def test_history_shows_total_equity_ratio_instead_of_cash_change(self) -> None:
         application = get_application()
