@@ -677,6 +677,7 @@ class MonthlyInstrumentStatisticsView:
     pnl: Decimal
     return_rate: Decimal | None
     closing_status: str
+    cycle_number: int = 1
 
 
 @dataclass(frozen=True, slots=True)

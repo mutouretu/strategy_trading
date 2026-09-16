@@ -350,7 +350,8 @@ def render_sell_dialog(
         except ApplicationError as error:
             _show_error(error)
         else:
-            _set_notice(f"{name} 已卖出 {trade.quantity:,.0f} 股。")
+            archived_note = "已全部卖出并自动归档。" if trade.quantity == sellable_quantity else ""
+            _set_notice(f"{name} 已卖出 {trade.quantity:,.0f} 股。{archived_note}")
             st.rerun()
 
 
@@ -567,7 +568,7 @@ def current_tracking_page(
     _show_notice()
     st.markdown(
         '<div class="beili-note">当前跟踪用于记录观察来源和人工买卖。'
-        "有持仓的股票不能移出当前跟踪或归档。</div>",
+        "全部卖出后自动归档；再次添加并买入会开启新一轮交易。</div>",
         unsafe_allow_html=True,
     )
     keyword = st.text_input(
@@ -587,11 +588,14 @@ def current_tracking_page(
     metrics = st.columns(4)
     metrics[0].metric("当前跟踪", len(page.rows))
     metrics[1].metric("当前持仓", page.summary.holding_count)
-    metrics[2].metric("今日新增", page.summary.today_added_count)
-    metrics[3].metric("已到期", page.summary.expired_count)
-    st.caption(
-        f"账户总权益 {money(page.account.equity)} · "
-        f"可用资金 {money(page.account.cash_balance)}"
+    metrics[2].metric("总资金量", money(page.account.equity), help="账户总权益：可用资金加持仓市值。")
+    cash_ratio = (
+        page.account.cash_balance / page.account.equity
+        if page.account.equity > 0 else None
+    )
+    metrics[3].metric(
+        f"可用资金（{pct(cash_ratio)}）", money(page.account.cash_balance),
+        help="括号内为可用资金占账户总权益的比例。",
     )
     page_size = 10
     page_count = max(1, (len(page.rows) + page_size - 1) // page_size)
@@ -639,7 +643,7 @@ def operation_history_page(
     application: TradingLedgerApplication, project_key: str
 ) -> None:
     st.markdown(
-        '<div class="beili-note">按股票查询观察、买入、卖出和冲正记录。'
+        '<div class="beili-note">按股票查询观察、买入、卖出、归档和冲正记录。'
         "观察显示来源，交易显示本次信号。</div>",
         unsafe_allow_html=True,
     )
@@ -758,6 +762,7 @@ def _monthly_csv(report) -> bytes:
             "月份": report.month,
             "股票代码": "",
             "股票名称": "",
+            "交易轮次": "",
             "买入次数": report.buy_count,
             "卖出次数": report.sell_count,
             "期初资金": report.opening_capital,
@@ -786,6 +791,7 @@ def _monthly_csv(report) -> bytes:
             "最大回撤": "",
             "年化波动率": "",
             "估值状态": row.closing_status,
+            "交易轮次": row.cycle_number,
         }
         for row in report.rows
     )
@@ -936,6 +942,7 @@ def monthly_trade_statistics_page(
                 {
                     "股票代码": row.symbol,
                     "股票名称": row.name,
+                    "交易轮次": row.cycle_number,
                     "买入次数": row.buy_count,
                     "月末仓位": float(row.closing_position_ratio),
                     "卖出次数": row.sell_count,

@@ -79,6 +79,7 @@ class TradeUiTest(unittest.TestCase):
                     pnl=Decimal("1000"),
                     return_rate=Decimal("0.01"),
                     closing_status="持仓中",
+                    cycle_number=2,
                 ),
             ),
         )
@@ -86,6 +87,7 @@ class TradeUiTest(unittest.TestCase):
         self.assertIn("汇总", content)
         self.assertIn("600000.SH", content)
         self.assertIn("浦发银行", content)
+        self.assertIn("交易轮次", content)
 
     def test_valuation_chart_frame_contains_equity_series(self) -> None:
         report = SimpleNamespace(
