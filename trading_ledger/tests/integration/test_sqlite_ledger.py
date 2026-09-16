@@ -565,7 +565,10 @@ class SQLiteLedgerTests(unittest.TestCase):
         ))
         restarted = SQLiteTradingLedgerApplication(LedgerDatabase(self.database_path))
         restarted.initialize()
-        closed = restarted.list_tracking(ListTrackingQuery(self.project.project_key)).rows[0]
+        self.assertEqual(restarted.list_tracking(ListTrackingQuery(self.project.project_key)).rows, ())
+        closed = restarted.list_tracking(ListTrackingQuery(
+            self.project.project_key, statuses=(TrackingStatus.ARCHIVED,)
+        )).rows[0]
         buy_cost = -first_buy.net_cash_amount - second_buy.net_cash_amount
         sell_proceeds = partial_sell.net_cash_amount + final_sell.net_cash_amount
         self.assertEqual(closed.quantity, 0)
@@ -586,7 +589,9 @@ class SQLiteLedgerTests(unittest.TestCase):
         self.assertIsNone(holding.average_sell_price)
         self.assertEqual(holding.realized_pnl_ratio, Decimal("0"))
         sell = self._sell_all("11", datetime(2026, 9, 4, 10, tzinfo=TZ))
-        closed = self.application.list_tracking(ListTrackingQuery(self.project.project_key)).rows[0]
+        closed = self.application.list_tracking(ListTrackingQuery(
+            self.project.project_key, statuses=(TrackingStatus.ARCHIVED,)
+        )).rows[0]
         self.assertEqual(closed.average_buy_price, Decimal("10"))
         self.assertEqual(closed.average_sell_price, Decimal("11"))
         self.assertEqual(closed.pnl_ratio, (sell.net_cash_amount + buy.net_cash_amount) / -buy.net_cash_amount)
@@ -708,15 +713,18 @@ class SQLiteLedgerTests(unittest.TestCase):
             )
         )
 
-    def test_closed_return_includes_fees_and_multiple_round_trips(self) -> None:
-        total_cost = Decimal("0")
-        total_proceeds = Decimal("0")
-        for day, price in ((3, "9"), (5, "12")):
+    def test_closed_returns_are_separate_for_multiple_round_trips(self) -> None:
+        for number, (day, price) in enumerate(((3, "9"), (5, "12")), 1):
             with self.subTest(sell_price=price):
+                if number > 1:
+                    watching = self.application.add_tracking(AddTrackedInstrumentCommand(
+                        self.project.project_key, "600000.SH", "浦发银行", "新一轮", "test-user"
+                    ))
+                    self.assertIsNone(watching.average_buy_price)
+                    self.assertIsNone(watching.average_sell_price)
+                    self.assertIsNone(watching.realized_pnl_ratio)
                 buy = self._buy(datetime(2026, 9, day - 1, 10, tzinfo=TZ))
                 sell = self._sell_all(price, datetime(2026, 9, day, 10, tzinfo=TZ))
-                total_cost -= buy.net_cash_amount
-                total_proceeds += sell.net_cash_amount
                 self.application.record_daily_valuation(
                     RecordDailyValuationCommand(
                         project_key=self.project.project_key,
@@ -724,15 +732,105 @@ class SQLiteLedgerTests(unittest.TestCase):
                         valuation_time=datetime(2026, 9, day, 15, tzinfo=TZ),
                     )
                 )
-                row = self.application.monthly_statistics(
+                report = self.application.monthly_statistics(
                     GetMonthlyStatisticsQuery(self.project.project_key, "2026-09")
-                ).rows[0]
+                )
+                self.assertEqual(len(report.rows), number)
+                self.assertEqual(report.instrument_count, 1)
+                row = report.rows[-1]
+                self.assertEqual(row.cycle_number, number)
                 self.assertEqual(row.closing_status, "已清仓")
                 self.assertEqual(
-                    row.return_rate, (total_proceeds - total_cost) / total_cost
+                    row.return_rate, (sell.net_cash_amount + buy.net_cash_amount) / -buy.net_cash_amount
                 )
 
-    def test_liquidation_keeps_tracking_and_current_statistics_ignore_stale_snapshot(self) -> None:
+    def test_reentry_has_own_tracking_prices_and_statistics_round(self) -> None:
+        self.application._now = Mock(return_value=datetime(2026, 9, 8, 16, tzinfo=TZ))
+        first_buy = self._buy()
+        first_sell = self._sell_all("12", datetime(2026, 9, 3, 10, tzinfo=TZ))
+        self.application.add_tracking(AddTrackedInstrumentCommand(
+            self.project.project_key, "600000.SH", "浦发银行", "第二轮", "test-user"
+        ))
+        second_buy = self.application.confirm_manual_trade(ConfirmManualTradeCommand(
+            project_key=self.project.project_key, symbol="600000.SH", side=TradeSide.BUY,
+            price=Decimal("20"), allocation_ratio=Decimal("0.5"), signal_text="第二轮买入",
+            actor="test-user", trade_time=datetime(2026, 9, 4, 10, tzinfo=TZ),
+        ))
+        tracking = self.application.list_tracking(ListTrackingQuery(self.project.project_key)).rows[0]
+        self.assertEqual(tracking.average_buy_price, Decimal("20"))
+        self.assertIsNone(tracking.average_sell_price)
+        self.assertEqual(tracking.realized_pnl_ratio, Decimal("0"))
+        report = self.application.monthly_statistics(GetMonthlyStatisticsQuery(self.project.project_key, "2026-09"))
+        self.assertEqual([row.cycle_number for row in report.rows], [1, 2])
+        first, second = report.rows
+        self.assertEqual(first.closing_status, "已清仓")
+        self.assertEqual(first.return_rate, (first_buy.net_cash_amount + first_sell.net_cash_amount) / -first_buy.net_cash_amount)
+        self.assertEqual(first.closing_position_ratio, 0)
+        self.assertEqual(second.closing_status, "持仓中")
+        self.assertEqual(second.realized_pnl, 0)
+        self.assertEqual(second.sell_count, 0)
+        self.assertEqual(second.buy_count, 1)
+        self.assertEqual(second.pnl, -second_buy.commission_amount)
+        self.assertEqual(sum(row.pnl for row in report.rows), report.pnl)
+        second_sell = self._sell_all("21", datetime(2026, 9, 5, 10, tzinfo=TZ))
+        self.application.reverse_trade(ReverseTradeCommand(
+            self.project.project_key, second_sell.trade_id, "undo-round-two-sale", "撤销清仓", "test-user"
+        ))
+        restored = self.application.list_tracking(ListTrackingQuery(self.project.project_key)).rows[0]
+        self.assertEqual(restored.tracking_status, TrackingStatus.HOLDING)
+        report = self.application.monthly_statistics(GetMonthlyStatisticsQuery(self.project.project_key, "2026-09"))
+        self.assertEqual([row.closing_status for row in report.rows], ["已清仓", "持仓中"])
+        self.assertEqual(report.rows[0], first)
+        self.assertEqual(self.application.integrity_check(), ())
+
+    def test_same_second_trades_keep_recording_order_for_rounds_and_reversal(self) -> None:
+        instant = datetime(2026, 9, 8, 16, tzinfo=TZ)
+        self.application._now = Mock(return_value=instant)
+        self._buy(instant)
+        self._sell_all("11", instant)
+        self.application.add_tracking(AddTrackedInstrumentCommand(
+            self.project.project_key, "600000.SH", "浦发银行", "第二轮", "test-user"
+        ))
+        second_buy = self._buy(instant)
+        report = self.application.monthly_statistics(GetMonthlyStatisticsQuery(self.project.project_key, "2026-09"))
+        self.assertEqual([row.cycle_number for row in report.rows], [1, 2])
+        self.assertEqual([row.closing_status for row in report.rows], ["已清仓", "持仓中"])
+        self.application.reverse_trade(ReverseTradeCommand(
+            self.project.project_key, second_buy.trade_id, "same-second-reversal", "撤销第二次买入", "test-user"
+        ))
+        report = self.application.monthly_statistics(GetMonthlyStatisticsQuery(self.project.project_key, "2026-09"))
+        self.assertEqual(len(report.rows), 1)
+        self.assertEqual(report.rows[0].closing_status, "已清仓")
+        self.assertEqual(self.application.integrity_check(), ())
+
+    def test_cross_month_rounds_do_not_duplicate_opening_unrealized_profit(self) -> None:
+        self.application._now = Mock(return_value=datetime(2026, 10, 8, 16, tzinfo=TZ))
+        self._buy()
+        self._sell_all("11", datetime(2026, 9, 3, 10, tzinfo=TZ))
+        self.application.add_tracking(AddTrackedInstrumentCommand(
+            self.project.project_key, "600000.SH", "浦发银行", "第二轮", "test-user"
+        ))
+        second_buy = self._buy(datetime(2026, 9, 4, 10, tzinfo=TZ))
+        self.application.record_daily_valuation(RecordDailyValuationCommand(
+            project_key=self.project.project_key, actor="test-user",
+            valuation_time=datetime(2026, 9, 30, 15, tzinfo=TZ),
+        ))
+        second_sell = self._sell_all("12", datetime(2026, 10, 2, 10, tzinfo=TZ))
+        self.application.add_tracking(AddTrackedInstrumentCommand(
+            self.project.project_key, "600000.SH", "浦发银行", "第三轮", "test-user"
+        ))
+        third_buy = self._buy(datetime(2026, 10, 3, 10, tzinfo=TZ))
+        report = self.application.monthly_statistics(GetMonthlyStatisticsQuery(self.project.project_key, "2026-10"))
+        self.assertEqual([row.cycle_number for row in report.rows], [2, 3])
+        self.assertEqual(report.rows[0].unrealized_pnl_change, second_buy.commission_amount)
+        self.assertEqual(report.rows[1].unrealized_pnl_change, -third_buy.commission_amount)
+        self.assertEqual(report.rows[0].return_rate, (second_buy.net_cash_amount + second_sell.net_cash_amount) / -second_buy.net_cash_amount)
+        self.assertEqual(sum(row.pnl for row in report.rows), report.pnl)
+        september = self.application.monthly_statistics(GetMonthlyStatisticsQuery(self.project.project_key, "2026-09"))
+        self.assertEqual([row.closing_status for row in september.rows], ["已清仓", "持仓中"])
+        self.assertEqual(self.application.integrity_check(), ())
+
+    def test_liquidation_archives_tracking_and_current_statistics_ignore_stale_snapshot(self) -> None:
         self.application._now = Mock(return_value=datetime(2026, 9, 8, 16, tzinfo=TZ))
         buy = self._buy()
         snapshot = self.application.record_daily_valuation(
@@ -744,11 +842,13 @@ class SQLiteLedgerTests(unittest.TestCase):
         )
         sell = self._sell_all("11", datetime(2026, 9, 3, 10, tzinfo=TZ))
         tracking = self.application.list_tracking(ListTrackingQuery(self.project.project_key))
-        self.assertEqual(len(tracking.rows), 1)
-        row = tracking.rows[0]
+        self.assertEqual(tracking.rows, ())
+        row = self.application.list_tracking(ListTrackingQuery(
+            self.project.project_key, statuses=(TrackingStatus.ARCHIVED,)
+        )).rows[0]
         self.assertEqual(row.tracking_id, self.tracking.tracking_id)
         self.assertEqual(row.source_text, self.tracking.source_text)
-        self.assertEqual(row.tracking_status, TrackingStatus.WATCHING)
+        self.assertEqual(row.tracking_status, TrackingStatus.ARCHIVED)
         self.assertEqual(row.quantity, Decimal("0"))
         self.assertIsNone(row.expires_at)
         report = self.application.monthly_statistics(
@@ -763,13 +863,11 @@ class SQLiteLedgerTests(unittest.TestCase):
         self.assertEqual(report.rows[0].return_rate, net_profit / -buy.net_cash_amount)
         self.assertEqual(len(report.valuation_points), 1)
         self.assertEqual(report.valuation_points[0].equity, snapshot.equity)
-        self.application.archive_tracking(
-            ArchiveTrackedInstrumentCommand(
-                project_key=self.project.project_key,
-                tracking_id=row.tracking_id,
-                actor="test-user",
-            )
-        )
+        archives = [item for item in self.application.operation_history(
+            ListOperationHistoryQuery(self.project.project_key)
+        ).rows if item.operation_kind == OperationKind.ARCHIVE]
+        self.assertEqual(len(archives), 1)
+        self.assertEqual(archives[0].symbol, "600000.SH")
         self.assertEqual(
             self.application.list_tracking(ListTrackingQuery(self.project.project_key)).rows, ()
         )
@@ -826,6 +924,9 @@ class SQLiteLedgerTests(unittest.TestCase):
                 valuation_time=datetime(2026, 10, 3, 15, tzinfo=TZ),
             )
         )
+        self.application.add_tracking(AddTrackedInstrumentCommand(
+            self.project.project_key, "600000.SH", "浦发银行", "新一轮", "test-user"
+        ))
         self.application.confirm_manual_trade(
             ConfirmManualTradeCommand(
                 project_key=self.project.project_key,

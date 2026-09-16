@@ -940,6 +940,35 @@ class SQLiteTradingLedgerApplication:
             )
             return self._positions(connection, query.project_key, account)
 
+    @staticmethod
+    def _trade_cycles(
+        connection: sqlite3.Connection, account_id: int, instrument_id: int | None = None
+    ) -> list[list[sqlite3.Row]]:
+        """Derive position rounds from effective trades, including reversal corrections."""
+        cycles: list[list[sqlite3.Row]] = []
+        active: dict[int, list[sqlite3.Row]] = {}
+        quantities: dict[int, Decimal] = {}
+        for trade in connection.execute(
+            """
+            SELECT tr.*, i.symbol, i.name FROM trade_records tr
+            JOIN instruments i ON i.instrument_id = tr.instrument_id
+            WHERE tr.account_id = ? AND tr.record_status = 'CONFIRMED'
+              AND tr.reversal_of_trade_id IS NULL
+              AND (? IS NULL OR tr.instrument_id = ?)
+            ORDER BY tr.trade_time, tr.created_at, tr.rowid
+            """, (account_id, instrument_id, instrument_id),
+        ):
+            instrument_id = int(trade["instrument_id"])
+            if quantities.get(instrument_id, Decimal("0")) == 0:
+                active[instrument_id] = []
+                cycles.append(active[instrument_id])
+            active[instrument_id].append(trade)
+            change = _decimal(trade["quantity"])
+            if trade["side"] == TradeSide.SELL:
+                change = -change
+            quantities[instrument_id] = quantities.get(instrument_id, Decimal("0")) + change
+        return cycles
+
     def _tracking_row(self, project_key: str, tracking_id: int) -> TrackingRowView:
         with self.database.read() as connection:
             project = self._project(connection, project_key)
@@ -974,15 +1003,11 @@ class SQLiteTradingLedgerApplication:
             buy_quantity = sell_quantity = Decimal("0")
             buy_amount = sell_amount = Decimal("0")
             buy_cost = sell_proceeds = Decimal("0")
-            for trade in connection.execute(
-                """
-                SELECT side, quantity, gross_amount, net_cash_amount
-                FROM trade_records
-                WHERE account_id = ? AND instrument_id = ?
-                  AND record_status = 'CONFIRMED' AND reversal_of_trade_id IS NULL
-                """,
-                (account["account_id"], row["instrument_id"]),
-            ):
+            cycles = self._trade_cycles(connection, int(account["account_id"]), int(row["instrument_id"]))
+            trades = cycles[-1] if cycles else []
+            if quantity == 0 and row["tracking_status"] == TrackingStatus.WATCHING:
+                trades = []  # Re-added observation has not started a new position round.
+            for trade in trades:
                 if trade["side"] == TradeSide.BUY:
                     buy_quantity += _decimal(trade["quantity"])
                     buy_amount += _decimal(trade["gross_amount"])
@@ -993,7 +1018,7 @@ class SQLiteTradingLedgerApplication:
                     sell_proceeds += _decimal(trade["net_cash_amount"])
             if quantity == 0 and buy_cost > 0:
                 pnl_ratio = (sell_proceeds - buy_cost) / buy_cost
-            realized_pnl = _decimal(row["realized_pnl"])
+            realized_pnl = sum((_decimal(trade["realized_pnl"]) for trade in trades), Decimal("0"))
             sold_cost = sell_proceeds - realized_pnl
             realized_pnl_ratio = (
                 realized_pnl / sold_cost
@@ -1648,12 +1673,24 @@ class SQLiteTradingLedgerApplication:
             WHERE project_id = ? AND instrument_id = ?
             """,
             (
-                TrackingStatus.HOLDING if current_quantity > 0 else TrackingStatus.WATCHING,
+                TrackingStatus.HOLDING if current_quantity > 0 else TrackingStatus.ARCHIVED,
                 trade_time.isoformat(),
                 project["project_id"],
                 instrument["instrument_id"],
             ),
         )
+        if side == TradeSide.SELL and current_quantity == 0:
+            tracking = connection.execute(
+                "SELECT tracking_id, source_text FROM tracked_instruments WHERE project_id = ? AND instrument_id = ?",
+                (project["project_id"], instrument["instrument_id"]),
+            ).fetchone()
+            self._audit(
+                connection, project_id=project["project_id"], object_type="TRACKING",
+                object_id=str(tracking["tracking_id"]), action="TRACKING_ARCHIVED", actor=actor,
+                after={"symbol": instrument["symbol"], "name": instrument["name"],
+                       "source_text": tracking["source_text"], "trade_id": trade_id},
+                reason="全部卖出，自动归档", occurred_at=trade_time.isoformat(),
+            )
         self._audit(
             connection,
             project_id=project["project_id"],
@@ -2056,7 +2093,7 @@ class SQLiteTradingLedgerApplication:
             SELECT * FROM trade_records
             WHERE account_id = ? AND record_status = 'CONFIRMED'
               AND reversal_of_trade_id IS NULL
-            ORDER BY trade_time, created_at, trade_id
+            ORDER BY trade_time, created_at, rowid
             """,
             (account_id,),
         ).fetchall()
@@ -2883,104 +2920,82 @@ class SQLiteTradingLedgerApplication:
             else:
                 opening_positions = {}
 
-            grouped: dict[str, dict[str, object]] = {}
-            for trade in trade_rows:
-                symbol = str(trade["symbol"])
-                item = grouped.setdefault(
-                    symbol,
-                    {
-                        "name": str(trade["name"]),
-                        "buy_count": 0,
-                        "sell_count": 0,
-                        "sell_amount": Decimal("0"),
-                        "realized": Decimal("0"),
-                    },
-                )
-                if trade["side"] == TradeSide.BUY:
-                    item["buy_count"] = int(item["buy_count"]) + 1
-                else:
-                    item["sell_count"] = int(item["sell_count"]) + 1
-                    item["sell_amount"] = _decimal(item["sell_amount"]) + _decimal(
-                        trade["gross_amount"]
-                    )
-                    item["realized"] = _decimal(item["realized"]) + _decimal(
-                        trade["realized_pnl"]
-                    )
-            for symbol, position in closing_positions.items():
-                grouped.setdefault(
-                    symbol,
-                    {
-                        "name": position["name"],
-                        "buy_count": 0,
-                        "sell_count": 0,
-                        "sell_amount": Decimal("0"),
-                        "realized": Decimal("0"),
-                    },
-                )
             detail_rows: list[MonthlyInstrumentStatisticsView] = []
-            for symbol in sorted(grouped):
-                values = grouped[symbol]
-                position = closing_positions.get(symbol)
-                quantity = (
-                    _decimal(position["quantity"]) if position else Decimal("0")
+            cycle_numbers: dict[str, int] = {}
+            for cycle in self._trade_cycles(connection, int(account["account_id"])):
+                symbol = str(cycle[0]["symbol"])
+                cycle_number = cycle_numbers.get(symbol, 0) + 1
+                cycle_numbers[symbol] = cycle_number
+                through_month = [t for t in cycle if str(t["trade_time"]) < end_date.isoformat()]
+                if not through_month:
+                    continue
+                month_trades = [t for t in through_month if str(t["trade_time"])[:7] == query.month]
+                quantity = sum(
+                    (_decimal(t["quantity"]) * (1 if t["side"] == TradeSide.BUY else -1)
+                     for t in through_month), Decimal("0"),
                 )
-                market_value = (
-                    _decimal(position["market_value"]) if position else Decimal("0")
+                if not month_trades and quantity == 0:
+                    continue
+                position = closing_positions.get(symbol) if quantity > 0 else None
+                if position and closing_valuation:
+                    snapshot_quantity = sum(
+                        (_decimal(t["quantity"]) * (1 if t["side"] == TradeSide.BUY else -1)
+                         for t in cycle
+                         if str(t["trade_time"])[:10] <= closing_valuation["valuation_date"]),
+                        Decimal("0"),
+                    )
+                    if snapshot_quantity == 0:
+                        # A stale snapshot of an earlier round cannot value a later round.
+                        position = None
+                        missing_symbols = tuple(sorted(set(missing_symbols) | {symbol}))
+                market_value = _decimal(position["market_value"]) if position else Decimal("0")
+                closing_unrealized = _decimal(position["unrealized"]) if position else Decimal("0")
+                # Only the round held at the opening snapshot owns that unrealized P&L.
+                opening_quantity = Decimal("0")
+                if previous_valuation:
+                    opening_quantity = sum(
+                        (_decimal(t["quantity"]) * (1 if t["side"] == TradeSide.BUY else -1)
+                         for t in cycle
+                         if str(t["trade_time"])[:10] <= previous_valuation["valuation_date"]),
+                        Decimal("0"),
+                    )
+                opening_unrealized = (
+                    opening_positions.get(symbol, Decimal("0"))
+                    if opening_quantity > 0 else Decimal("0")
                 )
-                closing_unrealized = (
-                    _decimal(position["unrealized"]) if position else Decimal("0")
-                )
-                unrealized_change = round_money(
-                    closing_unrealized - opening_positions.get(symbol, Decimal("0"))
-                )
-                realized = round_money(_decimal(values["realized"]))
+                unrealized_change = round_money(closing_unrealized - opening_unrealized)
+                realized = round_money(sum(
+                    (_decimal(t["realized_pnl"]) for t in month_trades), Decimal("0"),
+                ))
                 instrument_pnl = round_money(realized + unrealized_change)
                 cost_basis = (
-                    _decimal(position["average_cost"]) * quantity
-                    if position
-                    else Decimal("0")
+                    _decimal(position["average_cost"]) * quantity if position else Decimal("0")
                 )
-                instrument_return = (
-                    instrument_pnl / cost_basis if cost_basis > 0 else None
-                )
+                instrument_return = instrument_pnl / cost_basis if cost_basis > 0 else None
                 if quantity == 0:
-                    # 清仓后按累计实际收支计算，不能再使用剩余持仓成本。
-                    buy_cost = Decimal("0")
-                    net_proceeds = Decimal("0")
-                    for trade in connection.execute(
-                        """
-                        SELECT tr.side, tr.net_cash_amount
-                        FROM trade_records tr
-                        JOIN instruments i ON i.instrument_id = tr.instrument_id
-                        WHERE tr.account_id = ? AND i.symbol = ?
-                          AND tr.trade_time < ?
-                          AND tr.record_status = 'CONFIRMED'
-                          AND tr.reversal_of_trade_id IS NULL
-                        """,
-                        (account["account_id"], symbol, end_date.isoformat()),
-                    ):
-                        net_cash = _decimal(trade["net_cash_amount"])
-                        if trade["side"] == TradeSide.BUY:
-                            buy_cost -= net_cash
-                        else:
-                            net_proceeds += net_cash
-                    instrument_return = (
-                        (net_proceeds - buy_cost) / buy_cost
-                        if buy_cost > 0
-                        else None
+                    buy_cost = -sum(
+                        (_decimal(t["net_cash_amount"]) for t in through_month
+                         if t["side"] == TradeSide.BUY), Decimal("0"),
                     )
+                    net_proceeds = sum(
+                        (_decimal(t["net_cash_amount"]) for t in through_month
+                         if t["side"] == TradeSide.SELL), Decimal("0"),
+                    )
+                    instrument_return = (net_proceeds - buy_cost) / buy_cost if buy_cost > 0 else None
                 detail_rows.append(
                     MonthlyInstrumentStatisticsView(
                         symbol=symbol,
-                        name=str(values["name"]),
-                        buy_count=int(values["buy_count"]),
-                        sell_count=int(values["sell_count"]),
+                        name=str(cycle[0]["name"]),
+                        cycle_number=cycle_number,
+                        buy_count=sum(t["side"] == TradeSide.BUY for t in month_trades),
+                        sell_count=sum(t["side"] == TradeSide.SELL for t in month_trades),
                         closing_position_ratio=(
-                            market_value / closing_capital
-                            if closing_capital > 0
-                            else Decimal("0")
+                            market_value / closing_capital if closing_capital > 0 else Decimal("0")
                         ),
-                        sell_amount=round_money(_decimal(values["sell_amount"])),
+                        sell_amount=round_money(sum(
+                            (_decimal(t["gross_amount"]) for t in month_trades
+                             if t["side"] == TradeSide.SELL), Decimal("0"),
+                        )),
                         realized_pnl=realized,
                         unrealized_pnl_change=unrealized_change,
                         pnl=instrument_pnl,
@@ -2988,6 +3003,7 @@ class SQLiteTradingLedgerApplication:
                         closing_status="持仓中" if quantity > 0 else "已清仓",
                     )
                 )
+            detail_rows.sort(key=lambda item: (item.symbol, item.cycle_number))
 
             daily_returns: list[float] = []
             prior_equity = (
@@ -3020,7 +3036,7 @@ class SQLiteTradingLedgerApplication:
             )
             return MonthlyStatisticsView(
                 month=query.month,
-                instrument_count=len(detail_rows),
+                instrument_count=len({row.symbol for row in detail_rows}),
                 buy_count=sum(1 for row in trade_rows if row["side"] == TradeSide.BUY),
                 sell_count=sum(1 for row in trade_rows if row["side"] == TradeSide.SELL),
                 opening_capital=round_money(opening_capital),

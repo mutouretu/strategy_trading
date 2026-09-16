@@ -15,11 +15,12 @@ from trading_ledger.application.contracts import (
     AddTrackedInstrumentCommand,
     ArchiveTrackedInstrumentCommand,
     CreateProjectCommand,
+    RecordCashEntryCommand,
     ConfirmManualTradeCommand,
     RecordDailyValuationCommand,
 )
 from trading_ledger.bootstrap import get_application, get_settings
-from trading_ledger.domain import TradeSide
+from trading_ledger.domain import CashEntryType, TradeSide
 
 
 class StreamlitAppTests(unittest.TestCase):
@@ -145,6 +146,52 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertEqual(app.radio[0].value, "当前跟踪")
         self.assertEqual(app.query_params["project"], [second.project_key])
 
+    def test_tracking_metrics_show_equity_and_available_cash_ratio(self) -> None:
+        application = get_application()
+        project = application.create_project(CreateProjectCommand(
+            "资金卡片", Decimal("100000"), "test-user"
+        ))
+        app = self._app().run()
+        self.assertEqual(app.exception, [])
+        self.assertEqual([metric.label for metric in app.metric], [
+            "当前跟踪", "当前持仓", "总资金量", "可用资金（100.00%）",
+        ])
+        self.assertEqual(app.metric[2].value, "¥100,000.00")
+        self.assertEqual(app.metric[3].value, "¥100,000.00")
+        application.add_tracking(AddTrackedInstrumentCommand(
+            project.project_key, "600000.SH", "浦发银行", "测试来源", "test-user"
+        ))
+        application.confirm_manual_trade(ConfirmManualTradeCommand(
+            project_key=project.project_key, symbol="600000.SH", side=TradeSide.BUY,
+            allocation_ratio=Decimal("0.5"), price=Decimal("10"),
+            signal_text="测试买入", actor="test-user",
+        ))
+        app.run()
+        self.assertEqual(app.exception, [])
+        self.assertEqual(app.metric[2].value, "¥99,995.00")
+        self.assertEqual(app.metric[3].value, "¥50,995.00")
+        self.assertEqual(app.metric[3].label, "可用资金（51.00%）")
+        app.text_input(key="daily_recommendation_search").set_value("不存在").run()
+        self.assertEqual(app.metric[2].value, "¥99,995.00")
+        self.assertEqual(app.metric[3].label, "可用资金（51.00%）")
+
+    def test_tracking_cash_ratio_with_zero_equity(self) -> None:
+        application = get_application()
+        project = application.create_project(CreateProjectCommand(
+            "零资金", Decimal("100000"), "test-user"
+        ))
+        application.record_cash_entry(RecordCashEntryCommand(
+            project_key=project.project_key, account_code="primary-cny",
+            entry_type=CashEntryType.WITHDRAWAL, amount=Decimal("100000"),
+            occurred_at=datetime.now(ZoneInfo("Asia/Shanghai")),
+            request_id="withdraw-all", note="测试资金全部转出", actor="test-user",
+        ))
+        app = self._app().run()
+        self.assertEqual(app.exception, [])
+        self.assertEqual(app.metric[2].value, "¥0.00")
+        self.assertEqual(app.metric[3].value, "¥0.00")
+        self.assertEqual(app.metric[3].label, "可用资金（—）")
+
     def test_tracking_pagination_search_archive_and_project_switch(self) -> None:
         application = get_application()
         project = application.create_project(CreateProjectCommand(
@@ -208,7 +255,8 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertEqual(app.exception, [])
         self.assertEqual(app.session_state["tracking_page_number"], 1)
         self.assertEqual(len(visible_rows(app)), 0)
-        self.assertEqual(app.button[-1].key, "tracking_add_instrument")
+        self.assertEqual(app.radio[0].value, "当前跟踪")
+        self.assertEqual(app.button(key="tracking_add_instrument").label, "添加观察股")
 
     def test_tracking_actions_use_compact_icons_and_add_button_is_last(self) -> None:
         application = get_application()
@@ -283,7 +331,7 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertIn("总仓占比", frame.columns)
         self.assertEqual(frame.loc[frame["操作"] == "买入", "总仓占比"].iloc[0], 0.49)
 
-    def test_tracking_displays_buy_sell_prices_and_profit_after_liquidation(self) -> None:
+    def test_liquidation_disappears_from_tracking_and_is_closed_in_statistics(self) -> None:
         application = get_application()
         project = application.create_project(CreateProjectCommand("清仓均价测试", Decimal("100000"), "test-user"))
         application.add_tracking(AddTrackedInstrumentCommand(project.project_key, "600000", "浦发银行", "观察来源", "test-user"))
@@ -295,14 +343,26 @@ class StreamlitAppTests(unittest.TestCase):
             ))
         app = self._app().run()
         self.assertEqual(app.exception, [])
-        markdown = [item.value for item in app.markdown]
-        self.assertIn("**买入/卖出均价**", markdown)
-        self.assertIn("**实盈/浮盈**", markdown)
-        self.assertNotIn("**盈亏**", markdown)
-        self.assertIn("¥10.00 / ¥11.00", markdown)
-        self.assertIn("¥11.00", markdown)
-        self.assertTrue(any("+9.9%" in value and " / " in value and "+0.0%" in value for value in markdown))
-        self.assertTrue(any(item.value == "成交参考" for item in app.caption))
+        self.assertEqual(app.metric[0].value, "0")
+        app.radio[0].set_value("操作历史").run()
+        self.assertIn("归档", list(app.dataframe[0].value["操作"]))
+        app.radio[0].set_value("交易统计").run()
+        self.assertEqual(app.exception, [])
+        detail = app.dataframe[0].value
+        self.assertEqual(detail.iloc[0]["月末状态"], "已清仓")
+        self.assertEqual(detail.iloc[0]["交易轮次"], 1)
+        application.add_tracking(AddTrackedInstrumentCommand(
+            project.project_key, "600000.SH", "浦发银行", "重新观察", "test-user"
+        ))
+        application.confirm_manual_trade(ConfirmManualTradeCommand(
+            project_key=project.project_key, symbol="600000.SH", side=TradeSide.BUY,
+            allocation_ratio=Decimal("0.5"), price=Decimal("20"), signal_text="第二轮", actor="test-user",
+        ))
+        app.run()
+        self.assertEqual(app.exception, [])
+        detail = app.dataframe[0].value
+        self.assertEqual(list(detail["交易轮次"]), [1, 2])
+        self.assertEqual(list(detail["月末状态"]), ["已清仓", "持仓中"])
 
 
 if __name__ == "__main__":
