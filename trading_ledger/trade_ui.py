@@ -219,11 +219,12 @@ def render_buy_dialog(
     price = st.number_input(
         "买入价格 *",
         min_value=0.01,
-        value=None,
+        value=float(current_price) if current_price is not None and current_price >= Decimal("0.01") else None,
         step=0.01,
         format="%.2f",
         placeholder=_price_placeholder(current_price),
         key=f"tracking_buy_price_{symbol}",
+        help="默认使用当前跟踪的参考价，可按实际成交价修改。",
     )
     signal = st.text_input(
         "买入信号 *",
@@ -299,10 +300,11 @@ def render_sell_dialog(
     price = st.number_input(
         "卖出价格 *",
         min_value=0.01,
-        value=None,
+        value=float(current_price) if current_price is not None and current_price >= Decimal("0.01") else None,
         step=0.01,
         format="%.2f",
         placeholder=_price_placeholder(current_price),
+        help="默认使用当前跟踪的参考价，可按实际成交价修改。",
         key=f"tracking_sell_price_{symbol}",
     )
     signal = st.text_input(
@@ -471,6 +473,7 @@ def render_tracking_table(
             key=f"tracking_buy_{row.tracking_id}",
             width="stretch",
         ):
+            st.session_state.pop(f"tracking_buy_price_{row.symbol}", None)
             render_buy_dialog(
                 application,
                 project_key,
@@ -492,6 +495,8 @@ def render_tracking_table(
             key=f"tracking_sell_{row.tracking_id}",
             width="stretch",
         ):
+            # Each new sell dialog starts with the latest displayed reference price.
+            st.session_state.pop(f"tracking_sell_price_{row.symbol}", None)
             render_sell_dialog(
                 application,
                 project_key,

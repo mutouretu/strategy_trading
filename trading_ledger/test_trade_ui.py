@@ -51,6 +51,42 @@ class TradeUiTest(unittest.TestCase):
                 self.assertEqual(app.exception, [])
                 self.assertEqual(app.caption[0].value, f"300750.SZ · 宁德时代 · 持仓市值 {expected}")
 
+    def test_sell_price_prefills_current_price_and_keeps_manual_edits(self) -> None:
+        for reference, expected in (("Decimal('25.92')", 25.92), ("None", None), ("Decimal('0')", None)):
+            with self.subTest(reference=reference):
+                app = AppTest.from_string(
+                    'from decimal import Decimal\n'
+                    'from trade_ui import render_sell_dialog\n'
+                    'render_sell_dialog(None, "test", "tester", "002787.SZ", "华源控股", '
+                    f'Decimal("130800"), {reference}, Decimal("0.3"))'
+                ).run()
+                self.assertEqual(app.exception, [])
+                self.assertEqual(app.number_input(key="tracking_sell_price_002787.SZ").value, expected)
+                self.assertIsNone(app.number_input(key="tracking_sell_ratio_002787.SZ").value)
+                self.assertTrue(app.button(key="tracking_sell_confirm_002787.SZ").disabled)
+                app.number_input(key="tracking_sell_price_002787.SZ").set_value(26.1).run()
+                app.text_input(key="tracking_sell_signal_002787.SZ").set_value("实际成交价").run()
+                self.assertEqual(app.exception, [])
+                self.assertEqual(app.number_input(key="tracking_sell_price_002787.SZ").value, 26.1)
+
+    def test_buy_price_prefills_current_price_and_keeps_manual_edits(self) -> None:
+        for reference, expected in (("Decimal('25.92')", 25.92), ("None", None), ("Decimal('0')", None)):
+            with self.subTest(reference=reference):
+                app = AppTest.from_string(
+                    'from decimal import Decimal\n'
+                    'from trade_ui import render_buy_dialog\n'
+                    'render_buy_dialog(None, "test", "tester", "002787.SZ", "华源控股", '
+                    f'Decimal("50000"), {reference}, Decimal("100000"))'
+                ).run()
+                self.assertEqual(app.exception, [])
+                self.assertEqual(app.number_input(key="tracking_buy_price_002787.SZ").value, expected)
+                self.assertIsNone(app.number_input(key="tracking_buy_ratio_002787.SZ").value)
+                self.assertTrue(app.button(key="tracking_buy_confirm_002787.SZ").disabled)
+                app.number_input(key="tracking_buy_price_002787.SZ").set_value(26.1).run()
+                app.text_input(key="tracking_buy_signal_002787.SZ").set_value("实际成交价").run()
+                self.assertEqual(app.exception, [])
+                self.assertEqual(app.number_input(key="tracking_buy_price_002787.SZ").value, 26.1)
+
     def test_money_and_percentage_formatting(self) -> None:
         self.assertEqual(trade_ui.money(Decimal("1234.5")), "¥1,234.50")
         self.assertEqual(trade_ui.pct(Decimal("0.125")), "12.50%")
