@@ -418,12 +418,12 @@ def render_tracking_table(
         </style>""",
         unsafe_allow_html=True,
     )
-    ratios = [1.25, 1.1, 1.35, 1.0, 1.0, 1.7, 1.55, 2.2]
+    ratios = [1.25, 1.1, 1.35, 1.7, 1.0, 1.7, 1.55, 2.2]
     header_container = st.container(key="tracking_header", border=True)
     headers = header_container.columns(ratios, vertical_alignment="center")
     for column, label in zip(
         headers[:7],
-        ["股票", "加入时间", "来源", "当前仓位", "当前价格", "买入/卖出均价", "实盈/浮盈"],
+        ["股票", "加入时间", "来源", "当前估值/仓位", "当前价格", "买入/卖出均价", "实盈/浮盈"],
     ):
         column.markdown(f"**{label}**")
     header_actions = headers[7].columns([2.4, 1])
@@ -457,7 +457,11 @@ def render_tracking_table(
         columns[0].markdown(f"**{row.symbol}**  \n{html.escape(row.name)}")
         columns[1].markdown(row.added_at.strftime("%Y-%m-%d  \n%H:%M"))
         columns[2].markdown(html.escape(row.source_text))
-        columns[3].markdown(f"**{row.position_ratio:.1%}**")
+        market_value = (
+            Decimal("0") if row.quantity == 0 else
+            row.quantity * row.reference_price if row.reference_price is not None else None
+        )
+        columns[3].markdown(f"{money(market_value)} / **{row.position_ratio:.1%}**")
         columns[4].markdown(money(row.reference_price))
         if row.reference_price_is_trade:
             columns[4].caption("成交参考")
@@ -803,22 +807,46 @@ def _monthly_csv(report) -> bytes:
     return pd.DataFrame(rows).to_csv(index=False).encode("utf-8-sig")
 
 
-def _valuation_chart_frame(report) -> pd.DataFrame:
-    return pd.DataFrame(
-        [
-            {
-                "日期": pd.Timestamp(point.valuation_date),
-                "总权益": float(point.equity),
-            }
-            for point in report.valuation_points
-        ]
+def _valuation_chart_frame(report, benchmarks=None) -> pd.DataFrame:
+    points = sorted(
+        (p for p in report.valuation_points if not getattr(p, "is_partial", False)),
+        key=lambda p: p.valuation_date,
     )
+    columns = ["日期", "系列", "收益率", "总权益", "指数点位"]
+    if not points or points[0].equity <= 0:
+        return pd.DataFrame(columns=columns)
+    rows = []
+    factor = Decimal("1")
+    previous = points[0]
+    for index, point in enumerate(points):
+        if index:
+            flow = getattr(point, "external_net_flow", Decimal("0")) - getattr(previous, "external_net_flow", Decimal("0"))
+            if previous.equity <= 0 or factor is None:
+                factor = None
+            else:
+                # Daily end-of-day cash-flow convention; do not count deposits as returns.
+                factor *= (point.equity - flow) / previous.equity
+        rows.append({"日期": pd.Timestamp(point.valuation_date), "系列": "本项目",
+                     "收益率": float(factor - 1) if factor is not None else None,
+                     "总权益": float(point.equity), "指数点位": None})
+        previous = point
+    baseline = points[0].valuation_date
+    for name, prices in (benchmarks or {}).items():
+        if baseline not in prices or prices[baseline] <= 0:
+            continue
+        for point in points:
+            close = prices.get(point.valuation_date)
+            rows.append({"日期": pd.Timestamp(point.valuation_date), "系列": name,
+                         "收益率": float(close / prices[baseline] - 1) if close is not None else None,
+                         "总权益": None, "指数点位": float(close) if close is not None else None})
+    return pd.DataFrame(rows, columns=columns)
 
 
-def _valuation_chart_domain(report) -> tuple[float, float]:
-    opening_capital = float(report.opening_capital)
-    margin = opening_capital * 0.15
-    return opening_capital - margin, opening_capital + margin
+@st.cache_data(ttl=300, show_spinner=False)
+def _benchmark_prices(start: str, end: str):
+    from datetime import date
+    from trading_ledger.infrastructure.history_quotes import HistoricalQuoteProvider
+    return HistoricalQuoteProvider().benchmarks(date.fromisoformat(start), date.fromisoformat(end))
 
 
 def _valuation_chart_date_domain(report) -> list[dict[str, int]]:
@@ -870,7 +898,7 @@ def monthly_trade_statistics_page(
         )
         st.warning(f"当前报告为部分估值：{detail}。")
     with st.container(horizontal=True, vertical_alignment="center"):
-        st.markdown("#### 估值走势", width="content")
+        st.markdown("#### 收益率走势", width="content")
         record_valuation = st.button(
             ":material/add_chart:",
             help="记录今日估值",
@@ -890,15 +918,21 @@ def monthly_trade_statistics_page(
     st.caption("当月汇总和股票状态按最新账本显示；历史月份及走势图按已记录估值显示。")
     valuation_frame = _valuation_chart_frame(report)
     if valuation_frame.empty:
-        st.caption("本月记录每日估值后显示走势。")
+        st.caption("本月记录完整每日估值后显示走势（基准日总权益须大于 0）。")
     else:
-        domain_min, domain_max = _valuation_chart_domain(report)
+        start = valuation_frame["日期"].min().strftime("%Y-%m-%d")
+        end = valuation_frame["日期"].max().strftime("%Y-%m-%d")
+        benchmarks, errors = _benchmark_prices(start, end)
+        valuation_frame = _valuation_chart_frame(report, benchmarks)
+        st.caption(f"基准日 {start} = 0%；按日末资金流调整累计收益，悬浮查看权益金额。指数为腾讯日线收盘点位。")
+        missing_base = [name for name, prices in benchmarks.items() if start not in prices]
+        if errors or missing_base:
+            st.caption("部分指数暂不可用，项目曲线仍正常显示：" + "；".join(errors + [f"{name}缺少基准日行情" for name in missing_base]))
         st.vega_lite_chart(
             valuation_frame,
             {
                 "mark": {
                     "type": "line",
-                    "color": _profit_color(report.pnl),
                     "point": True,
                 },
                 "encoding": {
@@ -917,18 +951,23 @@ def monthly_trade_statistics_page(
                         },
                     },
                     "y": {
-                        "field": "总权益",
+                        "field": "收益率",
                         "type": "quantitative",
-                        "title": "总权益",
-                        "scale": {
-                            "domain": [domain_min, domain_max],
-                            "nice": False,
-                            "zero": False,
-                        },
-                        "axis": {"format": ",.0f"},
+                        "title": "累计收益率",
+                        "scale": {"zero": True},
+                        "axis": {"format": ".1%"},
+                    },
+                    "color": {
+                        "field": "系列", "type": "nominal", "title": None,
+                        "scale": {"domain": ["本项目", "上证指数", "中证1000", "创业板指"],
+                                  "range": ["#22D3EE", "#FBBF24", "#A78BFA", "#60A5FA"]},
+                        "legend": {"orient": "top"},
                     },
                     "tooltip": [
                         {"field": "日期", "type": "temporal", "title": "日期"},
+                        {"field": "系列", "type": "nominal"},
+                        {"field": "收益率", "type": "quantitative", "format": "+.2%"},
+                        {"field": "指数点位", "type": "quantitative", "format": ",.2f"},
                         {
                             "field": "总权益",
                             "type": "quantitative",

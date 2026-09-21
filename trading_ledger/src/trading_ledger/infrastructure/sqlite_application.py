@@ -3054,6 +3054,8 @@ class SQLiteTradingLedgerApplication:
                         cash_balance=_decimal(row["cash_balance"]),
                         market_value=_decimal(row["market_value"]),
                         equity=_decimal(row["equity"]),
+                        external_net_flow=_decimal(row["external_net_flow"]),
+                        is_partial=bool(row["is_partial"]),
                     )
                     for row in valuations
                 ),

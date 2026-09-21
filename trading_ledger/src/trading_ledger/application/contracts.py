@@ -686,6 +686,8 @@ class DailyValuationPointView:
     cash_balance: Decimal
     market_value: Decimal
     equity: Decimal
+    external_net_flow: Decimal = Decimal("0")
+    is_partial: bool = False
 
 
 @dataclass(frozen=True, slots=True)
