@@ -137,12 +137,29 @@ class TradeUiTest(unittest.TestCase):
             )
         )
         frame = trade_ui._valuation_chart_frame(report)
-        self.assertEqual(list(frame.columns), ["日期", "总权益"])
+        self.assertEqual(list(frame.columns), ["日期", "系列", "收益率", "总权益", "指数点位"])
         self.assertEqual(frame.iloc[0]["总权益"], 100100.0)
+        self.assertEqual(frame.iloc[0]["收益率"], 0)
 
-    def test_valuation_chart_domain_is_fifteen_percent_around_opening(self) -> None:
-        report = SimpleNamespace(opening_capital=Decimal("100000"))
-        self.assertEqual(trade_ui._valuation_chart_domain(report), (85000.0, 115000.0))
+    def test_comparison_returns_use_common_baseline_and_exclude_cash_flows(self) -> None:
+        report = SimpleNamespace(valuation_points=tuple(
+            SimpleNamespace(valuation_date=day, equity=Decimal(equity), external_net_flow=Decimal(flow))
+            for day, equity, flow in [("2026-09-07", "100", "0"), ("2026-09-08", "210", "100"), ("2026-09-09", "181", "50")]
+        ))
+        frame = trade_ui._valuation_chart_frame(report, {
+            "上证指数": {"2026-09-07": Decimal("4000"), "2026-09-08": Decimal("4040"), "2026-09-09": Decimal("4080")},
+            "缺少基准": {"2026-09-08": Decimal("100")},
+        })
+        self.assertEqual(list(frame[frame["系列"] == "本项目"]["收益率"]), [0, 0.1, 0.21])
+        self.assertEqual(list(frame[frame["系列"] == "上证指数"]["收益率"]), [0, 0.01, 0.02])
+        self.assertNotIn("缺少基准", set(frame["系列"]))
+
+    def test_comparison_skips_partial_and_zero_baseline(self) -> None:
+        point = SimpleNamespace(valuation_date="2026-09-07", equity=Decimal("0"))
+        self.assertTrue(trade_ui._valuation_chart_frame(SimpleNamespace(valuation_points=(point,))).empty)
+        point.equity = Decimal("100")
+        point.is_partial = True
+        self.assertTrue(trade_ui._valuation_chart_frame(SimpleNamespace(valuation_points=(point,))).empty)
 
     def test_valuation_chart_date_domain_covers_the_selected_month(self) -> None:
         for month, last_day in (("2026-09", 30), ("2026-12", 31), ("2026-02", 28), ("2028-02", 29)):

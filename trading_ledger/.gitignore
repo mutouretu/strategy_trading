@@ -13,3 +13,4 @@ __pycache__/
 *.bak
 exports/
 backups/
+data/market_history/

@@ -8,6 +8,7 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
 
@@ -25,6 +26,9 @@ from trading_ledger.domain import CashEntryType, TradeSide
 
 class StreamlitAppTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.benchmarks = patch("trade_ui._benchmark_prices", return_value=({}, []))
+        self.benchmarks.start()
+        self.addCleanup(self.benchmarks.stop)
         self.temp_dir = tempfile.TemporaryDirectory()
         self.original_path = os.environ.get("TRADING_LEDGER_DB_PATH")
         os.environ["TRADING_LEDGER_DB_PATH"] = str(
@@ -110,6 +114,10 @@ class StreamlitAppTests(unittest.TestCase):
                 self.assertEqual(axis["format"], "%m-%d")
                 self.assertEqual(axis["tickCount"], "day")
                 self.assertEqual(axis["labelOverlap"], "greedy")
+                self.assertEqual(spec["encoding"]["y"]["field"], "收益率")
+                self.assertEqual(spec["encoding"]["y"]["axis"]["format"], ".1%")
+                self.assertEqual(spec["encoding"]["color"]["field"], "系列")
+                self.assertIn("总权益", [item["field"] for item in spec["encoding"]["tooltip"]])
                 self.assertEqual(spec["encoding"]["x"]["scale"]["domain"], [
                     {"year": 2026, "month": 9, "date": 1},
                     {"year": 2026, "month": 9, "date": 30},
@@ -161,6 +169,10 @@ class StreamlitAppTests(unittest.TestCase):
         application.add_tracking(AddTrackedInstrumentCommand(
             project.project_key, "600000.SH", "浦发银行", "测试来源", "test-user"
         ))
+        app.run()
+        self.assertEqual(app.exception, [])
+        self.assertIn("**当前估值/仓位**", [item.value for item in app.markdown])
+        self.assertIn("¥0.00 / **0.0%**", [item.value for item in app.markdown])
         application.confirm_manual_trade(ConfirmManualTradeCommand(
             project_key=project.project_key, symbol="600000.SH", side=TradeSide.BUY,
             allocation_ratio=Decimal("0.5"), price=Decimal("10"),
@@ -171,6 +183,7 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertEqual(app.metric[2].value, "¥99,995.00")
         self.assertEqual(app.metric[3].value, "¥50,995.00")
         self.assertEqual(app.metric[3].label, "可用资金（51.00%）")
+        self.assertIn("¥49,000.00 / **49.0%**", [item.value for item in app.markdown])
         app.text_input(key="daily_recommendation_search").set_value("不存在").run()
         self.assertEqual(app.metric[2].value, "¥99,995.00")
         self.assertEqual(app.metric[3].label, "可用资金（51.00%）")
