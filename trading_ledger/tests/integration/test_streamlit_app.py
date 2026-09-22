@@ -119,6 +119,12 @@ class StreamlitAppTests(unittest.TestCase):
                 self.assertEqual(spec["encoding"]["y"]["field"], "收益率")
                 self.assertEqual(spec["encoding"]["y"]["axis"]["format"], ".1%")
                 self.assertEqual(spec["encoding"]["color"]["field"], "系列")
+                colors = spec["encoding"]["color"]["scale"]
+                self.assertEqual(dict(zip(colors["domain"], colors["range"]))["本项目"], "#F87171")
+                dashes = spec["encoding"]["strokeDash"]["scale"]
+                self.assertEqual(dict(zip(dashes["domain"], dashes["range"])), {
+                    "本项目": [1, 0], "上证指数": [6, 4], "中证1000": [6, 4], "创业板指": [6, 4],
+                })
                 self.assertIn("总权益", [item["field"] for item in spec["encoding"]["tooltip"]])
                 self.assertEqual(spec["encoding"]["x"]["scale"]["domain"], [
                     {"year": 2026, "month": 9, "date": 1},
