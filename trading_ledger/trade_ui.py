@@ -15,6 +15,7 @@ from trading_ledger.application.contracts import (
     ConfirmManualTradeCommand,
     GetMonthlyStatisticsQuery,
     ListOperationHistoryQuery,
+    ListPositionsQuery,
     ListStatisticsMonthsQuery,
     ListTrackingQuery,
     PreviewManualTradeCommand,
@@ -282,10 +283,16 @@ def render_sell_dialog(
     sellable_quantity: Decimal,
     current_price: Decimal | None,
     position_ratio: Decimal | None,
+    total_quantity: Decimal | None = None,
 ) -> None:
-    market_value = sellable_quantity * current_price if current_price is not None else None
+    total_quantity = sellable_quantity if total_quantity is None else total_quantity
+    market_value = total_quantity * current_price if current_price is not None else None
     st.caption(
         f"{symbol} · {name} · 持仓市值 {money(market_value)}（{pct(position_ratio)}）"
+    )
+    st.caption(
+        f"总持仓 {total_quantity:,.0f} 股 · 可卖 {sellable_quantity:,.0f} 股 · "
+        f"今日锁定 {max(Decimal('0'), total_quantity - sellable_quantity):,.0f} 股"
     )
     percentage = st.number_input(
         "卖出比例（%） *",
@@ -352,7 +359,10 @@ def render_sell_dialog(
         except ApplicationError as error:
             _show_error(error)
         else:
-            archived_note = "已全部卖出并自动归档。" if trade.quantity == sellable_quantity else ""
+            remaining = next((position.quantity for position in application.list_positions(
+                ListPositionsQuery(project_key=project_key)
+            ) if position.symbol == symbol), Decimal("0"))
+            archived_note = "已全部卖出并自动归档。" if remaining == 0 else ""
             _set_notice(f"{name} 已卖出 {trade.quantity:,.0f} 股。{archived_note}")
             st.rerun()
 
@@ -493,6 +503,7 @@ def render_tracking_table(
             help=(
                 "卖出"
                 if row.sellable_quantity > 0
+                else "当天买入的持仓已锁定，T+1 次日可卖" if row.quantity > 0
                 else "当前没有持仓可卖"
             ),
             disabled=row.sellable_quantity <= 0,
@@ -514,6 +525,7 @@ def render_tracking_table(
                     if tracking_page.account.equity > 0 and row.reference_price is not None
                     else None
                 ),
+                total_quantity=row.quantity,
             )
         with actions[2].popover(":material/edit:", help="编辑"):
             with st.form(f"tracking_edit_{row.tracking_id}"):

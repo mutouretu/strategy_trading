@@ -69,6 +69,7 @@ class SQLiteLedgerTests(unittest.TestCase):
                 project_name="长线组合",
                 initial_capital=Decimal("100000.00"),
                 actor="test-user",
+                t_plus_one=False,  # Legacy/unrestricted accounting regression tests.
             )
         )
         self.tracking = self.application.add_tracking(
@@ -1090,10 +1091,11 @@ class SQLiteLedgerTests(unittest.TestCase):
                 upgraded.execute("SELECT key, value FROM ledger_metadata")
             )
             project = upgraded.execute(
-                "SELECT color_key FROM projects WHERE project_key = 'old-project'"
+                "SELECT color_key, t_plus_one FROM projects WHERE project_key = 'old-project'"
             ).fetchone()
-        self.assertEqual(metadata["schema_version"], "3")
+        self.assertEqual(metadata["schema_version"], "4")
         self.assertEqual(project["color_key"], "blue")
+        self.assertEqual(project["t_plus_one"], 0)
 
 
 if __name__ == "__main__":

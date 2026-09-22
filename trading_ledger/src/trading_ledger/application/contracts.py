@@ -121,11 +121,14 @@ class CreateProjectCommand:
     initial_capital: Decimal
     actor: str
     description: str = ""
+    t_plus_one: bool = True
 
     def __post_init__(self) -> None:
         _require_text(self.project_name, "project_name")
         _require_positive(self.initial_capital, "initial_capital")
         _require_text(self.actor, "actor")
+        if not isinstance(self.t_plus_one, bool):
+            raise ValueError("t_plus_one must be a boolean.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +138,7 @@ class UpdateProjectCommand:
     actor: str
     description: str = ""
     color_key: str | None = None
+    t_plus_one: bool | None = None
 
     def __post_init__(self) -> None:
         _require_project_key(self.project_key)
@@ -142,6 +146,8 @@ class UpdateProjectCommand:
         _require_text(self.actor, "actor")
         if self.color_key is not None and self.color_key not in PROJECT_COLOR_KEYS:
             raise ValueError("color_key is not a supported project color.")
+        if self.t_plus_one is not None and not isinstance(self.t_plus_one, bool):
+            raise ValueError("t_plus_one must be a boolean.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -538,6 +544,7 @@ class ProjectView:
     initial_capital: Decimal
     created_at: datetime
     archived_at: datetime | None = None
+    t_plus_one: bool = False
 
 
 @dataclass(frozen=True, slots=True)

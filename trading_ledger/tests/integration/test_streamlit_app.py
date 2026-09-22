@@ -16,9 +16,11 @@ from trading_ledger.application.contracts import (
     AddTrackedInstrumentCommand,
     ArchiveTrackedInstrumentCommand,
     CreateProjectCommand,
+    GetProjectQuery,
     RecordCashEntryCommand,
     ConfirmManualTradeCommand,
     RecordDailyValuationCommand,
+    UpdateProjectCommand,
 )
 from trading_ledger.bootstrap import get_application, get_settings
 from trading_ledger.domain import CashEntryType, TradeSide
@@ -188,6 +190,50 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertEqual(app.metric[2].value, "¥99,995.00")
         self.assertEqual(app.metric[3].label, "可用资金（51.00%）")
 
+    def test_t_plus_one_switch_is_only_in_project_edit_and_persists(self) -> None:
+        application = get_application()
+        project = application.create_project(CreateProjectCommand("T+1 设置", Decimal("100000"), "test-user"))
+        app = self._app().run()
+        self.assertEqual(len(app.toggle), 0)
+        app.radio[0].set_value("项目管理").run()
+        app.button(key="project_management_add").click().run()
+        self.assertEqual(len(app.toggle), 0)
+        app = self._app().run()
+        app.radio[0].set_value("项目管理").run()
+        app.button(key=f"project_management_edit_{project.project_key}").click().run()
+        key = f"ledger_project_t_plus_one_{project.project_key}"
+        self.assertTrue(app.toggle(key=key).value)
+        # AppTest reruns the whole script, not the browser's dialog fragment.
+        # Mount the dialog directly so it remains present on form submission.
+        dialog = AppTest.from_string(
+            'from app import render_project_settings_dialog\n'
+            f'render_project_settings_dialog({project.project_key!r})'
+        ).run()
+        dialog.toggle(key=key).set_value(False)
+        next(button for button in dialog.button if button.label == "保存设置").click().run()
+        self.assertEqual(dialog.exception, [])
+        self.assertFalse(application.get_project(GetProjectQuery(project.project_key)).t_plus_one)
+        app = self._app().run()
+        app.radio[0].set_value("项目管理").run()
+        app.button(key=f"project_management_edit_{project.project_key}").click().run()
+        self.assertFalse(app.toggle(key=key).value)
+
+    def test_pages_show_project_trading_rule_and_follow_setting_changes(self) -> None:
+        application = get_application()
+        project = application.create_project(CreateProjectCommand("规则显示", Decimal("100000"), "test-user"))
+        app = self._app().run()
+        for enabled in (True, False):
+            application.update_project(UpdateProjectCommand(
+                project.project_key, project.project_name, "test-user", t_plus_one=enabled,
+            ))
+            for page in ("当前跟踪", "操作历史", "交易统计", "项目管理"):
+                with self.subTest(enabled=enabled, page=page):
+                    app.radio[0].set_value(page).run()
+                    self.assertEqual(app.exception, [])
+                    markup = "\n".join(item.value for item in app.markdown)
+                    self.assertIn(f"规则显示（T+{int(enabled)}）</span>", markup)
+                    self.assertNotIn(f"规则显示（T+{int(not enabled)}）</span>", markup)
+
     def test_tracking_cash_ratio_with_zero_equity(self) -> None:
         application = get_application()
         project = application.create_project(CreateProjectCommand(
@@ -310,7 +356,7 @@ class StreamlitAppTests(unittest.TestCase):
 
     def test_history_shows_total_equity_ratio_instead_of_cash_change(self) -> None:
         application = get_application()
-        project = application.create_project(CreateProjectCommand("历史占比测试", Decimal("100000"), "test-user"))
+        project = application.create_project(CreateProjectCommand("历史占比测试", Decimal("100000"), "test-user", t_plus_one=False))
         application.add_tracking(AddTrackedInstrumentCommand(project.project_key, "600000", "浦发银行", "观察来源", "test-user"))
         application.confirm_manual_trade(ConfirmManualTradeCommand(
             project_key=project.project_key,
@@ -346,7 +392,7 @@ class StreamlitAppTests(unittest.TestCase):
 
     def test_liquidation_disappears_from_tracking_and_is_closed_in_statistics(self) -> None:
         application = get_application()
-        project = application.create_project(CreateProjectCommand("清仓均价测试", Decimal("100000"), "test-user"))
+        project = application.create_project(CreateProjectCommand("清仓均价测试", Decimal("100000"), "test-user", t_plus_one=False))
         application.add_tracking(AddTrackedInstrumentCommand(project.project_key, "600000", "浦发银行", "观察来源", "test-user"))
         for side, price, ratio in ((TradeSide.BUY, "10", "0.5"), (TradeSide.SELL, "11", "1")):
             application.confirm_manual_trade(ConfirmManualTradeCommand(
