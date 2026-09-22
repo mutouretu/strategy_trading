@@ -972,7 +972,13 @@ def monthly_trade_statistics_page(
                     "color": {
                         "field": "系列", "type": "nominal", "title": None,
                         "scale": {"domain": ["本项目", "上证指数", "中证1000", "创业板指"],
-                                  "range": ["#22D3EE", "#FBBF24", "#A78BFA", "#60A5FA"]},
+                                  "range": ["#F87171", "#FBBF24", "#A78BFA", "#60A5FA"]},
+                        "legend": {"orient": "top"},
+                    },
+                    "strokeDash": {
+                        "field": "系列", "type": "nominal", "title": None,
+                        "scale": {"domain": ["本项目", "上证指数", "中证1000", "创业板指"],
+                                  "range": [[1, 0], [6, 4], [6, 4], [6, 4]]},
                         "legend": {"orient": "top"},
                     },
                     "tooltip": [
