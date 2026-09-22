@@ -69,6 +69,17 @@ class TradeUiTest(unittest.TestCase):
                 self.assertEqual(app.exception, [])
                 self.assertEqual(app.number_input(key="tracking_sell_price_002787.SZ").value, 26.1)
 
+    def test_sell_dialog_distinguishes_total_value_from_sellable_and_locked_shares(self) -> None:
+        app = AppTest.from_string(
+            'from decimal import Decimal\n'
+            'from trade_ui import render_sell_dialog\n'
+            'render_sell_dialog(None, "test", "tester", "600000.SH", "浦发银行", '
+            'Decimal("1000"), Decimal("10"), Decimal("0.15"), total_quantity=Decimal("1500"))'
+        ).run()
+        self.assertEqual(app.exception, [])
+        self.assertEqual(app.caption[0].value, "600000.SH · 浦发银行 · 持仓市值 ¥15,000.00（15.00%）")
+        self.assertEqual(app.caption[1].value, "总持仓 1,500 股 · 可卖 1,000 股 · 今日锁定 500 股")
+
     def test_buy_price_prefills_current_price_and_keeps_manual_edits(self) -> None:
         for reference, expected in (("Decimal('25.92')", 25.92), ("None", None), ("Decimal('0')", None)):
             with self.subTest(reference=reference):

@@ -12,11 +12,12 @@ from trading_ledger.config import MODULE_ROOT
 
 
 DATABASE_IDENTITY = "strategy-trading.trading-ledger"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 MIGRATION_PATHS = {
     1: MODULE_ROOT / "migrations" / "001_initial.sql",
     2: MODULE_ROOT / "migrations" / "002_project_color.sql",
     3: MODULE_ROOT / "migrations" / "003_remove_t_plus_one.sql",
+    4: MODULE_ROOT / "migrations" / "004_project_t_plus_one.sql",
 }
 
 

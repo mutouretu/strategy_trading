@@ -242,6 +242,7 @@ class SQLiteTradingLedgerApplication:
             project_name=str(row["project_name"]),
             description=str(row["description"]),
             color_key=str(row["color_key"]),
+            t_plus_one=bool(row["t_plus_one"]),
             status=ProjectStatus(row["status"]),
             initial_capital=_decimal(row["initial_capital"]),
             created_at=datetime.fromisoformat(row["created_at"]),
@@ -277,8 +278,8 @@ class SQLiteTradingLedgerApplication:
                 """
                 INSERT INTO projects (
                     project_key, project_name, project_name_normalized,
-                    description, status, created_at
-                ) VALUES (?, ?, ?, ?, 'ACTIVE', ?)
+                    description, status, created_at, t_plus_one
+                ) VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?)
                 """,
                 (
                     project_key,
@@ -286,6 +287,7 @@ class SQLiteTradingLedgerApplication:
                     normalized_name,
                     command.description.strip(),
                     now,
+                    int(command.t_plus_one),
                 ),
             )
             project_id = int(cursor.lastrowid)
@@ -343,6 +345,7 @@ class SQLiteTradingLedgerApplication:
                     "project_key": project_key,
                     "project_name": command.project_name,
                     "color_key": color_key,
+                    "t_plus_one": command.t_plus_one,
                 },
                 occurred_at=now,
             )
@@ -371,13 +374,15 @@ class SQLiteTradingLedgerApplication:
                 "project_name": project["project_name"],
                 "description": project["description"],
                 "color_key": project["color_key"],
+                "t_plus_one": bool(project["t_plus_one"]),
             }
             color_key = command.color_key or str(project["color_key"])
+            t_plus_one = bool(project["t_plus_one"]) if command.t_plus_one is None else command.t_plus_one
             connection.execute(
                 """
                 UPDATE projects
                 SET project_name = ?, project_name_normalized = ?, description = ?,
-                    color_key = ?
+                    color_key = ?, t_plus_one = ?
                 WHERE project_id = ?
                 """,
                 (
@@ -385,6 +390,7 @@ class SQLiteTradingLedgerApplication:
                     normalized_name,
                     command.description.strip(),
                     color_key,
+                    int(t_plus_one),
                     project["project_id"],
                 ),
             )
@@ -400,6 +406,7 @@ class SQLiteTradingLedgerApplication:
                     "project_name": command.project_name.strip(),
                     "description": command.description.strip(),
                     "color_key": color_key,
+                    "t_plus_one": t_plus_one,
                 },
                 occurred_at=now,
             )
@@ -797,21 +804,46 @@ class SQLiteTradingLedgerApplication:
             (instrument_id,),
         ).fetchone()
 
+    def _remaining_lots(
+        self,
+        connection: sqlite3.Connection,
+        account_id: int,
+        instrument_id: int,
+        *,
+        before_date: date | None = None,
+    ) -> list[sqlite3.Row]:
+        rows = connection.execute(
+            """
+            SELECT l.*, tr.trade_time AS buy_time
+            FROM position_lots l
+            JOIN trade_records tr ON tr.trade_id = l.source_trade_id
+            WHERE l.account_id = ? AND l.instrument_id = ?
+              AND CAST(l.remaining_quantity AS NUMERIC) > 0
+            ORDER BY l.created_at, l.lot_id
+            """,
+            (account_id, instrument_id),
+        ).fetchall()
+        if before_date is not None:
+            rows = [row for row in rows
+                    if self._time(datetime.fromisoformat(row["buy_time"])).date() < before_date]
+        return rows
+
     def _sellable_quantity(
         self,
         connection: sqlite3.Connection,
         account_id: int,
         instrument_id: int,
+        *,
+        as_of: datetime | None = None,
     ) -> Decimal:
-        rows = connection.execute(
-            """
-            SELECT remaining_quantity
-            FROM position_lots
-            WHERE account_id = ? AND instrument_id = ?
-              AND remaining_quantity <> '0'
-            """,
-            (account_id, instrument_id),
-        ).fetchall()
+        enabled = connection.execute(
+            "SELECT p.t_plus_one FROM projects p JOIN accounts a USING(project_id) WHERE a.account_id = ?",
+            (account_id,),
+        ).fetchone()[0]
+        rows = self._remaining_lots(
+            connection, account_id, instrument_id,
+            before_date=self._time(as_of).date() if enabled else None,
+        )
         return sum((_decimal(row["remaining_quantity"]) for row in rows), Decimal("0"))
 
     @staticmethod
@@ -1306,18 +1338,12 @@ class SQLiteTradingLedgerApplication:
         account_id: int,
         instrument_id: int,
         quantity: Decimal,
+        *,
+        before_date: date | None = None,
     ) -> Decimal:
         remaining = quantity
         cost = Decimal("0")
-        lots = connection.execute(
-            """
-            SELECT * FROM position_lots
-            WHERE account_id = ? AND instrument_id = ?
-              AND CAST(remaining_quantity AS NUMERIC) > 0
-            ORDER BY created_at, lot_id
-            """,
-            (account_id, instrument_id),
-        ).fetchall()
+        lots = self._remaining_lots(connection, account_id, instrument_id, before_date=before_date)
         for lot in lots:
             available = _decimal(lot["remaining_quantity"])
             consumed = min(remaining, available)
@@ -1370,7 +1396,7 @@ class SQLiteTradingLedgerApplication:
             ),
             Decimal("0"),
         )
-        available = quantity
+        available = self._sellable_quantity(connection, account_id, instrument_id, as_of=occurred_at)
         average = cost_total / quantity if quantity > 0 else Decimal("0")
         market_value = round_money(quantity * mark_price)
         unrealized = round_money(market_value - cost_total)
@@ -1515,6 +1541,9 @@ class SQLiteTradingLedgerApplication:
             created_at,
         )
         trade_metadata = dict(metadata or {})
+        # Retain the rule used at execution time so reversals/replays do not
+        # retroactively apply a newly edited project setting to old trades.
+        trade_metadata["_ledger_t_plus_one"] = bool(project["t_plus_one"])
         trade_metadata["_ledger_equity_before"] = (
             _decimal_text(equity_before) if equity_before is not None else None
         )
@@ -1531,6 +1560,7 @@ class SQLiteTradingLedgerApplication:
                 connection,
                 int(account["account_id"]),
                 int(instrument["instrument_id"]),
+                as_of=trade_time,
             )
             if quantity > sellable:
                 raise ApplicationError(
@@ -1543,6 +1573,7 @@ class SQLiteTradingLedgerApplication:
                 int(account["account_id"]),
                 int(instrument["instrument_id"]),
                 quantity,
+                before_date=trade_time.date() if project["t_plus_one"] else None,
             )
             realized = round_money(net_cash - consumed_cost)
 
@@ -1727,6 +1758,7 @@ class SQLiteTradingLedgerApplication:
                 connection,
                 int(account["account_id"]),
                 int(instrument["instrument_id"]),
+                as_of=trade_time,
             )
             try:
                 calculation = (
@@ -2138,6 +2170,9 @@ class SQLiteTradingLedgerApplication:
                     account_id,
                     instrument_id,
                     quantity,
+                    before_date=(self._time(trade_time).date()
+                                 if json.loads(trade["metadata_json"] or "{}").get("_ledger_t_plus_one", False)
+                                 else None),
                 )
                 realized = round_money(_decimal(trade["net_cash_amount"]) - cost)
                 realized_by_instrument[instrument_id] = (

@@ -49,7 +49,7 @@ class DailyValuationJobTests(unittest.TestCase):
 
     def project_named(self, name):
         return self.app.create_project(CreateProjectCommand(
-            project_name=name, initial_capital=Decimal("100000"), actor="test"
+            project_name=name, initial_capital=Decimal("100000"), actor="test", t_plus_one=False
         ))
 
     def set_quote(self, timestamp):

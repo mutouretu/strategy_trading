@@ -427,6 +427,12 @@ def render_project_settings_dialog(project_key: str) -> None:
             format_func=lambda key: PROJECT_COLOR_OPTIONS[key][0],
             key=f"ledger_project_color_{project_key}",
         )
+        t_plus_one = st.toggle(
+            "启用 T+1",
+            value=project.t_plus_one,
+            help="开启后，当天买入的股份当天不可卖；关闭可用于同日买卖测试。按账本业务时区判断日期。",
+            key=f"ledger_project_t_plus_one_{project_key}",
+        )
         description = st.text_area(
             "项目说明",
             value=project.description,
@@ -446,6 +452,7 @@ def render_project_settings_dialog(project_key: str) -> None:
                         project_name=project_name.strip(),
                         description=description.strip(),
                         color_key=color_key,
+                        t_plus_one=t_plus_one,
                         actor=current_actor(),
                     )
                 )
@@ -552,7 +559,7 @@ def render_project_management_page(projects, active_project) -> None:
                 columns = st.columns(column_ratios, vertical_alignment="center")
                 columns[0].markdown(
                     f'<span class="beili-project-name" style="color:{project_color}">'
-                    f"{html.escape(project.project_name)}</span><br>"
+                    f"{html.escape(project.project_name)}（T+{1 if project.t_plus_one else 0}）</span><br>"
                     f"<code>{html.escape(project_key)}</code>",
                     unsafe_allow_html=True,
                 )
@@ -645,7 +652,7 @@ def main() -> None:
         page_title = (
             f"{html.escape(page)} · "
             f'<span class="beili-project-name" style="color:{project_color}">'
-            f"{html.escape(active_project.project_name)}</span>"
+            f"{html.escape(active_project.project_name)}（T+{1 if active_project.t_plus_one else 0}）</span>"
         )
     st.markdown(
         f"""
