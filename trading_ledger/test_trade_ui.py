@@ -62,7 +62,7 @@ class TradeUiTest(unittest.TestCase):
                 ).run()
                 self.assertEqual(app.exception, [])
                 self.assertEqual(app.number_input(key="tracking_sell_price_002787.SZ").value, expected)
-                self.assertIsNone(app.number_input(key="tracking_sell_ratio_002787.SZ").value)
+                self.assertEqual(app.text_input(key="tracking_sell_ratio_text_002787.SZ").value, "")
                 self.assertTrue(app.button(key="tracking_sell_confirm_002787.SZ").disabled)
                 app.number_input(key="tracking_sell_price_002787.SZ").set_value(26.1).run()
                 app.text_input(key="tracking_sell_signal_002787.SZ").set_value("实际成交价").run()
@@ -91,7 +91,7 @@ class TradeUiTest(unittest.TestCase):
                 ).run()
                 self.assertEqual(app.exception, [])
                 self.assertEqual(app.number_input(key="tracking_buy_price_002787.SZ").value, expected)
-                self.assertIsNone(app.number_input(key="tracking_buy_ratio_002787.SZ").value)
+                self.assertEqual(app.text_input(key="tracking_buy_ratio_text_002787.SZ").value, "")
                 self.assertTrue(app.button(key="tracking_buy_confirm_002787.SZ").disabled)
                 app.number_input(key="tracking_buy_price_002787.SZ").set_value(26.1).run()
                 app.text_input(key="tracking_buy_signal_002787.SZ").set_value("实际成交价").run()
@@ -102,6 +102,17 @@ class TradeUiTest(unittest.TestCase):
         self.assertEqual(trade_ui.money(Decimal("1234.5")), "¥1,234.50")
         self.assertEqual(trade_ui.pct(Decimal("0.125")), "12.50%")
         self.assertEqual(trade_ui.money(None), "—")
+
+    def test_percentage_requires_explicit_sign_and_valid_range(self) -> None:
+        for text, expected in (("", None), ("  ", None), ("25%", "25"),
+                               ("100%", "100"), ("0.01%", "0.01"),
+                               (" 25.92 ％ ", "25.92")):
+            with self.subTest(text=text):
+                self.assertEqual(trade_ui._parse_percentage(text), Decimal(expected) if expected else None)
+        for text in ("25", "25.92", "%", "25%%", "-1%", "0%", "100.01%",
+                     "0.001%", "NaN%", "Infinity%", "1e1%", "25%abc", "25,5%"):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                trade_ui._parse_percentage(text)
 
     def test_monthly_export_contains_summary_and_details(self) -> None:
         report = SimpleNamespace(

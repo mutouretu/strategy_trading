@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import re
 from calendar import monthrange
 from dataclasses import replace
 from decimal import Decimal
@@ -147,12 +148,39 @@ def render_add_tracking_dialog(
         st.rerun()
 
 
+def _parse_percentage(text: str) -> Decimal | None:
+    value = text.strip()
+    if not value:
+        return None
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?\s*[%％]", value):
+        raise ValueError("比例必须带 %，例如 25%、100%；成交价格请填写在价格框中。")
+    percentage = Decimal(value[:-1].strip())
+    if not Decimal("0.01") <= percentage <= Decimal("100"):
+        raise ValueError("比例须在 0.01% 到 100% 之间。")
+    return percentage
+
+
+def _percentage_input(label: str, basis: str, key: str) -> Decimal | None:
+    text = st.text_input(
+        label,
+        placeholder="例如 25% 或 100%（必须带 %）",
+        help=f"以{basis}为基数；必须手动输入百分号，也支持全角 ％。",
+        key=key,
+        max_chars=32,
+    )
+    try:
+        return _parse_percentage(text)
+    except ValueError as error:
+        st.warning(str(error))
+        return None
+
+
 def _trade_preview(
     application: TradingLedgerApplication,
     project_key: str,
     symbol: str,
     side: TradeSide,
-    percentage: float | None,
+    percentage: Decimal | None,
     price: float | None,
     signal_text: str,
 ):
@@ -207,15 +235,9 @@ def render_buy_dialog(
     st.caption(
         f"{symbol} · {name} · 可用资金 {money(available_cash)}（{pct(cash_ratio)}）"
     )
-    percentage = st.number_input(
-        "买入比例（%） *",
-        min_value=0.01,
-        max_value=100.0,
-        value=None,
-        step=1.0,
-        format="%.2f",
-        placeholder="请输入可用资金的百分比",
-        key=f"tracking_buy_ratio_{symbol}",
+    percentage = _percentage_input(
+        "买入比例（必填 %） *", "可用资金",
+        key=f"tracking_buy_ratio_text_{symbol}",
     )
     price = st.number_input(
         "买入价格 *",
@@ -294,15 +316,9 @@ def render_sell_dialog(
         f"总持仓 {total_quantity:,.0f} 股 · 可卖 {sellable_quantity:,.0f} 股 · "
         f"今日锁定 {max(Decimal('0'), total_quantity - sellable_quantity):,.0f} 股"
     )
-    percentage = st.number_input(
-        "卖出比例（%） *",
-        min_value=0.01,
-        max_value=100.0,
-        value=None,
-        step=1.0,
-        format="%.2f",
-        placeholder="请输入该股可卖持仓的百分比",
-        key=f"tracking_sell_ratio_{symbol}",
+    percentage = _percentage_input(
+        "卖出比例（必填 %） *", "该股可卖持仓",
+        key=f"tracking_sell_ratio_text_{symbol}",
     )
     price = st.number_input(
         "卖出价格 *",
