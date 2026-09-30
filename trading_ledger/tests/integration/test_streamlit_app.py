@@ -240,6 +240,59 @@ class StreamlitAppTests(unittest.TestCase):
                     self.assertIn(f"规则显示（T+{int(enabled)}）</span>", markup)
                     self.assertNotIn(f"规则显示（T+{int(not enabled)}）</span>", markup)
 
+    def test_buy_and_sell_require_percent_sign_before_confirming(self) -> None:
+        application = get_application()
+        for side in ("buy", "sell"):
+            with self.subTest(side=side):
+                project = application.create_project(CreateProjectCommand(
+                    f"百分号测试-{side}", Decimal("100000"), "test-user", t_plus_one=False,
+                ))
+                application.add_tracking(AddTrackedInstrumentCommand(
+                    project.project_key, "600000.SH", "浦发银行", "测试", "test-user",
+                ))
+                if side == "sell":
+                    application.confirm_manual_trade(ConfirmManualTradeCommand(
+                        project.project_key, "600000.SH", TradeSide.BUY,
+                        Decimal("0.5"), Decimal("10"), "买入底仓", "test-user",
+                    ))
+                arguments = (
+                    'Decimal("100000"), Decimal("10"), Decimal("100000")'
+                    if side == "buy" else
+                    'Decimal("4900"), Decimal("10"), Decimal("0.49")'
+                )
+                dialog = AppTest.from_string(
+                    'from decimal import Decimal\n'
+                    'from trading_ledger.bootstrap import get_application\n'
+                    f'from trade_ui import render_{side}_dialog\n'
+                    f'render_{side}_dialog(get_application(), {project.project_key!r}, '
+                    f'"test-user", "600000.SH", "浦发银行", {arguments})'
+                ).run()
+                ratio_key = f"tracking_{side}_ratio_text_600000.SH"
+                confirm_key = f"tracking_{side}_confirm_600000.SH"
+                dialog.text_input(key=f"tracking_{side}_signal_600000.SH").set_value("测试信号").run()
+                self.assertTrue(dialog.button(key=confirm_key).disabled)
+                for invalid in ("25.92", "100.01%", "NaN%"):
+                    dialog.text_input(key=ratio_key).set_value(invalid).run()
+                    self.assertEqual(dialog.exception, [])
+                    self.assertTrue(dialog.warning)
+                    self.assertTrue(dialog.button(key=confirm_key).disabled)
+                dialog.text_input(key=ratio_key).set_value("50%").run()
+                self.assertFalse(dialog.button(key=confirm_key).disabled)
+                dialog.text_input(key=ratio_key).set_value("50").run()
+                self.assertTrue(dialog.button(key=confirm_key).disabled)
+                dialog.text_input(key=ratio_key).set_value("25%").run()
+                self.assertFalse(dialog.button(key=confirm_key).disabled)
+                dialog.button(key=confirm_key).click().run()
+                self.assertEqual(dialog.exception, [])
+                with application.database.read() as db:
+                    trades = db.execute(
+                        "SELECT allocation_ratio,price FROM trade_records WHERE project_id=? AND side=?",
+                        (project.project_id, side.upper()),
+                    ).fetchall()
+                self.assertEqual(len(trades), 1)
+                self.assertEqual(Decimal(trades[0]["allocation_ratio"]), Decimal("0.25"))
+                self.assertEqual(Decimal(trades[0]["price"]), Decimal("10"))
+
     def test_tracking_cash_ratio_with_zero_equity(self) -> None:
         application = get_application()
         project = application.create_project(CreateProjectCommand(
