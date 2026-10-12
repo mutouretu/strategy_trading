@@ -78,6 +78,19 @@ def _show_error(error: ApplicationError) -> None:
     st.error(error.detail.message)
 
 
+def _performance_metric(label: str, return_rate, drawdown) -> None:
+    st.markdown(
+        f'<div class="ledger-performance-card" role="group" aria-label="{label}">'
+        f'<div style="color:var(--beili-muted);font-size:0.875rem;line-height:1.6">{label}</div>'
+        '<div style="font-size:1.65rem;line-height:1.5;white-space:nowrap">'
+        f'<span style="color:{_profit_color(return_rate)}">{pct(return_rate)}</span>'
+        '<span style="color:var(--beili-muted)"> / </span>'
+        f'<span style="color:{_profit_color(drawdown)}">{pct(drawdown)}</span>'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
 def _set_notice(message: str) -> None:
     st.session_state["ledger_notice"] = message
 
@@ -906,18 +919,21 @@ def monthly_trade_statistics_page(
     first[1].metric("买入次数", f"{report.buy_count} 次")
     first[2].metric("卖出次数", f"{report.sell_count} 次")
     with first[3]:
-        _profit_metric(
-            "最大回撤", pct(report.max_drawdown), report.max_drawdown, "monthly_drawdown"
-        )
+        _performance_metric("年度收益/回撤", report.annual_return_rate, report.annual_max_drawdown)
     second = st.columns(4)
     second[0].metric("期初资金", money(report.opening_capital))
     with second[1]:
         _profit_metric("本月盈亏", money(report.pnl), report.pnl, "monthly_pnl")
     second[2].metric("期末资金", money(report.closing_capital))
     with second[3]:
-        _profit_metric(
-            "本月收益率", pct(report.return_rate), report.return_rate, "monthly_return"
-        )
+        _performance_metric("月度收益/回撤", report.return_rate, report.max_drawdown)
+    st.caption(
+        f"年度：{selected_month[:4]} 年初至所选月份；月度：{selected_month}。"
+        "收益为累计收益率，回撤为各自区间内最大回撤（负数）；按日末资金流调整，非年化。"
+        "以期前最近完整估值或项目初始资金起算；当月包含当前权益，历史月份截至最近可用估值。"
+    )
+    if report.performance_is_partial:
+        st.caption("收益/回撤数据不完整：缺少期初依据时仅计算已知区间；不完整估值已跳过，建议补齐每日估值。")
     if report.is_partial:
         detail = (
             "缺少价格：" + "、".join(report.missing_symbols)

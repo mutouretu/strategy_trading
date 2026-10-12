@@ -165,7 +165,7 @@ def apply_styles() -> None:
             border-radius: 0.75rem;
             box-shadow: inset 3px 0 0 var(--beili-violet);
         }
-        div[data-testid="stMetric"] {
+        div[data-testid="stMetric"], .ledger-performance-card {
             min-height: 7rem;
             padding: 1rem 1.05rem;
             background: var(--beili-card);

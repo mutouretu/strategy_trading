@@ -78,7 +78,11 @@ class StreamlitAppTests(unittest.TestCase):
         button = app.button(key="statistics_record_valuation")
         self.assertEqual(button.label, ":material/add_chart:")
         labels = [metric.label for metric in app.metric]
-        self.assertEqual(len(labels), 8)
+        self.assertEqual(len(labels), 6)
+        markup = "\n".join(item.value for item in app.markdown)
+        self.assertEqual(markup.count('class="ledger-performance-card"'), 2)
+        self.assertIn('aria-label="年度收益/回撤"', markup)
+        self.assertIn('aria-label="月度收益/回撤"', markup)
         self.assertNotIn("外部资金净流入", labels)
         self.assertNotIn("年化波动率", labels)
         button.click().run()

@@ -13,6 +13,8 @@ from typing import Sequence
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from trading_ledger.domain.performance import calculate_performance
+
 from trading_ledger.application.contracts import (
     AccountSummaryView,
     AddTrackedInstrumentCommand,
@@ -2789,6 +2791,56 @@ class SQLiteTradingLedgerApplication:
                 missing_symbols=missing,
             )
 
+    def _period_performance(self, connection, account, start_date, end_date, live_summary=None):
+        """Read-only calculation; never reuse lifetime peak/drawdown columns."""
+        now = self._now()
+        end_date = min(end_date, now.date() + timedelta(days=1))
+        account_id = account["account_id"]
+        baseline = connection.execute(
+            """SELECT equity, external_net_flow FROM daily_account_valuations
+               WHERE account_id=? AND valuation_date<? AND is_partial=0
+               ORDER BY valuation_date DESC LIMIT 1""",
+            (account_id, start_date.isoformat()),
+        ).fetchone()
+        rows = connection.execute(
+            """SELECT valuation_date, equity, external_net_flow, is_partial
+               FROM daily_account_valuations WHERE account_id=?
+               AND valuation_date>=? AND valuation_date<? ORDER BY valuation_date""",
+            (account_id, start_date.isoformat(), end_date.isoformat()),
+        ).fetchall()
+        partial = any(row["is_partial"] for row in rows)
+        complete = [row for row in rows if not row["is_partial"]]
+        if live_summary is not None:
+            cumulative_flow = sum((_decimal(row[0]) for row in connection.execute(
+                """SELECT amount FROM cash_ledger WHERE account_id=?
+                   AND entry_type IN ('DEPOSIT','WITHDRAWAL') AND occurred_at<=?""",
+                (account_id, now.isoformat()),
+            )), Decimal("0"))
+            complete = [row for row in complete if row["valuation_date"] != now.date().isoformat()]
+            complete.append({"equity": live_summary.equity, "external_net_flow": cumulative_flow})
+            partial = partial or not rows
+        if baseline:
+            opening_equity = _decimal(baseline["equity"])
+            opening_flow = _decimal(baseline["external_net_flow"])
+        else:
+            initial = connection.execute(
+                "SELECT MIN(occurred_at) FROM cash_ledger WHERE account_id=? AND entry_type='INITIAL_CAPITAL'",
+                (account_id,),
+            ).fetchone()[0]
+            if initial and start_date <= self._time(datetime.fromisoformat(initial)).date() < end_date:
+                opening_equity, opening_flow = _decimal(account["initial_capital"]), Decimal("0")
+            elif complete:
+                # Without a period-opening value, report only the observed interval.
+                first = complete.pop(0)
+                opening_equity, opening_flow = _decimal(first["equity"]), _decimal(first["external_net_flow"])
+                partial = True
+            else:
+                return None, None, True
+        result = calculate_performance(opening_equity, opening_flow, [
+            (_decimal(row["equity"]), _decimal(row["external_net_flow"])) for row in complete
+        ])
+        return *result, partial or result[0] is None
+
     def monthly_statistics(
         self, query: GetMonthlyStatisticsQuery
     ) -> MonthlyStatisticsView:
@@ -3061,10 +3113,12 @@ class SQLiteTradingLedgerApplication:
                 annualized_volatility = Decimal(
                     str(statistics.pstdev(daily_returns) * math.sqrt(252))
                 )
-            max_drawdown = (
-                min((_decimal(row["drawdown"]) for row in valuations), default=None)
-                if valuations
-                else None
+            live_summary = current_summary if not missing_symbols else None
+            return_rate, max_drawdown, month_partial = self._period_performance(
+                connection, account, start_date, end_date, live_summary,
+            )
+            annual_return, annual_drawdown, annual_partial = self._period_performance(
+                connection, account, date(year, 1, 1), end_date, live_summary,
             )
             is_partial = bool(missing_symbols) or not valuations or any(
                 bool(row["is_partial"]) for row in valuations
@@ -3080,6 +3134,9 @@ class SQLiteTradingLedgerApplication:
                 pnl=pnl,
                 return_rate=return_rate,
                 max_drawdown=max_drawdown,
+                annual_return_rate=annual_return,
+                annual_max_drawdown=annual_drawdown,
+                performance_is_partial=month_partial or annual_partial or bool(missing_symbols),
                 annualized_volatility=annualized_volatility,
                 is_partial=is_partial,
                 missing_symbols=missing_symbols,

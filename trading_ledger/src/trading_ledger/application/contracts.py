@@ -714,6 +714,9 @@ class MonthlyStatisticsView:
     missing_symbols: tuple[str, ...]
     valuation_points: tuple[DailyValuationPointView, ...]
     rows: tuple[MonthlyInstrumentStatisticsView, ...]
+    annual_return_rate: Decimal | None = None
+    annual_max_drawdown: Decimal | None = None
+    performance_is_partial: bool = False
 
 
 @dataclass(frozen=True, slots=True)
