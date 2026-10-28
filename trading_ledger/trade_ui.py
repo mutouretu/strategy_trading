@@ -22,10 +22,13 @@ from trading_ledger.application.contracts import (
     PreviewManualTradeCommand,
     RecordDailyValuationCommand,
     RefreshTrackingPricesCommand,
+    SetTrackingPinnedCommand,
+    ReorderTrackingCommand,
     UpdateTrackedInstrumentCommand,
 )
 from trading_ledger.application.service import TradingLedgerApplication
 from trading_ledger.domain import OperationKind, TradeSide
+from tracking_sort import tracking_sort
 
 
 MARKET_UP_COLOR = "#FCA5A5"
@@ -412,6 +415,30 @@ def _tracking_row_state(row) -> str:
     return "watching"
 
 
+def _change_tracking_pin(application, project_key, actor, row) -> None:
+    try:
+        application.set_tracking_pinned(SetTrackingPinnedCommand(
+            project_key=project_key, tracking_id=row.tracking_id,
+            pinned=not row.is_pinned, actor=actor,
+        ))
+    except ApplicationError as error:
+        _show_error(error)
+    else:
+        _set_tracking_page(1)
+        _set_notice(f"{row.name or row.symbol} 已{'取消置顶' if row.is_pinned else '置顶'}。")
+
+
+def _archive_tracking(application, project_key, actor, row) -> None:
+    try:
+        application.archive_tracking(ArchiveTrackedInstrumentCommand(
+            project_key=project_key, tracking_id=row.tracking_id, actor=actor,
+        ))
+    except ApplicationError as error:
+        _show_error(error)
+    else:
+        _set_notice(f"{row.name} 已归档。")
+
+
 def render_tracking_table(
     application: TradingLedgerApplication,
     project_key: str,
@@ -457,7 +484,7 @@ def render_tracking_table(
         </style>""",
         unsafe_allow_html=True,
     )
-    ratios = [1.25, 1.1, 1.35, 1.7, 1.0, 1.7, 1.55, 2.2]
+    ratios = [1.25, 1.1, 1.35, 1.7, 1.0, 1.7, 1.55, 2.6]
     header_container = st.container(key="tracking_header", border=True)
     headers = header_container.columns(ratios, vertical_alignment="center")
     for column, label in zip(
@@ -509,7 +536,7 @@ def render_tracking_table(
             f"{_pnl_markup(row.realized_pnl_ratio)} / {_pnl_markup(row.unrealized_pnl_ratio)}",
             unsafe_allow_html=True,
         )
-        actions = columns[7].columns(4)
+        actions = columns[7].columns(5)
         if actions[0].button(
             ":material/add_shopping_cart:",
             help="买入",
@@ -586,26 +613,24 @@ def render_tracking_table(
                     _set_notice(f"{name.strip() or symbol.strip()} 已更新。")
                     st.rerun()
         has_position = row.quantity > 0
-        if actions[3].button(
+        actions[3].button(
             ":material/archive:",
             help=("归档" if not has_position else "有持仓时不能归档"),
             disabled=has_position,
             key=f"tracking_archive_{row.tracking_id}",
             width="stretch",
-        ):
-            try:
-                application.archive_tracking(
-                    ArchiveTrackedInstrumentCommand(
-                        project_key=project_key,
-                        tracking_id=row.tracking_id,
-                        actor=actor,
-                    )
-                )
-            except ApplicationError as error:
-                _show_error(error)
-            else:
-                _set_notice(f"{row.name} 已归档。")
-                st.rerun()
+            on_click=_archive_tracking,
+            args=(application, project_key, actor, row),
+        )
+        actions[4].button(
+            ":material/keep_off:" if row.is_pinned else ":material/push_pin:",
+            help="取消置顶" if row.is_pinned else "置顶",
+            type="primary" if row.is_pinned else "secondary",
+            key=f"tracking_pin_{row.tracking_id}",
+            width="stretch",
+            on_click=_change_tracking_pin,
+            args=(application, project_key, actor, row),
+        )
 
 
 def _set_tracking_page(page: int) -> None:
@@ -655,9 +680,28 @@ def current_tracking_page(
         st.info("当前没有符合条件的观察或持仓股票。")
     else:
         start = (page_number - 1) * page_size
+        visible_rows = page.rows[start:start + page_size]
+        with st.expander("拖拽排序", expanded=False):
+            if keyword.strip():
+                st.caption("请先清空搜索，再拖拽排序。")
+            else:
+                st.caption("有持仓始终在前；当前页内，同一持仓/置顶分组可拖拽。跨页移动请用置顶。")
+                change = tracking_sort(visible_rows, page.order_revision, f"tracking_sort_{project_key}_{page_number}")
+                if isinstance(change, dict) and change.get("event_id") != st.session_state.get("tracking_sort_last_event"):
+                    st.session_state["tracking_sort_last_event"] = change.get("event_id")
+                    try:
+                        application.reorder_tracking(ReorderTrackingCommand(
+                            project_key=project_key, original_ids=tuple(change["original_ids"]),
+                            ordered_ids=tuple(change["ordered_ids"]), expected_revision=change["revision"], actor=actor,
+                        ))
+                    except (ApplicationError, ValueError, KeyError, TypeError) as error:
+                        st.error(error.detail.message if isinstance(error, ApplicationError) else "排序数据无效，请刷新后重试。")
+                    else:
+                        _set_notice("顺序已保存。")
+                        st.rerun()
         render_tracking_table(
             application, project_key, actor,
-            replace(page, rows=page.rows[start:start + page_size]),
+            replace(page, rows=visible_rows),
         )
         st.caption(f"第 {page_number}/{page_count} 页 · 共 {len(page.rows)} 个标的 · 每页 10 个")
         if page_count > 1:

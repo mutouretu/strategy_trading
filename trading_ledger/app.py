@@ -609,6 +609,10 @@ def render_project_management_page(projects, active_project) -> None:
 
 def main() -> None:
     apply_styles()
+    st.warning(
+        "仅供内部交流学习，不构成任何投资建议，如非内部人士请自行关闭页面。",
+        icon="⚠️",
+    )
     st.sidebar.markdown(
         """
         <div class="beili-brand">

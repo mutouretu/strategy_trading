@@ -56,6 +56,8 @@ from trading_ledger.application.contracts import (
     RefreshTrackingPricesCommand,
     RestoreProjectCommand,
     ReverseTradeCommand,
+    SetTrackingPinnedCommand,
+    ReorderTrackingCommand,
     TrackingPageView,
     TrackingRowView,
     TrackingSummaryView,
@@ -588,7 +590,7 @@ class SQLiteTradingLedgerApplication:
                     """
                     UPDATE tracked_instruments
                     SET source_text = ?, tracking_status = 'WATCHING', added_at = ?,
-                        expires_at = ?, updated_at = ?
+                        expires_at = ?, updated_at = ?, pinned_at = NULL, sort_order = NULL
                     WHERE tracking_id = ?
                     """,
                     (
@@ -717,6 +719,36 @@ class SQLiteTradingLedgerApplication:
                 },
                 occurred_at=now,
             )
+        return self._tracking_row(command.project_key, command.tracking_id)
+
+    def set_tracking_pinned(self, command: SetTrackingPinnedCommand) -> TrackingRowView:
+        now = self._now().isoformat()
+        with self.database.transaction() as connection:
+            project = self._project(connection, command.project_key, writable=True)
+            row = connection.execute(
+                "SELECT * FROM tracked_instruments WHERE project_id = ? AND tracking_id = ?",
+                (project["project_id"], command.tracking_id),
+            ).fetchone()
+            if row is None:
+                raise ApplicationError(ErrorCode.INSTRUMENT_NOT_FOUND, "当前项目中没有该股票。")
+            if row["tracking_status"] not in {TrackingStatus.WATCHING, TrackingStatus.HOLDING}:
+                raise ApplicationError(ErrorCode.INVALID_INPUT, "只能置顶或取消置顶当前跟踪中的股票。")
+            if bool(row["pinned_at"]) != command.pinned:
+                pinned_at = now if command.pinned else None
+                order = connection.execute(
+                    "SELECT COALESCE(MIN(sort_order), 0) - 1 FROM tracked_instruments WHERE project_id = ?",
+                    (project["project_id"],),
+                ).fetchone()[0] if command.pinned else None
+                connection.execute(
+                    "UPDATE tracked_instruments SET pinned_at = ?, sort_order = ?, updated_at = ? WHERE tracking_id = ?",
+                    (pinned_at, order, now, command.tracking_id),
+                )
+                self._audit(
+                    connection, project_id=project["project_id"], object_type="TRACKING",
+                    object_id=str(command.tracking_id), action="TRACKING_PIN_CHANGED",
+                    actor=command.actor, before={"pinned_at": row["pinned_at"], "sort_order": row["sort_order"]},
+                    after={"pinned_at": pinned_at, "sort_order": order}, occurred_at=now,
+                )
         return self._tracking_row(command.project_key, command.tracking_id)
 
     def _set_tracking_status(
@@ -1079,6 +1111,7 @@ class SQLiteTradingLedgerApplication:
                 ),
                 reference_price=price,
                 reference_price_is_trade=bool(latest["is_manual"]) if latest else False,
+                is_pinned=bool(row["pinned_at"]),
                 quantity=quantity,
                 sellable_quantity=self._sellable_quantity(
                     connection,
@@ -1098,6 +1131,53 @@ class SQLiteTradingLedgerApplication:
                 unrealized_pnl_ratio=unrealized_pnl_ratio,
             )
 
+    @staticmethod
+    def _tracking_order_rows(connection, project_id, account_id, statuses=("WATCHING", "HOLDING"), keyword=""):
+        placeholders = ",".join("?" for _ in statuses)
+        pattern = f"%{keyword.strip()}%"
+        return connection.execute(f"""
+            SELECT t.tracking_id, t.pinned_at, t.sort_order,
+                   (CAST(COALESCE(p.quantity, '0') AS NUMERIC) > 0) AS has_position
+            FROM tracked_instruments t JOIN instruments i USING(instrument_id)
+            LEFT JOIN positions p ON p.instrument_id=t.instrument_id AND p.account_id=?
+            WHERE t.project_id=? AND t.tracking_status IN ({placeholders})
+              AND (?='%%' OR i.symbol LIKE ? OR i.name LIKE ?)
+            ORDER BY has_position DESC, t.pinned_at IS NOT NULL DESC,
+                     t.sort_order IS NULL ASC, t.sort_order ASC,
+                     t.pinned_at DESC, t.added_at DESC, t.tracking_id DESC
+        """, (account_id, project_id, *statuses, pattern, pattern, pattern)).fetchall()
+
+    @staticmethod
+    def _tracking_order_revision(rows):
+        return hashlib.sha256(_json([dict(row) for row in rows]).encode()).hexdigest()
+
+    def reorder_tracking(self, command: ReorderTrackingCommand) -> None:
+        with self.database.transaction() as connection:
+            project = self._project(connection, command.project_key, writable=True)
+            account = self._account(connection, int(project["project_id"]), "primary-cny", writable=True)
+            rows = self._tracking_order_rows(connection, project["project_id"], account["account_id"])
+            if self._tracking_order_revision(rows) != command.expected_revision:
+                raise ApplicationError(ErrorCode.INVALID_INPUT, "列表已被更新，请刷新后重新拖拽。")
+            ids = [row["tracking_id"] for row in rows]
+            before = list(command.original_ids)
+            start = ids.index(before[0]) if before[0] in ids else -1
+            if start < 0 or start % 10 or ids[start:start + 10] != before:
+                raise ApplicationError(ErrorCode.INVALID_INPUT, "只能调整当前完整页面的标的顺序。")
+            groups = {row["tracking_id"]: (row["has_position"], bool(row["pinned_at"])) for row in rows}
+            if any(groups[a] != groups[b] for a, b in zip(before, command.ordered_ids)):
+                raise ApplicationError(ErrorCode.INVALID_INPUT, "只能在相同持仓和置顶分组内拖拽。")
+            after = ids[:start] + list(command.ordered_ids) + ids[start + len(before):]
+            if after == ids:
+                return
+            now = self._now().isoformat()
+            connection.executemany(
+                "UPDATE tracked_instruments SET sort_order=?, updated_at=? WHERE project_id=? AND tracking_id=?",
+                [(rank, now, project["project_id"], tracking_id) for rank, tracking_id in enumerate(after)],
+            )
+            self._audit(connection, project_id=project["project_id"], object_type="TRACKING_ORDER",
+                        object_id=command.project_key, action="TRACKING_REORDERED", actor=command.actor,
+                        before={"ids": ids}, after={"ids": after}, occurred_at=now)
+
     def list_tracking(self, query: ListTrackingQuery) -> TrackingPageView:
         with self.database.read() as connection:
             project = self._project(connection, query.project_key)
@@ -1106,19 +1186,7 @@ class SQLiteTradingLedgerApplication:
             )
             account_summary = self._account_summary(connection, query.project_key, account)
             statuses = tuple(str(status) for status in query.statuses)
-            placeholders = ",".join("?" for _ in statuses)
-            keyword = f"%{query.keyword.strip()}%"
-            rows = connection.execute(
-                f"""
-                SELECT t.tracking_id
-                FROM tracked_instruments t
-                JOIN instruments i ON i.instrument_id = t.instrument_id
-                WHERE t.project_id = ? AND t.tracking_status IN ({placeholders})
-                  AND (? = '%%' OR i.symbol LIKE ? OR i.name LIKE ?)
-                ORDER BY t.tracking_status = 'HOLDING' DESC, t.added_at DESC
-                """,
-                (project["project_id"], *statuses, keyword, keyword, keyword),
-            ).fetchall()
+            rows = self._tracking_order_rows(connection, project["project_id"], account["account_id"], statuses, query.keyword)
             summary_rows = dict(
                 connection.execute(
                     """
@@ -1143,6 +1211,7 @@ class SQLiteTradingLedgerApplication:
             self._tracking_row(query.project_key, int(row["tracking_id"])) for row in rows
         )
         return TrackingPageView(
+            order_revision=self._tracking_order_revision(rows),
             summary=TrackingSummaryView(
                 watching_count=int(summary_rows.get(TrackingStatus.WATCHING, 0)),
                 holding_count=int(summary_rows.get(TrackingStatus.HOLDING, 0)),
