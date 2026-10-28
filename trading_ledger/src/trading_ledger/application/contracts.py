@@ -205,6 +205,42 @@ class UpdateTrackedInstrumentCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class SetTrackingPinnedCommand:
+    project_key: str
+    tracking_id: int
+    pinned: bool
+    actor: str
+
+    def __post_init__(self) -> None:
+        _require_project_key(self.project_key)
+        if self.tracking_id <= 0:
+            raise ValueError("tracking_id must be positive.")
+        if not isinstance(self.pinned, bool):
+            raise ValueError("pinned must be a bool.")
+        _require_text(self.actor, "actor")
+
+
+@dataclass(frozen=True, slots=True)
+class ReorderTrackingCommand:
+    project_key: str
+    original_ids: tuple[int, ...]
+    ordered_ids: tuple[int, ...]
+    expected_revision: str
+    actor: str
+
+    def __post_init__(self) -> None:
+        _require_project_key(self.project_key)
+        _require_text(self.actor, "actor")
+        _require_text(self.expected_revision, "expected_revision")
+        if not 1 <= len(self.original_ids) <= 10:
+            raise ValueError("只能调整当前页的最多 10 个标的。")
+        if any(type(value) is not int or value <= 0 for value in (*self.original_ids, *self.ordered_ids)):
+            raise ValueError("标的 ID 无效。")
+        if len(set(self.original_ids)) != len(self.original_ids) or len(self.ordered_ids) != len(self.original_ids) or set(self.original_ids) != set(self.ordered_ids):
+            raise ValueError("排序前后的标的必须完整且不重复。")
+
+
+@dataclass(frozen=True, slots=True)
 class CloseTrackedInstrumentCommand:
     project_key: str
     tracking_id: int
@@ -591,6 +627,7 @@ class TrackingRowView:
     realized_pnl_ratio: Decimal | None = None
     unrealized_pnl_ratio: Decimal | None = None
     reference_price_is_trade: bool = False
+    is_pinned: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -598,6 +635,7 @@ class TrackingPageView:
     summary: TrackingSummaryView
     account: AccountSummaryView
     rows: tuple[TrackingRowView, ...]
+    order_revision: str = ""
 
 
 @dataclass(frozen=True, slots=True)

@@ -1093,7 +1093,7 @@ class SQLiteLedgerTests(unittest.TestCase):
             project = upgraded.execute(
                 "SELECT color_key, t_plus_one FROM projects WHERE project_key = 'old-project'"
             ).fetchone()
-        self.assertEqual(metadata["schema_version"], "4")
+        self.assertEqual(metadata["schema_version"], "6")
         self.assertEqual(project["color_key"], "blue")
         self.assertEqual(project["t_plus_one"], 0)
 

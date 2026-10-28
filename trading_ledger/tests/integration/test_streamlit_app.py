@@ -17,6 +17,7 @@ from trading_ledger.application.contracts import (
     ArchiveTrackedInstrumentCommand,
     CreateProjectCommand,
     GetProjectQuery,
+    ListTrackingQuery,
     RecordCashEntryCommand,
     ConfirmManualTradeCommand,
     RecordDailyValuationCommand,
@@ -56,6 +57,56 @@ class StreamlitAppTests(unittest.TestCase):
         app = self._app().run()
         self.assertEqual(app.exception, [])
         self.assertTrue(any("还没有项目" in item.value for item in app.info))
+        self.assertTrue(any("仅供内部交流学习，不构成任何投资建议，如非内部人士请自行关闭页面" in item.value
+                            for item in app.warning))
+
+    def test_pin_moves_last_page_stock_to_first_page_and_survives_reload(self) -> None:
+        application = get_application()
+        project = application.create_project(CreateProjectCommand("置顶分页", Decimal("100000"), "test"))
+        rows = [application.add_tracking(AddTrackedInstrumentCommand(
+            project.project_key, f"{600000 + index}.SH", f"股票{index}", "观察", "test",
+            added_at=datetime(2026, 10, 28, 9, 0, index, tzinfo=ZoneInfo("Asia/Shanghai")),
+        )) for index in range(11)]
+        app = self._app().run()
+        app.button(key="tracking_next_page").click().run()
+        pin_key = f"tracking_pin_{rows[0].tracking_id}"
+        app.button(key=pin_key).click().run()
+        self.assertEqual(app.exception, [])
+        self.assertEqual(app.session_state["tracking_page_number"], 1)
+        self.assertEqual([b.key for b in app.button if b.key and b.key.startswith("tracking_pin_")][0], pin_key)
+        self.assertEqual(app.button(key=pin_key).help, "取消置顶")
+        app = self._app().run()
+        self.assertEqual(app.button(key=pin_key).help, "取消置顶")
+        app.button(key=pin_key).click().run()
+        self.assertEqual(app.exception, [])
+        self.assertNotIn(pin_key, [b.key for b in app.button])
+        app.button(key="tracking_next_page").click().run()
+        self.assertEqual(app.button(key=pin_key).help, "置顶")
+        for page in ("操作历史", "交易统计", "项目管理"):
+            app.radio[0].set_value(page).run()
+            self.assertEqual(app.exception, [])
+            self.assertTrue(any("不构成任何投资建议" in item.value for item in app.warning))
+
+    def test_drag_result_saves_once_and_search_disables_drag(self) -> None:
+        application = get_application()
+        project = application.create_project(CreateProjectCommand("拖拽页面", Decimal("100000"), "test"))
+        for index in range(3):
+            application.add_tracking(AddTrackedInstrumentCommand(
+                project.project_key, f"{600000+index}.SH", f"股票{index}", "观察", "test"))
+        page = application.list_tracking(ListTrackingQuery(project.project_key))
+        ids = [row.tracking_id for row in page.rows]
+        change = {"original_ids": ids, "ordered_ids": ids[::-1], "revision": page.order_revision, "event_id": "test-drag-1"}
+        with patch("trade_ui.tracking_sort", return_value=change) as sorter:
+            app = self._app().run()
+            self.assertEqual(app.exception, [])
+            self.assertEqual([row.tracking_id for row in application.list_tracking(ListTrackingQuery(project.project_key)).rows], ids[::-1])
+            app.run()
+            with application.database.read() as db:
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM audit_events WHERE action='TRACKING_REORDERED'").fetchone()[0], 1)
+            sorter.reset_mock()
+            app.text_input(key="daily_recommendation_search").set_value("600000").run()
+            sorter.assert_not_called()
+            self.assertTrue(any("清空搜索" in item.value for item in app.caption))
 
     def test_confirmed_pages_load_with_persisted_project(self) -> None:
         application = get_application()

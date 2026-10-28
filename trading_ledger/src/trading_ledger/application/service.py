@@ -39,6 +39,8 @@ from .contracts import (
     RefreshTrackingPricesCommand,
     RestoreProjectCommand,
     ReverseTradeCommand,
+    SetTrackingPinnedCommand,
+    ReorderTrackingCommand,
     TrackingPageView,
     TrackingRowView,
     TradePreviewView,
@@ -74,6 +76,12 @@ class TradingLedgerApplication(Protocol):
     def close_tracking(
         self, command: CloseTrackedInstrumentCommand
     ) -> TrackingRowView: ...
+
+    def set_tracking_pinned(
+        self, command: SetTrackingPinnedCommand
+    ) -> TrackingRowView: ...
+
+    def reorder_tracking(self, command: ReorderTrackingCommand) -> None: ...
 
     def archive_tracking(
         self, command: ArchiveTrackedInstrumentCommand
