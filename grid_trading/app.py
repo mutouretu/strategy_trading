@@ -648,6 +648,10 @@ def render_overview(strategies: list[dict]) -> None:
             key=run_key,
             label_visibility="collapsed",
             disabled=item["archived"],
+            help=(
+                "固定网格停止后挂单和仓位仍保留，需要单独处理。"
+                if item["grid_kind"] == "fixed_equal_usdt" else None
+            ),
             on_change=change_run_state,
             args=(item["id"], is_running),
         )
@@ -949,6 +953,8 @@ def _render_detail_live(strategy_id: str) -> None:
         f"<div class='grid-summary' style='color:{direction_color}'>{summary_html}</div>",
         unsafe_allow_html=True,
     )
+    if grid["grid_kind"] == "fixed_equal_usdt":
+        st.caption("停止策略只暂停调度；已有挂单和仓位不会自动撤销或平仓。")
 
     try:
         cells = backend().cells(grid["id"])
