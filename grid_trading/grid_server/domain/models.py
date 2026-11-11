@@ -167,6 +167,8 @@ class SymbolFilters:
     base_asset: str = ""
     margin_asset: str = ""
     contract_type: str = ""
+    percent_price_up: Decimal = Decimal("0")
+    percent_price_down: Decimal = Decimal("0")
 
 
 @dataclass(frozen=True)

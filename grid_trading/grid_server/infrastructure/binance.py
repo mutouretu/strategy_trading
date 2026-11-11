@@ -105,6 +105,7 @@ class BinanceFuturesExchange:
         price_filter = values.get("PRICE_FILTER", {})
         lot_filter = values.get("LOT_SIZE", {})
         notional_filter = values.get("MIN_NOTIONAL", values.get("NOTIONAL", {}))
+        percent_price_filter = values.get("PERCENT_PRICE", {})
         return SymbolFilters(
             tick_size=Decimal(str(price_filter.get("tickSize", "0"))),
             step_size=Decimal(str(lot_filter.get("stepSize", "0"))),
@@ -114,6 +115,8 @@ class BinanceFuturesExchange:
             base_asset=str(entry.get("baseAsset", "")),
             margin_asset=str(entry.get("marginAsset", "")),
             contract_type=str(entry.get("contractType", "")),
+            percent_price_up=Decimal(str(percent_price_filter.get("multiplierUp", "0"))),
+            percent_price_down=Decimal(str(percent_price_filter.get("multiplierDown", "0"))),
         )
 
     def set_hedge_mode(self, enabled: bool) -> None:

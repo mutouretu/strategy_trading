@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 from ..domain import CellStage, GridCell, OrderSide, OrderStatus, StrategyStatus
 from ..domain.grid import fixed_cell_budgets, round_down
-from ..infrastructure.binance import BinanceFuturesExchange
+from ..infrastructure.binance import BinanceAPIError, BinanceFuturesExchange
 from ..ports.exchange import ExchangeExecutionUnknownError, OrderNotFoundError
 from .engine import TradingEngine
 
@@ -23,6 +23,9 @@ class FixedGridEngine(TradingEngine):
             if host not in {"demo-fapi.binance.com", "testnet.binancefuture.com"}:
                 raise ValueError("fixed equal-USDT grid is enabled on Binance testnet only")
         super().initialize()
+        assert self.filters is not None
+        if self.filters.contract_type not in {"", "PERPETUAL", "TRADIFI_PERPETUAL"}:
+            raise ValueError("fixed grid requires a perpetual contract")
 
     def _quantity(self, price: Decimal, cell: GridCell | None = None) -> Decimal:
         assert self.filters is not None
@@ -42,18 +45,94 @@ class FixedGridEngine(TradingEngine):
         price: Decimal,
         client_order_id: str,
     ) -> int:
+        mark = getattr(self, "_tick_mark", None) or self.exchange.get_mark_price(symbol)
+        if (side == OrderSide.BUY and mark <= price) or (
+            side == OrderSide.SELL and mark >= price
+        ):
+            order_id = self.exchange.place_market_order(
+                symbol, side, position_side, quantity, client_order_id
+            )
+            self.store.append_event(
+                self.strategy_id,
+                "GRID_CATCHUP_MARKET_ORDER",
+                {
+                    "order_id": order_id,
+                    "client_order_id": client_order_id,
+                    "side": side.value,
+                    "target_price": str(price),
+                    "observed_mark": str(mark),
+                    "quantity": str(quantity),
+                },
+                run_id=self.run_id,
+            )
+            return order_id
         return self.exchange.place_limit_order(
             symbol, side, position_side, quantity, price, client_order_id,
             post_only=True,
         )
 
+    def _order_is_ready(self, side: OrderSide, price: Decimal) -> bool:
+        assert self.filters is not None
+        mark = getattr(self, "_tick_mark", None) or self.exchange.get_mark_price(self._config().symbol)
+        if (side == OrderSide.BUY and mark <= price) or (
+            side == OrderSide.SELL and mark >= price
+        ):
+            return True
+        if self.filters.percent_price_down > 0 and price < mark * self.filters.percent_price_down:
+            return False
+        if self.filters.percent_price_up > 0 and price > mark * self.filters.percent_price_up:
+            return False
+        return True
+
+    def is_virtual_exit(self, cell: GridCell, mark: Decimal) -> bool:
+        """A far sell target is valid grid state while Binance rejects its limit price."""
+        assert self.filters is not None
+        return (
+            cell.open_qty > 0
+            and cell.exit_order_id is None
+            and mark < cell.sell_price
+            and self.filters.percent_price_up > 0
+            and cell.sell_price > mark * self.filters.percent_price_up
+        )
+
+    @staticmethod
+    def _retryable_price_rejection(exc: BinanceAPIError) -> bool:
+        return any(code in str(exc) for code in ("-4016", "-4024", "-5022"))
+
+    def _place_entry(self, cell: GridCell) -> None:
+        if not self._order_is_ready(OrderSide.BUY, cell.buy_price):
+            return
+        try:
+            super()._place_entry(cell)
+        except BinanceAPIError as exc:
+            if not self._retryable_price_rejection(exc):
+                raise
+
+    def _ensure_exit(self, cell: GridCell, quantity: Decimal | None = None) -> None:
+        if not self._order_is_ready(OrderSide.SELL, cell.sell_price):
+            return
+        try:
+            super()._ensure_exit(cell, quantity)
+        except BinanceAPIError as exc:
+            if not self._retryable_price_rejection(exc):
+                raise
+
     def _recovery_mismatches(self, cell: GridCell, role: str, order) -> list[str]:
         # A top-up changes the desired entry size; a still-open old order is
         # resized after restart instead of being treated as an alien order.
+        # A crossed virtual grid level is caught up with a market order; Binance
+        # reports its limit price as zero when recovering by client ID.
         return [
             mismatch
             for mismatch in super()._recovery_mismatches(cell, role, order)
-            if not (role == "entry" and mismatch.startswith("qty:"))
+            if not (
+                (role == "entry" and mismatch.startswith("qty:"))
+                or (
+                    order.status == OrderStatus.FILLED
+                    and order.price == 0
+                    and mismatch.startswith("price:")
+                )
+            )
         ]
 
     def tick(self) -> Decimal:
@@ -61,6 +140,7 @@ class FixedGridEngine(TradingEngine):
             self.initialize()
         config = self._config()
         mark = self.exchange.get_mark_price(config.symbol)
+        self._tick_mark = mark
         seed_id = f"seed:{self.strategy_id}"
         seed = self.store.get_capital_action(seed_id)
         if seed is None:

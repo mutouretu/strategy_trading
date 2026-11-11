@@ -143,6 +143,8 @@ def cell_payload(
         "stage": cell.stage.value,
         "entry_order_id": cell.entry_order_id,
         "exit_order_id": cell.exit_order_id,
+        "entry_client_id": cell.entry_client_id,
+        "exit_client_id": cell.exit_client_id,
         "entry_qty": None if entry_qty is None else str(entry_qty),
         "exit_qty": None if exit_qty is None else str(exit_qty),
         "entry_contracts": None if entry_contracts is None else str(entry_contracts),
@@ -195,6 +197,9 @@ def fixed_grid_preview_details(
     if mark <= 0:
         raise ValueError("invalid current price")
     net_profits = []
+    taker_net_profits = []
+    maker_returns = []
+    taker_returns = []
     for cell in cells:
         qty = round_down(cell.budget_usdt / cell.buy_price, filters.step_size)
         if qty < filters.min_qty or qty * cell.buy_price < filters.min_notional:
@@ -207,9 +212,27 @@ def fixed_grid_preview_details(
         if net <= 0:
             raise ValueError(f"Cell #{cell.index} grid profit does not cover maker fees")
         net_profits.append(net)
+        maker_returns.append(net / (qty * cell.buy_price))
+        taker_net = qty * (
+            cell.sell_price - cell.buy_price
+            - cell.buy_price * taker_rate
+            - cell.sell_price * taker_rate
+        )
+        if taker_net <= 0:
+            raise ValueError(f"Cell #{cell.index} grid profit does not cover taker fees")
+        taker_net_profits.append(taker_net)
+        taker_returns.append(taker_net / (qty * cell.buy_price))
     sell_cells = [cell for cell in cells if cell.sell_price > mark]
     seed_notional = sum((cell.budget_usdt for cell in sell_cells), Decimal("0"))
     seed_qty = round_down(seed_notional / mark, filters.step_size)
+    deferred_buy = sum(
+        filters.percent_price_down > 0 and cell.buy_price < mark * filters.percent_price_down
+        for cell in cells if cell not in sell_cells
+    )
+    deferred_sell = sum(
+        filters.percent_price_up > 0 and cell.sell_price > mark * filters.percent_price_up
+        for cell in sell_cells
+    )
     if sell_cells and (
         seed_qty <= 0
         or seed_qty * mark < filters.min_notional
@@ -227,6 +250,13 @@ def fixed_grid_preview_details(
         "maker_fee_rate": str(maker_rate),
         "taker_fee_rate": str(taker_rate),
         "minimum_net_cycle_profit_usdt": str(min(net_profits)),
+        "minimum_net_cycle_profit_taker_usdt": str(min(taker_net_profits)),
+        "minimum_net_cycle_profit_pct": str(min(maker_returns) * Decimal("100")),
+        "minimum_net_cycle_profit_taker_pct": str(min(taker_returns) * Decimal("100")),
+        "deferred_buy_cell_count": deferred_buy,
+        "deferred_sell_cell_count": deferred_sell,
+        "percent_price_up": str(filters.percent_price_up),
+        "percent_price_down": str(filters.percent_price_down),
         "estimated_seed_opening_fee_usdt": str(seed_notional * taker_rate),
         "seed_cells_below_fee_break_even": sum(
             cell.sell_price <= mark * (Decimal("1") + taker_rate) / (Decimal("1") - maker_rate)
@@ -336,7 +366,7 @@ def create_app(
             exchange = exchange_for(FuturesMarket.USDM)
             symbol = data.symbol.strip().upper()
             filters = exchange.get_symbol_filters(symbol)
-            if filters.contract_type and filters.contract_type != "PERPETUAL":
+            if filters.contract_type and filters.contract_type not in {"PERPETUAL", "TRADIFI_PERPETUAL"}:
                 raise ValueError("fixed grid requires a perpetual contract")
             config, cells = service.preview_fixed(
                 symbol, data.lower_price, data.upper_price,
@@ -361,7 +391,7 @@ def create_app(
             exchange = exchange_for(FuturesMarket.USDM)
             symbol = data.symbol.strip().upper()
             filters = exchange.get_symbol_filters(symbol)
-            if filters.contract_type and filters.contract_type != "PERPETUAL":
+            if filters.contract_type and filters.contract_type not in {"PERPETUAL", "TRADIFI_PERPETUAL"}:
                 raise ValueError("fixed grid requires a perpetual contract")
             _, preview_cells = service.preview_fixed(
                 symbol, data.lower_price, data.upper_price,

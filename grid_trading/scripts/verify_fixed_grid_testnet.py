@@ -39,7 +39,7 @@ def main() -> None:
     exchange = BinanceFuturesExchange(key, secret, url)
     symbol = args.symbol.strip().upper()
     filters = exchange.get_symbol_filters(symbol)
-    if filters.contract_type != "PERPETUAL":
+    if filters.contract_type not in {"PERPETUAL", "TRADIFI_PERPETUAL"}:
         raise SystemExit("symbol is not a perpetual contract")
     mark = exchange.get_mark_price(symbol)
     lower = round_down(mark * Decimal("0.8"), filters.tick_size)

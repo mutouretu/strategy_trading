@@ -277,8 +277,19 @@ def render_fixed_grid_create() -> None:
         f"当前账户 maker {float(allocation['maker_fee_rate']) * 100:.4f}% / "
         f"taker {float(allocation['taker_fee_rate']) * 100:.4f}%；"
         f"预计初始开仓手续费 {float(allocation['estimated_seed_opening_fee_usdt']):.4f} U；"
-        f"单格完整挂单循环的最低预计净利润 {float(allocation['minimum_net_cycle_profit_usdt']):.4f} U。"
+        f"单格完整挂单循环的最低预计净利润 "
+        f"{float(allocation['minimum_net_cycle_profit_pct']):.3f}% "
+        f"({float(allocation['minimum_net_cycle_profit_usdt']):.4f} U)，"
+        f"双边市价成交时最低约 "
+        f"{float(allocation['minimum_net_cycle_profit_taker_pct']):.3f}% "
+        f"({float(allocation['minimum_net_cycle_profit_taker_usdt']):.4f} U)。"
     )
+    if allocation["deferred_buy_cell_count"] or allocation["deferred_sell_cell_count"]:
+        st.info(
+            f"当前有 {allocation['deferred_buy_cell_count']} 个买格和 "
+            f"{allocation['deferred_sell_cell_count']} 个卖格超出交易所限价带，"
+            "会先保留为逻辑格，价格靠近时再挂单。若行情跳过格线，可能以市价补执行。"
+        )
     if allocation["seed_cells_below_fee_break_even"]:
         st.warning(
             f"当前价距离 {allocation['seed_cells_below_fee_break_even']} 个高位卖格过近，"
@@ -750,6 +761,11 @@ def build_cell_rows(grid: dict, cells: list[dict]) -> list[dict]:
         else:
             sell_order = entry_text
             buy_order = exit_text
+        if grid["grid_kind"] == "fixed_equal_usdt":
+            if stage == "pending_entry" and cell.get("entry_order_id") is None:
+                buy_order = "订单确认中" if cell.get("entry_client_id") else "等待价格带"
+            if stage == "pending_exit" and cell.get("exit_order_id") is None:
+                sell_order = "订单确认中" if cell.get("exit_client_id") else "等待价格带"
         rows.append(
             {
                 "网格": f"#{int(cell['index']):03d}",

@@ -35,6 +35,27 @@ class BinanceFuturesExchangeTests(unittest.TestCase):
 
         self.assertEqual(result, {"code": 200, "msg": "success"})
 
+    def test_tradifi_price_band_is_read_from_exchange_info(self):
+        exchange = BinanceFuturesExchange("key", "secret")
+        exchange._request = Mock(return_value={
+            "symbols": [{
+                "symbol": "SOXLUSDT", "contractType": "TRADIFI_PERPETUAL",
+                "baseAsset": "SOXL", "marginAsset": "USDT",
+                "filters": [
+                    {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+                    {"filterType": "LOT_SIZE", "stepSize": "0.01", "minQty": "0.01"},
+                    {"filterType": "MIN_NOTIONAL", "notional": "5"},
+                    {"filterType": "PERCENT_PRICE", "multiplierUp": "1.03", "multiplierDown": "0.97"},
+                ],
+            }],
+        })
+
+        filters = exchange.get_symbol_filters("SOXLUSDT")
+
+        self.assertEqual(filters.contract_type, "TRADIFI_PERPETUAL")
+        self.assertEqual(filters.percent_price_up, Decimal("1.03"))
+        self.assertEqual(filters.percent_price_down, Decimal("0.97"))
+
     def test_query_order_no_such_order_is_mapped_to_consistency_signal(self):
         exchange = BinanceFuturesExchange("key", "secret")
         exchange._request = Mock(  # type: ignore[method-assign]

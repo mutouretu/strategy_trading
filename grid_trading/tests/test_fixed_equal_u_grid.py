@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from grid_server.application.fixed_engine import FixedGridEngine
-from grid_server.domain import CellStage, FuturesMarket, GridKind, Mode, StrategyConfig
+from grid_server.domain import (
+    CellStage, FuturesMarket, GridKind, Mode, OrderSide, OrderSnapshot,
+    OrderStatus, StrategyConfig,
+)
 from grid_server.domain.grid import build_cells, fixed_cell_budgets, fixed_grid_ratio
 from grid_server.infrastructure.binance import BinanceFuturesExchange
 from grid_server.interfaces.api import create_app
@@ -80,6 +84,58 @@ class FixedEqualUGridTests(unittest.TestCase):
         self.assertTrue(all(order["post_only"] for order in self.exchange.placed[1:]))
         engine.tick()
         self.assertEqual(self.exchange.calls["place_market_order"], 1)
+
+    def test_tradifi_price_band_defers_far_orders_then_catches_up_crossed_entry(self) -> None:
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            contract_type="TRADIFI_PERPETUAL",
+            min_notional=Decimal("5"),
+            percent_price_up=Decimal("1.03"),
+            percent_price_down=Decimal("0.97"),
+        )
+        engine = self.make_engine()
+        engine.tick()
+        cells = self.store.list_cells(engine.strategy_id)
+        self.assertTrue(all(cell.entry_order_id is None and cell.exit_order_id is None for cell in cells))
+        self.assertEqual(self.exchange.calls["place_market_order"], 1)
+
+        client = TestClient(create_app(self.store.path, lambda market=FuturesMarket.USDM: self.exchange))
+        preview = client.post(
+            "/fixed-grids/preview",
+            json={
+                "symbol": "SOLUSDT", "lower_price": "80", "upper_price": "120",
+                "grid_count": 4, "grid_budget_usdt": "400",
+            },
+        )
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertEqual(preview.json()["allocation"]["deferred_buy_cell_count"], 2)
+        self.assertEqual(preview.json()["allocation"]["deferred_sell_cell_count"], 2)
+
+        self.exchange.mark = Decimal("88.50")
+        engine.tick()
+        cells = self.store.list_cells(engine.strategy_id)
+        self.assertGreater(cells[1].open_qty, 0)
+        self.assertEqual(self.exchange.calls["place_market_order"], 2)
+        self.assertTrue(any(
+            event["event_type"] == "GRID_CATCHUP_MARKET_ORDER"
+            for event in self.store.list_events(engine.strategy_id)
+        ))
+
+    def test_recovered_market_catchup_order_allows_zero_limit_price(self) -> None:
+        engine = self.make_engine()
+        engine.initialize()
+        cell = self.store.list_cells(engine.strategy_id)[0]
+        order = OrderSnapshot(
+            order_id=987,
+            client_order_id="catchup-987",
+            status=OrderStatus.FILLED,
+            side=OrderSide.BUY,
+            price=Decimal("0"),
+            original_qty=Decimal("1.250"),
+            executed_qty=Decimal("1.250"),
+            position_side="LONG",
+        )
+        self.assertEqual(engine._recovery_mismatches(cell, "entry", order), [])
 
     def test_topup_once_updates_all_budgets_and_resizes_both_sides(self) -> None:
         engine = self.make_engine()
@@ -221,6 +277,28 @@ class FixedEqualUGridTests(unittest.TestCase):
             sum((cell.open_qty for cell in self.store.list_cells(engine.strategy_id)), Decimal("0")),
             Decimal("2"),
         )
+
+    def test_position_coordinator_accepts_virtual_far_exits(self) -> None:
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            contract_type="TRADIFI_PERPETUAL",
+            percent_price_up=Decimal("1.03"),
+            percent_price_down=Decimal("0.97"),
+        )
+        engine = self.make_engine()
+        scheduler = StrategyScheduler(
+            self.store, self.exchange, pid=12345, reconcile_interval_sec=5
+        )
+        scheduler.run_once(now=0)
+        scheduler.run_once(now=6)
+        pool = self.store.get_position_pool("SOLUSDT", "LONG", FuturesMarket.USDM)
+        self.assertIsNotNone(pool)
+        self.assertNotEqual(pool["status"], "manual_review")
+        self.assertEqual(pool["actual_qty"], "2.000")
+        self.assertTrue(all(
+            cell.stage != CellStage.MANUAL_REVIEW
+            for cell in self.store.list_cells(engine.strategy_id)
+        ))
 
 
 if __name__ == "__main__":
