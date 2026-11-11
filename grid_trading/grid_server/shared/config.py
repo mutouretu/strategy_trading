@@ -6,7 +6,7 @@ from pathlib import Path
 from dotenv import dotenv_values, load_dotenv
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
 
 

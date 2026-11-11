@@ -167,6 +167,47 @@ def run_app(*, timeout: float = 8) -> AppTest:
 
 
 class StreamlitAbnormalTests(unittest.TestCase):
+    def test_fixed_grid_detail_shows_cell_budgets_and_topup_controls(self):
+        item = strategy_payload(symbol="SOLUSDT", status="running", has_started=True)
+        item.update({
+            "grid_kind": "fixed_equal_usdt",
+            "grid_budget_usdt": "400",
+            "order_usdt": "100",
+            "leverage": 1,
+            "move_grid": False,
+        })
+        cells = [
+            {
+                "index": index,
+                "cell_id": f"cell-{index}",
+                "buy_price": str(80 + index * 10),
+                "sell_price": str(90 + index * 10),
+                "stage": "pending_entry" if index == 1 else "pending_exit",
+                "entry_order_id": index if index == 1 else None,
+                "exit_order_id": index + 100 if index == 2 else None,
+                "open_qty": "0" if index == 1 else "1",
+                "budget_usdt": "100",
+                "cycle_count": 0,
+            }
+            for index in (1, 2)
+        ]
+        state = StubState(
+            strategies=[item],
+            cells=cells,
+            status_overrides={
+                ("GET", f"/strategies/{item['strategy_id']}/topups"): (200, []),
+            },
+        )
+        with stub_api(state):
+            app = AppTest.from_file(APP_FILE, default_timeout=8)
+            app.query_params["strategy"] = item["strategy_id"]
+            app.run()
+
+        self.assertEqual(list(app.exception), [])
+        self.assertIn("预算 (U)", app.dataframe[0].value.columns)
+        self.assertTrue(any(button.label == "预览资金分配" for button in app.button))
+        self.assertFalse(any(button.key and button.key.startswith("add_cell_") for button in app.button))
+
     def test_initial_backend_outage_has_recovery_message_without_traceback(self):
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))

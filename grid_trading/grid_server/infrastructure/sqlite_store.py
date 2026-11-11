@@ -11,6 +11,7 @@ from typing import Iterator
 from ..domain import (
     CellStage,
     FuturesMarket,
+    GridKind,
     GridCell,
     Mode,
     StrategyConfig,
@@ -60,6 +61,10 @@ class SQLiteStore:
                     grid_ratio TEXT NOT NULL,
                     grid_count INTEGER NOT NULL,
                     order_usdt TEXT NOT NULL,
+                    grid_kind TEXT NOT NULL DEFAULT 'triggered',
+                    lower_price TEXT,
+                    upper_price TEXT,
+                    grid_budget_usdt TEXT,
                     order_coin_qty TEXT,
                     contract_size TEXT NOT NULL DEFAULT '0',
                     leverage INTEGER NOT NULL,
@@ -95,6 +100,7 @@ class SQLiteStore:
                     exit_executed_qty TEXT NOT NULL DEFAULT '0',
                     entry_filled_at TEXT NOT NULL DEFAULT '',
                     cycle_count INTEGER NOT NULL DEFAULT 0,
+                    budget_usdt TEXT NOT NULL DEFAULT '0',
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY(strategy_id, cell_id),
                     FOREIGN KEY(strategy_id) REFERENCES strategies(strategy_id)
@@ -164,6 +170,28 @@ class SQLiteStore:
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_cell_actions_one_pending
                 ON cell_actions(strategy_id) WHERE status = 'pending';
 
+                CREATE TABLE IF NOT EXISTS capital_actions (
+                    id TEXT PRIMARY KEY,
+                    strategy_id TEXT NOT NULL,
+                    operation TEXT NOT NULL CHECK(operation IN ('seed', 'topup')),
+                    amount_usdt TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('requested', 'planned', 'submitted', 'applied', 'rejected', 'manual_review')),
+                    expected_sell_cell_ids_json TEXT,
+                    sell_cell_ids_json TEXT NOT NULL DEFAULT '[]',
+                    target_qty TEXT NOT NULL DEFAULT '0',
+                    client_order_id TEXT NOT NULL DEFAULT '',
+                    order_id INTEGER,
+                    executed_qty TEXT NOT NULL DEFAULT '0',
+                    message TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(strategy_id) REFERENCES strategies(strategy_id)
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_capital_actions_one_pending
+                ON capital_actions(strategy_id)
+                WHERE status IN ('requested', 'planned', 'submitted');
+
                 CREATE TABLE IF NOT EXISTS scheduler_runs (
                     run_id TEXT PRIMARY KEY,
                     pid INTEGER NOT NULL,
@@ -219,6 +247,10 @@ class SQLiteStore:
                 conn.execute(
                     "ALTER TABLE cells ADD COLUMN entry_filled_at TEXT NOT NULL DEFAULT ''"
                 )
+            if "budget_usdt" not in cell_columns:
+                conn.execute(
+                    "ALTER TABLE cells ADD COLUMN budget_usdt TEXT NOT NULL DEFAULT '0'"
+                )
             strategy_columns = {
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(strategies)").fetchall()
@@ -233,6 +265,14 @@ class SQLiteStore:
                 conn.execute(
                     "ALTER TABLE strategies ADD COLUMN contract_size TEXT NOT NULL DEFAULT '0'"
                 )
+            for column, definition in (
+                ("grid_kind", "TEXT NOT NULL DEFAULT 'triggered'"),
+                ("lower_price", "TEXT"),
+                ("upper_price", "TEXT"),
+                ("grid_budget_usdt", "TEXT"),
+            ):
+                if column not in strategy_columns:
+                    conn.execute(f"ALTER TABLE strategies ADD COLUMN {column} {definition}")
             # The first COIN-M prototype stored a USD face value in
             # order_usdt. Preserve its exposure while migrating the user-facing
             # configuration to margin/base-coin quantity.
@@ -256,6 +296,13 @@ class SQLiteStore:
             }
             if "market_type" not in pool_columns:
                 self._migrate_position_pools_market_type(conn)
+            action_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(capital_actions)").fetchall()
+            }
+            if "expected_sell_cell_ids_json" not in action_columns:
+                conn.execute(
+                    "ALTER TABLE capital_actions ADD COLUMN expected_sell_cell_ids_json TEXT"
+                )
 
     @staticmethod
     def _migrate_position_pools_market_type(conn: sqlite3.Connection) -> None:
@@ -300,10 +347,11 @@ class SQLiteStore:
                 """
                 INSERT INTO strategies (
                     strategy_id, symbol, market_type, mode, anchor_price, grid_ratio, grid_count,
-                    order_usdt, order_coin_qty, contract_size, leverage,
+                    order_usdt, grid_kind, lower_price, upper_price, grid_budget_usdt,
+                    order_coin_qty, contract_size, leverage,
                     poll_interval_sec, move_grid, status,
                     has_started, archived, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     config.strategy_id,
@@ -314,6 +362,10 @@ class SQLiteStore:
                     str(config.grid_ratio),
                     config.grid_count,
                     str(config.order_usdt),
+                    config.grid_kind.value,
+                    None if config.lower_price is None else str(config.lower_price),
+                    None if config.upper_price is None else str(config.upper_price),
+                    None if config.grid_budget_usdt is None else str(config.grid_budget_usdt),
                     None if config.order_coin_qty is None else str(config.order_coin_qty),
                     str(config.contract_size),
                     config.leverage,
@@ -363,7 +415,8 @@ class SQLiteStore:
             conn.execute(
                 """
                 UPDATE strategies SET symbol=?, market_type=?, mode=?, anchor_price=?, grid_ratio=?, grid_count=?,
-                    order_usdt=?, order_coin_qty=?, contract_size=?, leverage=?,
+                    order_usdt=?, grid_kind=?, lower_price=?, upper_price=?, grid_budget_usdt=?,
+                    order_coin_qty=?, contract_size=?, leverage=?,
                     poll_interval_sec=?, move_grid=?, updated_at=?
                 WHERE strategy_id=?
                 """,
@@ -375,6 +428,10 @@ class SQLiteStore:
                     str(config.grid_ratio),
                     config.grid_count,
                     str(config.order_usdt),
+                    config.grid_kind.value,
+                    None if config.lower_price is None else str(config.lower_price),
+                    None if config.upper_price is None else str(config.upper_price),
+                    None if config.grid_budget_usdt is None else str(config.grid_budget_usdt),
                     None if config.order_coin_qty is None else str(config.order_coin_qty),
                     str(config.contract_size),
                     config.leverage,
@@ -459,8 +516,8 @@ class SQLiteStore:
                 INSERT INTO cells (
                     strategy_id, cell_id, cell_index, buy_price, sell_price, stage,
                     entry_order_id, exit_order_id, entry_client_id, exit_client_id,
-                    open_qty, exit_executed_qty, entry_filled_at, cycle_count, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    open_qty, exit_executed_qty, entry_filled_at, cycle_count, budget_usdt, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [self._cell_values(cell, now) for cell in cells],
             )
@@ -472,8 +529,8 @@ class SQLiteStore:
                 INSERT INTO cells (
                     strategy_id, cell_id, cell_index, buy_price, sell_price, stage,
                     entry_order_id, exit_order_id, entry_client_id, exit_client_id,
-                    open_qty, exit_executed_qty, entry_filled_at, cycle_count, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    open_qty, exit_executed_qty, entry_filled_at, cycle_count, budget_usdt, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(strategy_id, cell_id) DO UPDATE SET
                     cell_index=excluded.cell_index, buy_price=excluded.buy_price,
                     sell_price=excluded.sell_price, stage=excluded.stage,
@@ -481,6 +538,7 @@ class SQLiteStore:
                     entry_client_id=excluded.entry_client_id, exit_client_id=excluded.exit_client_id,
                     open_qty=excluded.open_qty, exit_executed_qty=excluded.exit_executed_qty,
                     entry_filled_at=excluded.entry_filled_at, cycle_count=excluded.cycle_count,
+                    budget_usdt=excluded.budget_usdt,
                     updated_at=excluded.updated_at
                 """,
                 self._cell_values(cell, utc_now()),
@@ -588,8 +646,8 @@ class SQLiteStore:
                 INSERT OR IGNORE INTO cells (
                     strategy_id, cell_id, cell_index, buy_price, sell_price, stage,
                     entry_order_id, exit_order_id, entry_client_id, exit_client_id,
-                    open_qty, exit_executed_qty, entry_filled_at, cycle_count, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    open_qty, exit_executed_qty, entry_filled_at, cycle_count, budget_usdt, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 self._cell_values(cell, utc_now()),
             )
@@ -668,6 +726,193 @@ class SQLiteStore:
                 "SELECT * FROM cells ORDER BY strategy_id, cell_index"
             ).fetchall()
         return [self._cell_from_row(row) for row in rows]
+
+    def create_capital_action(
+        self,
+        action_id: str,
+        strategy_id: str,
+        operation: str,
+        amount_usdt: Decimal,
+        expected_sell_cell_ids: list[str] | None = None,
+    ) -> dict:
+        if operation not in {"seed", "topup"} or amount_usdt <= 0:
+            raise ValueError("invalid capital action")
+        if operation == "topup":
+            from ..domain.grid import fixed_cell_budgets
+            config_for_amount = self.get_strategy(strategy_id)
+            if config_for_amount is None:
+                raise KeyError(strategy_id)
+            fixed_cell_budgets(amount_usdt, config_for_amount.grid_count)
+        now = utc_now()
+        with self.connection() as conn:
+            existing = conn.execute(
+                "SELECT * FROM capital_actions WHERE id=?", (action_id,)
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["strategy_id"] != strategy_id
+                    or existing["operation"] != operation
+                    or Decimal(existing["amount_usdt"]) != amount_usdt
+                    or (
+                        expected_sell_cell_ids is not None
+                        and json.loads(existing["expected_sell_cell_ids_json"] or "[]") != expected_sell_cell_ids
+                    )
+                ):
+                    raise ValueError("capital action id was used for different parameters")
+                return dict(existing)
+            config = conn.execute(
+                "SELECT grid_kind, status FROM strategies WHERE strategy_id=? AND deleted_at IS NULL",
+                (strategy_id,),
+            ).fetchone()
+            if config is None:
+                raise KeyError(strategy_id)
+            if config["grid_kind"] != GridKind.FIXED_EQUAL_USDT.value:
+                raise ValueError("capital actions require a fixed equal-USDT grid")
+            if config["status"] not in {
+                StrategyStatus.STARTING.value,
+                StrategyStatus.RUNNING.value,
+                StrategyStatus.ERROR.value,
+            }:
+                raise ValueError("strategy must be active")
+            unresolved = conn.execute(
+                "SELECT id FROM capital_actions WHERE strategy_id=? AND status='manual_review' LIMIT 1",
+                (strategy_id,),
+            ).fetchone()
+            if unresolved is not None:
+                raise ValueError("an earlier capital action requires manual review")
+            if operation == "topup":
+                seed = conn.execute(
+                    "SELECT status FROM capital_actions WHERE strategy_id=? AND operation='seed' ORDER BY created_at LIMIT 1",
+                    (strategy_id,),
+                ).fetchone()
+                if seed is None or seed["status"] != "applied":
+                    raise ValueError("initial position has not been established")
+            conn.execute(
+                """
+                INSERT INTO capital_actions(id, strategy_id, operation, amount_usdt,
+                    status, expected_sell_cell_ids_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'requested', ?, ?, ?)
+                """,
+                (action_id, strategy_id, operation, str(amount_usdt),
+                 None if expected_sell_cell_ids is None else json.dumps(expected_sell_cell_ids), now, now),
+            )
+            row = conn.execute("SELECT * FROM capital_actions WHERE id=?", (action_id,)).fetchone()
+        return dict(row)
+
+    def get_capital_action(self, action_id: str) -> dict | None:
+        with self.connection() as conn:
+            row = conn.execute("SELECT * FROM capital_actions WHERE id=?", (action_id,)).fetchone()
+        return dict(row) if row is not None else None
+
+    def list_capital_actions(self, strategy_id: str) -> list[dict]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM capital_actions WHERE strategy_id=? ORDER BY created_at, id",
+                (strategy_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def pending_capital_action_strategy_ids(self) -> set[str]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT strategy_id FROM capital_actions WHERE status IN ('requested', 'planned', 'submitted')"
+            ).fetchall()
+        return {row["strategy_id"] for row in rows}
+
+    def plan_capital_action(
+        self,
+        action_id: str,
+        sell_cell_ids: list[str],
+        target_qty: Decimal,
+        client_order_id: str,
+    ) -> None:
+        with self.connection() as conn:
+            result = conn.execute(
+                """
+                UPDATE capital_actions SET status='planned', sell_cell_ids_json=?,
+                    target_qty=?, client_order_id=?, updated_at=?
+                WHERE id=? AND status='requested'
+                """,
+                (json.dumps(sell_cell_ids), str(target_qty), client_order_id, utc_now(), action_id),
+            )
+            if result.rowcount != 1:
+                raise ValueError("capital action is not requested")
+
+    def mark_capital_action_submitted(self, action_id: str, order_id: int | None = None) -> None:
+        with self.connection() as conn:
+            conn.execute(
+                """
+                UPDATE capital_actions SET status='submitted',
+                    order_id=COALESCE(?, order_id), updated_at=?
+                WHERE id=? AND status IN ('planned', 'submitted')
+                """,
+                (order_id, utc_now(), action_id),
+            )
+
+    def mark_capital_action_review(self, action_id: str, message: str) -> None:
+        with self.connection() as conn:
+            conn.execute(
+                "UPDATE capital_actions SET status='manual_review', message=?, updated_at=? WHERE id=? AND status!='applied'",
+                (message, utc_now(), action_id),
+            )
+
+    def mark_capital_action_rejected(self, action_id: str, message: str) -> None:
+        with self.connection() as conn:
+            conn.execute(
+                "UPDATE capital_actions SET status='rejected', message=?, updated_at=? WHERE id=? AND status='requested'",
+                (message, utc_now(), action_id),
+            )
+
+    def apply_capital_action(self, action_id: str, allocations: dict[str, Decimal], executed_qty: Decimal) -> None:
+        """Apply a confirmed aggregate fill and all cell budgets exactly once."""
+        with self.connection() as conn:
+            action = conn.execute(
+                "SELECT * FROM capital_actions WHERE id=?", (action_id,)
+            ).fetchone()
+            if action is None:
+                raise KeyError(action_id)
+            if action["status"] == "applied":
+                return
+            if action["status"] not in {"planned", "submitted"}:
+                raise ValueError("capital action is not ready to apply")
+            cells = conn.execute(
+                "SELECT * FROM cells WHERE strategy_id=? ORDER BY cell_index",
+                (action["strategy_id"],),
+            ).fetchall()
+            from ..domain.grid import fixed_cell_budgets
+            increments = fixed_cell_budgets(Decimal(action["amount_usdt"]), len(cells))
+            sell_ids = set(json.loads(action["sell_cell_ids_json"]))
+            if set(allocations) != sell_ids or sum(allocations.values(), Decimal("0")) != executed_qty:
+                raise ValueError("capital allocation does not match the aggregate fill")
+            for row, increment in zip(cells, increments):
+                added_qty = allocations.get(row["cell_id"], Decimal("0"))
+                new_budget = Decimal(row["budget_usdt"]) + (
+                    increment if action["operation"] == "topup" else Decimal("0")
+                )
+                new_qty = Decimal(row["open_qty"]) + added_qty
+                stage = row["stage"]
+                if new_qty > 0 and added_qty > 0:
+                    stage = CellStage.PENDING_EXIT.value
+                elif stage == CellStage.UNTRIGGERED.value:
+                    stage = CellStage.PENDING_ENTRY.value
+                conn.execute(
+                    "UPDATE cells SET budget_usdt=?, open_qty=?, stage=?, updated_at=? WHERE strategy_id=? AND cell_id=?",
+                    (str(new_budget), str(new_qty), stage, utc_now(), action["strategy_id"], row["cell_id"]),
+                )
+            if action["operation"] == "topup":
+                strategy = conn.execute(
+                    "SELECT grid_budget_usdt FROM strategies WHERE strategy_id=?",
+                    (action["strategy_id"],),
+                ).fetchone()
+                new_total = Decimal(strategy["grid_budget_usdt"]) + Decimal(action["amount_usdt"])
+                conn.execute(
+                    "UPDATE strategies SET grid_budget_usdt=?, order_usdt=?, updated_at=? WHERE strategy_id=?",
+                    (str(new_total), str(new_total / Decimal(len(cells))), utc_now(), action["strategy_id"]),
+                )
+            conn.execute(
+                "UPDATE capital_actions SET status='applied', executed_qty=?, updated_at=? WHERE id=?",
+                (str(executed_qty), utc_now(), action_id),
+            )
 
     def append_event(
         self,
@@ -1174,6 +1419,10 @@ class SQLiteStore:
                 if "contract_size" in row.keys()
                 else Decimal("0")
             ),
+            grid_kind=GridKind(row["grid_kind"]) if "grid_kind" in row.keys() else GridKind.TRIGGERED,
+            lower_price=Decimal(row["lower_price"]) if "lower_price" in row.keys() and row["lower_price"] is not None else None,
+            upper_price=Decimal(row["upper_price"]) if "upper_price" in row.keys() and row["upper_price"] is not None else None,
+            grid_budget_usdt=Decimal(row["grid_budget_usdt"]) if "grid_budget_usdt" in row.keys() and row["grid_budget_usdt"] is not None else None,
         )
 
     @staticmethod
@@ -1193,6 +1442,7 @@ class SQLiteStore:
             str(cell.exit_executed_qty),
             cell.entry_filled_at,
             cell.cycle_count,
+            str(cell.budget_usdt),
             updated_at,
         )
 
@@ -1213,4 +1463,5 @@ class SQLiteStore:
             exit_executed_qty=Decimal(row["exit_executed_qty"]),
             entry_filled_at=row["entry_filled_at"],
             cycle_count=int(row["cycle_count"]),
+            budget_usdt=Decimal(row["budget_usdt"]) if "budget_usdt" in row.keys() else Decimal("0"),
         )

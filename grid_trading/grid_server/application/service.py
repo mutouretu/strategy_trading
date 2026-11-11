@@ -5,9 +5,9 @@ import uuid
 from dataclasses import replace
 from decimal import Decimal
 
-from ..domain import FuturesMarket, Mode, StrategyConfig, StrategyStatus
+from ..domain import FuturesMarket, GridKind, Mode, StrategyConfig, StrategyStatus
 from ..ports.exchange import Exchange
-from ..domain.grid import build_cells
+from ..domain.grid import build_cells, fixed_cell_budgets, fixed_grid_ratio
 from ..infrastructure.sqlite_store import SQLiteStore
 from ..runtime.supervisor import StrategySupervisor
 
@@ -91,12 +91,84 @@ class GridService:
         self.store.append_event(strategy_id, "STRATEGY_CREATED", {"cell_count": len(cells)})
         return config
 
+    def preview_fixed(
+        self,
+        symbol: str,
+        lower_price: Decimal,
+        upper_price: Decimal,
+        grid_count: int,
+        grid_budget_usdt: Decimal,
+        tick_size: Decimal,
+        *,
+        strategy_id: str = "preview-fixed",
+        poll_interval_sec: float = 1.0,
+    ) -> tuple[StrategyConfig, list]:
+        budgets = fixed_cell_budgets(grid_budget_usdt, grid_count)
+        config = StrategyConfig(
+            strategy_id=strategy_id,
+            symbol=symbol.strip().upper(),
+            mode=Mode.LONG,
+            anchor_price=upper_price,
+            grid_ratio=fixed_grid_ratio(lower_price, upper_price, grid_count),
+            grid_count=grid_count,
+            order_usdt=budgets[0],
+            market_type=FuturesMarket.USDM,
+            leverage=1,
+            poll_interval_sec=poll_interval_sec,
+            move_grid=False,
+            grid_kind=GridKind.FIXED_EQUAL_USDT,
+            lower_price=lower_price,
+            upper_price=upper_price,
+            grid_budget_usdt=grid_budget_usdt,
+        )
+        return config, build_cells(config, tick_size)
+
+    def create_fixed(
+        self,
+        symbol: str,
+        lower_price: Decimal,
+        upper_price: Decimal,
+        grid_count: int,
+        grid_budget_usdt: Decimal,
+        tick_size: Decimal,
+        *,
+        poll_interval_sec: float = 1.0,
+    ) -> StrategyConfig:
+        clean_symbol = symbol.strip().upper()
+        slug = re.sub(r"[^a-z0-9]+", "-", clean_symbol.lower()).strip("-")
+        strategy_id = f"{slug}-fixed-{uuid.uuid4().hex[:8]}"
+        config, cells = self.preview_fixed(
+            clean_symbol,
+            lower_price,
+            upper_price,
+            grid_count,
+            grid_budget_usdt,
+            tick_size,
+            strategy_id=strategy_id,
+            poll_interval_sec=poll_interval_sec,
+        )
+        self.store.create_strategy(config)
+        self.store.replace_cells(strategy_id, cells)
+        self.store.append_event(strategy_id, "STRATEGY_CREATED", {"cell_count": len(cells), "grid_kind": config.grid_kind.value})
+        return config
+
     def update_draft(self, config: StrategyConfig, tick_size: Decimal) -> None:
         self.store.update_draft(config)
         self.store.replace_cells(config.strategy_id, build_cells(config, tick_size))
         self.store.append_event(config.strategy_id, "STRATEGY_UPDATED", {})
 
     def start(self, strategy_id: str) -> int:
+        config = self.store.get_strategy(strategy_id)
+        if config is None:
+            raise KeyError(strategy_id)
+        for other in self.store.list_strategies():
+            if other.strategy_id == strategy_id or not other.has_started:
+                continue
+            if other.status not in {StrategyStatus.STARTING, StrategyStatus.RUNNING, StrategyStatus.ERROR}:
+                continue
+            if other.market_type == config.market_type and other.symbol == config.symbol:
+                if config.grid_kind == GridKind.FIXED_EQUAL_USDT or other.grid_kind == GridKind.FIXED_EQUAL_USDT:
+                    raise ValueError("a fixed grid requires exclusive use of its symbol")
         return self.supervisor.start(strategy_id)
 
     def stop(self, strategy_id: str) -> None:

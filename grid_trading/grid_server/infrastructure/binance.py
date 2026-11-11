@@ -144,6 +144,7 @@ class BinanceFuturesExchange:
         quantity: Decimal,
         price: Decimal,
         client_order_id: str,
+        post_only: bool = False,
     ) -> int:
         try:
             data = self._request(
@@ -154,7 +155,7 @@ class BinanceFuturesExchange:
                     "side": side.value,
                     "positionSide": position_side,
                     "type": "LIMIT",
-                    "timeInForce": "GTC",
+                    "timeInForce": "GTX" if post_only else "GTC",
                     "quantity": decimal_text(quantity),
                     "price": decimal_text(price),
                     "newClientOrderId": client_order_id,
@@ -168,6 +169,54 @@ class BinanceFuturesExchange:
                 exc,
             ).order_id
         return int(data["orderId"])
+
+    def place_market_order(
+        self,
+        symbol: str,
+        side: OrderSide,
+        position_side: str,
+        quantity: Decimal,
+        client_order_id: str,
+    ) -> int:
+        if self.market_type != FuturesMarket.USDM:
+            raise ValueError("aggregate market orders currently support USD-M only")
+        try:
+            data = self._request(
+                "POST",
+                self._path("order"),
+                {
+                    "symbol": symbol,
+                    "side": side.value,
+                    "positionSide": position_side,
+                    "type": "MARKET",
+                    "quantity": decimal_text(quantity),
+                    "newClientOrderId": client_order_id,
+                },
+                signed=True,
+            )
+        except ExchangeExecutionUnknownError as exc:
+            return self._confirm_order_by_client_id(symbol, client_order_id, exc).order_id
+        return int(data["orderId"])
+
+    def get_available_balance(self, asset: str = "USDT") -> Decimal:
+        if self.market_type != FuturesMarket.USDM:
+            raise ValueError("available USDT balance currently supports USD-M only")
+        data = self._request("GET", self._path("balance", version="v3"), signed=True)
+        row = next((item for item in data if item.get("asset") == asset), None)
+        if row is None:
+            raise BinanceAPIError(f"balance asset not found: {asset}")
+        return Decimal(str(row["availableBalance"]))
+
+    def get_commission_rates(self, symbol: str) -> tuple[Decimal, Decimal]:
+        if self.market_type != FuturesMarket.USDM:
+            raise ValueError("commission rates currently support USD-M only")
+        data = self._request(
+            "GET", self._path("commissionRate"), {"symbol": symbol}, signed=True
+        )
+        return (
+            Decimal(str(data["makerCommissionRate"])),
+            Decimal(str(data["takerCommissionRate"])),
+        )
 
     def get_order(self, symbol: str, order_id: int) -> OrderSnapshot:
         return self._query_order(

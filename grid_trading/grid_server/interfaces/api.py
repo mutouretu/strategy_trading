@@ -5,6 +5,7 @@ import inspect
 from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Literal
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -16,7 +17,8 @@ from ..shared.config import (
     binance_credentials,
     load_environment,
 )
-from ..domain import FuturesMarket, Mode, StrategyConfig
+from ..domain import FuturesMarket, GridKind, Mode, StrategyConfig
+from ..domain.grid import fixed_cell_budgets, round_down
 from ..application.service import GridService
 from ..infrastructure.sqlite_store import SQLiteStore
 from ..runtime.supervisor import StrategySupervisor
@@ -41,6 +43,25 @@ class CellActionInput(BaseModel):
     boundary: Literal["lower", "upper"]
 
 
+class FixedGridInput(BaseModel):
+    symbol: str = Field(min_length=1)
+    lower_price: Decimal = Field(gt=0)
+    upper_price: Decimal = Field(gt=0)
+    grid_count: int = Field(ge=1, le=100)
+    grid_budget_usdt: Decimal = Field(gt=0)
+    poll_interval_sec: float = Field(default=1.0, ge=0.2)
+
+
+class TopupInput(BaseModel):
+    request_id: str = Field(min_length=8, max_length=80)
+    amount_usdt: Decimal = Field(gt=0)
+    expected_sell_cell_ids: list[str] | None = None
+
+
+class TopupPreviewInput(BaseModel):
+    amount_usdt: Decimal = Field(gt=0)
+
+
 def strategy_payload(config: StrategyConfig, store: SQLiteStore) -> dict:
     cells = store.list_cells(config.strategy_id)
     runtime = store.get_runtime(config.strategy_id)
@@ -50,6 +71,8 @@ def strategy_payload(config: StrategyConfig, store: SQLiteStore) -> dict:
         "strategy_id": config.strategy_id,
         "symbol": config.symbol,
         "market_type": config.market_type.value,
+        "grid_kind": config.grid_kind.value,
+        "grid_budget_usdt": None if config.grid_budget_usdt is None else str(config.grid_budget_usdt),
         "quantity_unit": "base_asset",
         "mode": config.mode.value,
         "anchor_price": str(config.anchor_price),
@@ -77,8 +100,8 @@ def strategy_payload(config: StrategyConfig, store: SQLiteStore) -> dict:
         "has_started": config.has_started,
         "archived": config.archived,
         "current_price": runtime.get("mark_price") if runtime else None,
-        "lower_price": None if lower_price is None else str(lower_price),
-        "upper_price": None if upper_price is None else str(upper_price),
+        "lower_price": str(config.lower_price) if config.lower_price is not None else (None if lower_price is None else str(lower_price)),
+        "upper_price": str(config.upper_price) if config.upper_price is not None else (None if upper_price is None else str(upper_price)),
         "pending_entry": sum(cell.stage.value == "pending_entry" for cell in cells),
         "entered": sum(cell.open_qty > 0 for cell in cells),
         "pending_exit": sum(cell.stage.value == "pending_exit" for cell in cells),
@@ -128,6 +151,7 @@ def cell_payload(
         "exit_executed_qty": str(cell.exit_executed_qty),
         "entry_filled_at": cell.entry_filled_at or None,
         "cycle_count": cell.cycle_count,
+        "budget_usdt": str(cell.budget_usdt),
     }
     return config_side
 
@@ -163,6 +187,52 @@ def _strategy_amounts(
     if data.order_usdt is None:
         raise ValueError("U 本位必须填写单格 USD 金额")
     return data.order_usdt, None
+
+
+def fixed_grid_preview_details(
+    cells, mark: Decimal, filters, maker_rate: Decimal, taker_rate: Decimal
+) -> dict:
+    if mark <= 0:
+        raise ValueError("invalid current price")
+    net_profits = []
+    for cell in cells:
+        qty = round_down(cell.budget_usdt / cell.buy_price, filters.step_size)
+        if qty < filters.min_qty or qty * cell.buy_price < filters.min_notional:
+            raise ValueError(f"Cell #{cell.index} is below exchange minimum order size")
+        net = qty * (
+            cell.sell_price - cell.buy_price
+            - cell.buy_price * maker_rate
+            - cell.sell_price * maker_rate
+        )
+        if net <= 0:
+            raise ValueError(f"Cell #{cell.index} grid profit does not cover maker fees")
+        net_profits.append(net)
+    sell_cells = [cell for cell in cells if cell.sell_price > mark]
+    seed_notional = sum((cell.budget_usdt for cell in sell_cells), Decimal("0"))
+    seed_qty = round_down(seed_notional / mark, filters.step_size)
+    if sell_cells and (
+        seed_qty <= 0
+        or seed_qty * mark < filters.min_notional
+        or seed_qty / len(sell_cells) < filters.min_qty
+    ):
+        raise ValueError("initial sell-side position is below exchange minimum")
+    return {
+        "current_price": str(mark),
+        "buy_cell_count": len(cells) - len(sell_cells),
+        "sell_cell_count": len(sell_cells),
+        "seed_notional_usdt": str(seed_notional),
+        "seed_quantity": str(seed_qty),
+        "buy_budget_usdt": str(sum((cell.budget_usdt for cell in cells if cell not in sell_cells), Decimal("0"))),
+        "inside_range": cells[0].buy_price <= mark <= cells[-1].sell_price,
+        "maker_fee_rate": str(maker_rate),
+        "taker_fee_rate": str(taker_rate),
+        "minimum_net_cycle_profit_usdt": str(min(net_profits)),
+        "estimated_seed_opening_fee_usdt": str(seed_notional * taker_rate),
+        "seed_cells_below_fee_break_even": sum(
+            cell.sell_price <= mark * (Decimal("1") + taker_rate) / (Decimal("1") - maker_rate)
+            for cell in sell_cells
+        ),
+    }
 
 
 def create_app(
@@ -260,6 +330,57 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.post("/fixed-grids/preview")
+    def preview_fixed_grid(data: FixedGridInput) -> dict:
+        try:
+            exchange = exchange_for(FuturesMarket.USDM)
+            symbol = data.symbol.strip().upper()
+            filters = exchange.get_symbol_filters(symbol)
+            if filters.contract_type and filters.contract_type != "PERPETUAL":
+                raise ValueError("fixed grid requires a perpetual contract")
+            config, cells = service.preview_fixed(
+                symbol, data.lower_price, data.upper_price,
+                data.grid_count, data.grid_budget_usdt, filters.tick_size,
+                poll_interval_sec=data.poll_interval_sec,
+            )
+            maker_rate, taker_rate = exchange.get_commission_rates(symbol)
+            details = fixed_grid_preview_details(
+                cells, exchange.get_mark_price(symbol), filters, maker_rate, taker_rate
+            )
+            return {
+                "config": strategy_payload(config, _PreviewStore(cells)),
+                "cells": [cell_payload(cell, config=config) for cell in cells],
+                "allocation": details,
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/fixed-grids", status_code=201)
+    def create_fixed_grid(data: FixedGridInput) -> dict:
+        try:
+            exchange = exchange_for(FuturesMarket.USDM)
+            symbol = data.symbol.strip().upper()
+            filters = exchange.get_symbol_filters(symbol)
+            if filters.contract_type and filters.contract_type != "PERPETUAL":
+                raise ValueError("fixed grid requires a perpetual contract")
+            _, preview_cells = service.preview_fixed(
+                symbol, data.lower_price, data.upper_price,
+                data.grid_count, data.grid_budget_usdt, filters.tick_size,
+                poll_interval_sec=data.poll_interval_sec,
+            )
+            maker_rate, taker_rate = exchange.get_commission_rates(symbol)
+            fixed_grid_preview_details(
+                preview_cells, exchange.get_mark_price(symbol), filters, maker_rate, taker_rate
+            )
+            config = service.create_fixed(
+                symbol, data.lower_price, data.upper_price,
+                data.grid_count, data.grid_budget_usdt, filters.tick_size,
+                poll_interval_sec=data.poll_interval_sec,
+            )
+            return strategy_payload(config, store)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.post("/strategies", status_code=201)
     def create_strategy(data: StrategyInput) -> dict:
         try:
@@ -288,6 +409,9 @@ def create_app(
     @app.put("/strategies/{strategy_id}")
     def update_strategy(strategy_id: str, data: StrategyInput) -> dict:
         try:
+            existing = store.get_strategy(strategy_id)
+            if existing is not None and existing.grid_kind == GridKind.FIXED_EQUAL_USDT:
+                raise ValueError("fixed grid parameters cannot be edited through the triggered-grid endpoint")
             filters = exchange_for(data.market_type).get_symbol_filters(data.symbol.strip().upper())
             _validate_market_contract(data.market_type, filters)
             order_usdt, order_coin_qty = _strategy_amounts(data, filters.contract_size)
@@ -340,9 +464,79 @@ def create_app(
             raise HTTPException(status_code=404, detail="strategy not found")
         return store.list_cell_actions(strategy_id, min(max(limit, 1), 100))
 
+    @app.get("/strategies/{strategy_id}/topups")
+    def strategy_topups(strategy_id: str) -> list[dict]:
+        if store.get_strategy(strategy_id) is None:
+            raise HTTPException(status_code=404, detail="strategy not found")
+        return store.list_capital_actions(strategy_id)
+
+    @app.post("/strategies/{strategy_id}/topups/preview")
+    def preview_topup(strategy_id: str, data: TopupPreviewInput) -> dict:
+        try:
+            config = store.get_strategy(strategy_id)
+            if config is None:
+                raise KeyError(strategy_id)
+            if config.grid_kind != GridKind.FIXED_EQUAL_USDT:
+                raise ValueError("top-up requires a fixed equal-USDT grid")
+            cells = store.list_cells(strategy_id)
+            increments = fixed_cell_budgets(data.amount_usdt, len(cells))
+            sell_count = sum(cell.open_qty > 0 for cell in cells)
+            sell_amount = sum(
+                (increment for cell, increment in zip(cells, increments) if cell.open_qty > 0),
+                Decimal("0"),
+            )
+            exchange = exchange_for(config.market_type)
+            available = exchange.get_available_balance("USDT")
+            if available < data.amount_usdt:
+                raise ValueError("available USDT is below the top-up amount")
+            if sell_count:
+                filters = exchange.get_symbol_filters(config.symbol)
+                mark = exchange.get_mark_price(config.symbol)
+                quantity = round_down(sell_amount / mark, filters.step_size)
+                if (
+                    quantity <= 0
+                    or quantity < filters.min_qty
+                    or quantity * mark < filters.min_notional
+                    or quantity / sell_count < filters.step_size
+                ):
+                    raise ValueError("top-up sell-side amount is below exchange minimum")
+            return {
+                "amount_usdt": str(data.amount_usdt),
+                "per_cell_usdt": str(increments[0]),
+                "sell_cell_ids": [cell.cell_id for cell in cells if cell.open_qty > 0],
+                "sell_cell_count": sell_count,
+                "buy_cell_count": len(cells) - sell_count,
+                "aggregate_buy_usdt": str(sell_amount),
+                "buy_order_budget_increase_usdt": str(data.amount_usdt - sell_amount),
+                "available_usdt": str(available),
+                "estimated_opening_fee_usdt": str(
+                    sell_amount * exchange.get_commission_rates(config.symbol)[1]
+                ),
+            }
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="strategy not found") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/strategies/{strategy_id}/topups", status_code=202)
+    def request_topup(strategy_id: str, data: TopupInput) -> dict:
+        try:
+            action = store.create_capital_action(
+                data.request_id, strategy_id, "topup", data.amount_usdt,
+                data.expected_sell_cell_ids,
+            )
+            return action
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="strategy not found") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @app.post("/strategies/{strategy_id}/cell-actions", status_code=202)
     def request_cell_action(strategy_id: str, data: CellActionInput) -> dict:
         try:
+            config = store.get_strategy(strategy_id)
+            if config is not None and config.grid_kind == GridKind.FIXED_EQUAL_USDT:
+                raise ValueError("fixed grid boundaries and cell count cannot be moved")
             action = store.request_cell_action(
                 strategy_id,
                 data.operation,
@@ -368,6 +562,16 @@ def create_app(
     @app.post("/strategies/{strategy_id}/start")
     def start_strategy(strategy_id: str) -> dict:
         try:
+            config = store.get_strategy(strategy_id)
+            if config is not None and config.grid_kind == GridKind.FIXED_EQUAL_USDT:
+                exchange = exchange_for(FuturesMarket.USDM)
+                if isinstance(exchange, BinanceFuturesExchange):
+                    if urlparse(exchange.base_url).hostname not in {"demo-fapi.binance.com", "testnet.binancefuture.com"}:
+                        raise ValueError("fixed equal-USDT grid is enabled on Binance testnet only")
+                if config.lower_price is not None and config.upper_price is not None:
+                    mark = exchange.get_mark_price(config.symbol)
+                    if not config.lower_price <= mark <= config.upper_price:
+                        raise ValueError("current price is outside fixed grid boundaries")
             return {"pid": service.start(strategy_id), "configuration_locked": True}
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="strategy not found") from exc

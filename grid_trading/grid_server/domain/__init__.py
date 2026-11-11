@@ -3,6 +3,7 @@
 from .models import (
     CellStage,
     FuturesMarket,
+    GridKind,
     GridCell,
     Mode,
     OrderSide,
@@ -17,6 +18,7 @@ from .models import (
 __all__ = [
     "CellStage",
     "FuturesMarket",
+    "GridKind",
     "GridCell",
     "Mode",
     "OrderSide",

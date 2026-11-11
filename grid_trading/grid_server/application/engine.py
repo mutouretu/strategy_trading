@@ -252,7 +252,7 @@ class TradingEngine:
         tag = hashlib.sha1(self.strategy_id.encode("utf-8")).hexdigest()[:8]
         return f"wg-{tag}-"
 
-    def _quantity(self, price: Decimal) -> Decimal:
+    def _quantity(self, price: Decimal, cell: GridCell | None = None) -> Decimal:
         assert self.filters is not None
         config = self._config()
         if config.market_type == FuturesMarket.COINM:
@@ -283,10 +283,23 @@ class TradingEngine:
             return Decimal("0")
         return qty
 
+    def _submit_limit_order(
+        self,
+        symbol: str,
+        side: OrderSide,
+        position_side: str,
+        quantity: Decimal,
+        price: Decimal,
+        client_order_id: str,
+    ) -> int:
+        return self.exchange.place_limit_order(
+            symbol, side, position_side, quantity, price, client_order_id
+        )
+
     def _place_entry(self, cell: GridCell) -> None:
         config = self._config()
         price = self._entry_price(cell)
-        qty = self._quantity(price)
+        qty = self._quantity(price, cell)
         if qty <= 0:
             self._event("ENTRY_SKIPPED", cell, {"reason": "min_qty_or_notional", "price": str(price)})
             return
@@ -297,7 +310,7 @@ class TradingEngine:
         cell.entry_client_id = client_id
         self.store.save_cell(cell)
         try:
-            order_id = self.exchange.place_limit_order(
+            order_id = self._submit_limit_order(
                 config.symbol,
                 self._entry_side(),
                 self._position_side(),
@@ -345,7 +358,7 @@ class TradingEngine:
         cell.exit_executed_qty = Decimal("0")
         self.store.save_cell(cell)
         try:
-            order_id = self.exchange.place_limit_order(
+            order_id = self._submit_limit_order(
                 config.symbol,
                 self._exit_side(),
                 self._position_side(),
@@ -795,7 +808,7 @@ class TradingEngine:
         if order.price != expected_price:
             mismatches.append(f"price:{order.price}!={expected_price}")
         if role == "entry":
-            expected_qty = self._quantity(expected_price)
+            expected_qty = self._quantity(expected_price, cell)
             if order.original_qty != expected_qty:
                 mismatches.append(f"qty:{order.original_qty}!={expected_qty}")
         elif cell.open_qty > 0:

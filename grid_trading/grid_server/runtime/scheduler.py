@@ -18,8 +18,9 @@ from ..shared.config import (
     binance_credentials,
     load_environment,
 )
-from ..domain import FuturesMarket, Mode, StrategyStatus
+from ..domain import FuturesMarket, GridKind, Mode, StrategyStatus
 from ..application.engine import TradingEngine
+from ..application.fixed_engine import FixedGridEngine
 from ..ports.exchange import Exchange
 from ..application.position_coordinator import PositionCoordinator
 from ..infrastructure.snapshot_exchange import SnapshotExchange
@@ -104,7 +105,10 @@ class StrategyScheduler:
             self.next_reconcile_at = current_time + self.reconcile_interval_sec
             return 0
 
-        pending_action_ids = self.store.pending_cell_action_strategy_ids()
+        pending_action_ids = (
+            self.store.pending_cell_action_strategy_ids()
+            | self.store.pending_capital_action_strategy_ids()
+        )
         due = [
             config
             for strategy_id, config in configs.items()
@@ -134,7 +138,8 @@ class StrategyScheduler:
             strategy_remains_active = True
             engine = self.engines.get(config.strategy_id)
             if engine is None:
-                engine = TradingEngine(
+                engine_type = FixedGridEngine if config.grid_kind == GridKind.FIXED_EQUAL_USDT else TradingEngine
+                engine = engine_type(
                     self.store,
                     self._exchange_for(config.market_type),
                     config.strategy_id,
@@ -187,7 +192,8 @@ class StrategyScheduler:
                     continue
                 engine = self.engines.get(config.strategy_id)
                 if engine is None:
-                    engine = TradingEngine(
+                    engine_type = FixedGridEngine if config.grid_kind == GridKind.FIXED_EQUAL_USDT else TradingEngine
+                    engine = engine_type(
                         self.store,
                         self._exchange_for(config.market_type),
                         config.strategy_id,

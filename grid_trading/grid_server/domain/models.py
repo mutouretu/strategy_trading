@@ -21,6 +21,11 @@ class FuturesMarket(StrEnum):
     COINM = "coinm"
 
 
+class GridKind(StrEnum):
+    TRIGGERED = "triggered"
+    FIXED_EQUAL_USDT = "fixed_equal_usdt"
+
+
 class StrategyStatus(StrEnum):
     DRAFT = "draft"
     STARTING = "starting"
@@ -72,6 +77,10 @@ class StrategyConfig:
     # at the order price.
     order_coin_qty: Decimal | None = None
     contract_size: Decimal = Decimal("0")
+    grid_kind: GridKind = GridKind.TRIGGERED
+    lower_price: Decimal | None = None
+    upper_price: Decimal | None = None
+    grid_budget_usdt: Decimal | None = None
 
     def validate(self) -> None:
         if not self.strategy_id.strip():
@@ -84,6 +93,20 @@ class StrategyConfig:
             raise ValueError("grid_ratio must be > 0")
         if self.grid_count < 1:
             raise ValueError("grid_count must be >= 1")
+        if self.grid_kind == GridKind.FIXED_EQUAL_USDT:
+            if self.market_type != FuturesMarket.USDM or self.mode != Mode.LONG:
+                raise ValueError("fixed equal-USDT grid supports USD-M long only")
+            if self.leverage != 1 or self.move_grid:
+                raise ValueError("fixed equal-USDT grid requires 1x and fixed boundaries")
+            if (
+                self.lower_price is None
+                or self.upper_price is None
+                or self.lower_price <= 0
+                or self.upper_price <= self.lower_price
+            ):
+                raise ValueError("fixed grid requires 0 < lower_price < upper_price")
+            if self.grid_budget_usdt is None or self.grid_budget_usdt <= 0:
+                raise ValueError("fixed grid requires positive grid_budget_usdt")
         if self.market_type == FuturesMarket.COINM:
             if self.order_coin_qty is None or self.order_coin_qty <= 0:
                 raise ValueError("order_coin_qty must be > 0 for COIN-M")
@@ -125,6 +148,7 @@ class GridCell:
     exit_executed_qty: Decimal = Decimal("0")
     entry_filled_at: str = ""
     cycle_count: int = 0
+    budget_usdt: Decimal = Decimal("0")
 
     def validate(self) -> None:
         if self.buy_price <= 0 or self.sell_price <= 0:

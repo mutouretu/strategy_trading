@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from html import escape
 from urllib.parse import quote
+import uuid
 
 import pandas as pd
 import streamlit as st
@@ -145,7 +146,13 @@ def normalize_strategy(item: dict) -> dict:
         "id": item["strategy_id"],
         "symbol": item["symbol"],
         "market_type": market_type,
-        "market_label": "币本位永续" if market_type == "coinm" else "U 本位永续",
+        "grid_kind": item.get("grid_kind", "triggered"),
+        "grid_budget_usdt": None if item.get("grid_budget_usdt") is None else decimal_number(item["grid_budget_usdt"]),
+        "market_label": (
+            "固定等 U · U 本位永续"
+            if item.get("grid_kind") == "fixed_equal_usdt"
+            else ("币本位永续" if market_type == "coinm" else "U 本位永续")
+        ),
         "quantity_unit": item.get(
             "quantity_unit",
             "contract" if market_type == "coinm" else "base_asset",
@@ -230,8 +237,90 @@ def display_flash() -> None:
         st.toast(success)
 
 
+def render_fixed_grid_create() -> None:
+    st.caption("币安 U 本位测试网 · 固定区间 · 1 倍做多 · 每格等 U")
+    with st.form("fixed_grid_preview_form"):
+        symbol = st.text_input("交易对", placeholder="例如 SOLUSDT", key="fixed_symbol")
+        lower = st.number_input("区间下界", min_value=0.0, value=None, step=0.01, format="%.8f")
+        upper = st.number_input("区间上界", min_value=0.0, value=None, step=0.01, format="%.8f")
+        count = st.number_input("网格数量", min_value=1, max_value=100, value=20, step=1)
+        budget = st.number_input("网格交易预算 (USDT)", min_value=0.01, value=None, step=100.0, format="%.2f")
+        preview_clicked = st.form_submit_button("生成预览", type="primary")
+    if preview_clicked:
+        if not symbol.strip() or lower is None or upper is None or budget is None:
+            st.error("请填写交易对、上下界和交易预算。")
+        else:
+            payload = {
+                "symbol": symbol.strip().upper(),
+                "lower_price": str(lower),
+                "upper_price": str(upper),
+                "grid_count": int(count),
+                "grid_budget_usdt": str(budget),
+            }
+            try:
+                preview = backend().preview_fixed_grid(payload)
+            except GridApiError as exc:
+                st.error(str(exc))
+            else:
+                st.session_state["fixed_create_payload"] = payload
+                st.session_state["fixed_create_preview"] = preview
+    preview = st.session_state.get("fixed_create_preview")
+    payload = st.session_state.get("fixed_create_payload")
+    if not preview or not payload:
+        return
+    allocation = preview["allocation"]
+    st.write(
+        f"当前价 {allocation['current_price']} · 买格 {allocation['buy_cell_count']} · "
+        f"卖格 {allocation['sell_cell_count']} · 初始合并开仓约 {allocation['seed_notional_usdt']} U"
+    )
+    st.caption(
+        f"当前账户 maker {float(allocation['maker_fee_rate']) * 100:.4f}% / "
+        f"taker {float(allocation['taker_fee_rate']) * 100:.4f}%；"
+        f"预计初始开仓手续费 {float(allocation['estimated_seed_opening_fee_usdt']):.4f} U；"
+        f"单格完整挂单循环的最低预计净利润 {float(allocation['minimum_net_cycle_profit_usdt']):.4f} U。"
+    )
+    if allocation["seed_cells_below_fee_break_even"]:
+        st.warning(
+            f"当前价距离 {allocation['seed_cells_below_fee_break_even']} 个高位卖格过近，"
+            "初始市价开仓后立即卖出可能不足以覆盖手续费。"
+        )
+    if not allocation["inside_range"]:
+        st.warning("当前价格已在区间外；价格回到区间内才能启动。")
+    st.dataframe(
+        pd.DataFrame([
+            {
+                "格子": f"#{int(cell['index']):03d}",
+                "买价": cell["buy_price"],
+                "卖价": cell["sell_price"],
+                "预算 (U)": cell["budget_usdt"],
+            }
+            for cell in preview["cells"]
+        ]),
+        hide_index=True,
+        width="stretch",
+        height=min(500, 36 * (len(preview["cells"]) + 1)),
+    )
+    if st.button("确认创建固定网格", type="primary"):
+        try:
+            created = backend().create_fixed_grid(payload)
+        except GridApiError as exc:
+            st.error(str(exc))
+        else:
+            st.session_state.pop("fixed_create_payload", None)
+            st.session_state.pop("fixed_create_preview", None)
+            st.session_state["api_flash_success"] = f"{created['symbol']} 固定网格已创建"
+            st.rerun()
+
+
 @st.dialog("新增币对网格")
 def create_grid_dialog() -> None:
+    kind = st.segmented_control(
+        "策略类型", ["触发式网格", "固定区间等 U"],
+        default="触发式网格", selection_mode="single", key="create_grid_kind",
+    ) or "触发式网格"
+    if kind == "固定区间等 U":
+        render_fixed_grid_create()
+        return
     market = st.segmented_control(
         "合约类型",
         ["U 本位", "币本位"],
@@ -492,7 +581,7 @@ def render_add_button() -> None:
 
 def render_overview(strategies: list[dict]) -> None:
     st.title("网格交易总览")
-    st.caption("每行对应一组触发式跟踪网格；同一币对可以创建多组。")
+    st.caption("触发式网格与固定区间等 U 网格；同一币对可以创建多组。")
 
     active = st.toggle("仅显示运行中", value=False)
     rows = [
@@ -568,7 +657,7 @@ def render_overview(strategies: list[dict]) -> None:
                 key=f"edit_{item['id']}",
                 help="编辑配置（启动后不可修改）",
                 width="stretch",
-                disabled=item["has_started"] or item["archived"],
+                disabled=item["has_started"] or item["archived"] or item["grid_kind"] == "fixed_equal_usdt",
             ):
                 edit_grid_dialog(item)
             if refresh_col.button("↻", key=f"refresh_{item['id']}", help="刷新价格", width="stretch"):
@@ -663,6 +752,7 @@ def build_cell_rows(grid: dict, cells: list[dict]) -> list[dict]:
                 "买入": buy_order,
                 "卖出": sell_order,
                 "成交次数": int(cell.get("cycle_count", 0)),
+                **({"预算 (U)": format_quantity(cell.get("budget_usdt", "0"))} if grid["grid_kind"] == "fixed_equal_usdt" else {}),
             }
         )
     return list(reversed(rows))
@@ -719,6 +809,8 @@ def render_cell_boundary_controls(
     boundary: str,
     pending_action: bool,
 ) -> None:
+    if grid["grid_kind"] == "fixed_equal_usdt":
+        return
     boundary_text = "上方" if boundary == "upper" else "下方"
     cell = cells[-1] if boundary == "upper" else cells[0]
     running = grid["status_value"] in {"starting", "running", "error"}
@@ -752,6 +844,68 @@ def render_cell_boundary_controls(
             confirm_cell_removal(grid, boundary, cell)
 
 
+def render_fixed_topup(grid: dict) -> None:
+    strategy_id = grid["id"]
+    st.subheader("手动增加网格资金")
+    st.caption("追加金额等分到所有格子；卖格对应部分合并开多一次，买格增加挂单预算。")
+    try:
+        actions = backend().topups(strategy_id)
+    except GridApiError as exc:
+        st.error(str(exc))
+        return
+    if actions:
+        latest = actions[-1]
+        st.caption(
+            f"最近资金操作：{latest['operation']} · {latest['amount_usdt']} U · {latest['status']}"
+        )
+        if latest["status"] in {"manual_review", "rejected"}:
+            st.error(latest.get("message") or "资金操作未执行，请重新预览")
+    if grid["status_value"] not in {"starting", "running", "error"}:
+        return
+    with st.form(f"topup_form_{strategy_id}"):
+        amount = st.number_input(
+            "追加金额 (USDT)", min_value=0.01, value=None,
+            step=10.0, format="%.2f", key=f"topup_amount_{strategy_id}",
+        )
+        preview_clicked = st.form_submit_button("预览资金分配")
+    state_key = f"topup_preview_{strategy_id}"
+    if preview_clicked:
+        if amount is None:
+            st.error("请填写追加金额。")
+        else:
+            try:
+                details = backend().preview_topup(strategy_id, str(amount))
+            except GridApiError as exc:
+                st.error(str(exc))
+            else:
+                st.session_state[state_key] = {
+                    "details": details,
+                    "request_id": uuid.uuid4().hex,
+                }
+    planned = st.session_state.get(state_key)
+    if not planned:
+        return
+    details = planned["details"]
+    st.info(
+        f"每格约 +{details['per_cell_usdt']} U；"
+        f"卖格 {details['sell_cell_count']} 格，合并买入约 {details['aggregate_buy_usdt']} U；"
+        f"买格 {details['buy_cell_count']} 格，增加挂单预算 {details['buy_order_budget_increase_usdt']} U；"
+        f"按当前账户费率估算，本次开仓手续费约 {float(details['estimated_opening_fee_usdt']):.4f} U。"
+    )
+    if st.button("确认追加资金", type="primary", key=f"topup_confirm_{strategy_id}"):
+        try:
+            backend().request_topup(
+                strategy_id, planned["request_id"], details["amount_usdt"],
+                details["sell_cell_ids"],
+            )
+        except GridApiError as exc:
+            st.error(str(exc))
+        else:
+            st.session_state.pop(state_key, None)
+            st.toast("追加请求已提交，调度器将按实际成交数量分配。")
+            st.rerun()
+
+
 def _render_detail_live(strategy_id: str) -> None:
     try:
         fresh_strategies = load_strategies()
@@ -782,6 +936,8 @@ def _render_detail_live(strategy_id: str) -> None:
         ("杠杆", f"{grid['leverage']}×"),
         ("运行时间", grid["runtime"]),
     ]
+    if grid["grid_kind"] == "fixed_equal_usdt":
+        summary_items.append(("网格交易预算", f"{format_quantity(grid['grid_budget_usdt'])} U"))
     summary_html = "".join(
         f"<div class='item'><div class='label'>{label}</div><div class='value'>{value}</div></div>"
         for label, value in summary_items
@@ -799,6 +955,8 @@ def _render_detail_live(strategy_id: str) -> None:
     if not cells:
         st.info("该策略还没有 Cell；启动后由调度器初始化网格。")
         return
+    if grid["grid_kind"] == "fixed_equal_usdt":
+        render_fixed_topup(grid)
     try:
         actions = backend().cell_actions(grid["id"])
     except GridApiError as exc:
@@ -869,13 +1027,17 @@ def _render_detail_live(strategy_id: str) -> None:
             "买入": st.column_config.TextColumn("买入", width="medium"),
             "卖出": st.column_config.TextColumn("卖出", width="medium"),
             "成交次数": st.column_config.NumberColumn("成交次数", width="small", format="%d"),
+            **({"预算 (U)": st.column_config.TextColumn("预算 (U)", width="medium")} if grid["grid_kind"] == "fixed_equal_usdt" else {}),
         },
     )
     render_cell_boundary_controls(grid, cells, "lower", pending_action)
-    st.caption(
-        "数据来自 FastAPI、SQLite 和调度器；Cell 增删由调度器串行执行。"
-        "删除待建仓 Cell 时会联动撤销零成交挂单。"
-    )
+    if grid["grid_kind"] == "fixed_equal_usdt":
+        st.caption("区间固定；超出边界时不移动网格。资金操作按实际成交数量分配。")
+    else:
+        st.caption(
+            "数据来自 FastAPI、SQLite 和调度器；Cell 增删由调度器串行执行。"
+            "删除待建仓 Cell 时会联动撤销零成交挂单。"
+        )
 
 
 @st.fragment
@@ -914,7 +1076,7 @@ def render_detail(strategies: list[dict]) -> None:
         st.query_params["strategy"] = selected
         st.rerun()
 
-    if st.session_state.get(cell_action_state_key(grid["id"])):
+    if grid["grid_kind"] == "fixed_equal_usdt" or st.session_state.get(cell_action_state_key(grid["id"])):
         render_pending_detail_live(grid["id"])
     else:
         render_detail_live(grid["id"])
