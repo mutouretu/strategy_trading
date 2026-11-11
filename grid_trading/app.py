@@ -882,7 +882,14 @@ def render_fixed_topup(grid: dict) -> None:
             f"最近资金操作：{latest['operation']} · {latest['amount_usdt']} U · {latest['status']}"
         )
         if latest["status"] in {"manual_review", "rejected"}:
-            st.error(latest.get("message") or "资金操作未执行，请重新预览")
+            message = latest.get("message") or "资金操作未执行，请重新预览"
+            if "-4411" in message:
+                st.error(
+                    "币安测试网账户尚未接受 TradFi 永续合约协议。"
+                    "请在币安 Demo 交易界面自行阅读并接受；完成后需新建这组固定网格。"
+                )
+            else:
+                st.error(message)
     if grid["status_value"] not in {"starting", "running", "error"}:
         return
     with st.form(f"topup_form_{strategy_id}"):

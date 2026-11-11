@@ -161,6 +161,13 @@ class GridService:
         config = self.store.get_strategy(strategy_id)
         if config is None:
             raise KeyError(strategy_id)
+        if config.grid_kind == GridKind.FIXED_EQUAL_USDT:
+            seed = self.store.get_capital_action(f"seed:{strategy_id}")
+            if seed is not None and seed["status"] == "manual_review":
+                raise ValueError(
+                    "initial position requires review; resolve the exchange error "
+                    "and create a new fixed grid"
+                )
         for other in self.store.list_strategies():
             if other.strategy_id == strategy_id or not other.has_started:
                 continue

@@ -5,10 +5,12 @@ import unittest
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from grid_server.application.fixed_engine import FixedGridEngine
+from grid_server.application.service import GridService
 from grid_server.domain import (
     CellStage, FuturesMarket, GridKind, Mode, OrderSide, OrderSnapshot,
     OrderStatus, StrategyConfig,
@@ -251,6 +253,15 @@ class FixedEqualUGridTests(unittest.TestCase):
         engine.exchange = BinanceFuturesExchange("", "", "https://fapi.binance.com")
         with self.assertRaisesRegex(ValueError, "testnet only"):
             engine.initialize()
+
+    def test_failed_initial_seed_cannot_be_restarted_blindly(self) -> None:
+        engine = self.make_engine()
+        seed_id = f"seed:{engine.strategy_id}"
+        self.store.create_capital_action(seed_id, engine.strategy_id, "seed", Decimal("400"))
+        self.store.mark_capital_action_review(seed_id, "Binance -4411 agreement required")
+        service = GridService(self.store, SimpleNamespace(start=lambda _: 12345))
+        with self.assertRaisesRegex(ValueError, "requires review"):
+            service.start(engine.strategy_id)
 
     def test_fixed_preview_and_create_api(self) -> None:
         app = create_app(Path(self.tempdir.name) / "api.sqlite3", lambda market=FuturesMarket.USDM: self.exchange)
