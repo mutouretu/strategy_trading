@@ -134,6 +134,25 @@ COIN-M 测试环境使用 `BINANCE_COINM_BASE_URL=https://testnet.binancefuture.
 
 访问 `http://127.0.0.1:8000`。前端默认连接 `http://127.0.0.1:8100`，可以在 `.env` 中通过 `GRID_API_URL` 修改。
 
+### 固定区间等 U 测试网版本
+
+这个版本位于 `feat/fixed-equal-usdt-grid` 工作区。前后端必须从该工作区启动，并连接同一个独立数据库；原工作区运行的页面不会显示这里的策略。若此工作区尚无 `.venv`，先按上文的安装步骤创建。使用已有的币安测试网 `test.env` 时，先在该工作区的 `grid_trading` 目录设置：
+
+```bash
+export GRID_ENV_FILE=/absolute/path/to/test.env
+export GRID_DB_PATH="$PWD/runtime/fixed-grid-testnet.sqlite3"
+export GRID_API_URL=http://127.0.0.1:8110
+```
+
+在两个终端分别设置上述三个环境变量，然后各启动一个进程：
+
+```bash
+.venv/bin/uvicorn grid_server.interfaces.api:create_app --factory --host 127.0.0.1 --port 8110 --workers 1
+.venv/bin/streamlit run app.py --server.address 127.0.0.1 --server.port 8510
+```
+
+访问 `http://127.0.0.1:8510`，点击「＋」选择「固定区间等 U」创建策略。`scripts/verify_fixed_grid_testnet.py` 使用临时数据库并在测试后清理订单和仓位，因此验证结果不会自动出现在策略列表中。
+
 总览、预览、新增、编辑、启动、停止、刷新价格、归档、删除和 Cell 详情均通过 FastAPI 操作 SQLite/调度器。同一币对允许创建多组网格，页面使用 `strategy_id` 区分。
 
 ## 订单一致性规则

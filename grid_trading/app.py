@@ -589,7 +589,10 @@ def render_overview(strategies: list[dict]) -> None:
         if not active or item["status_value"] in {"starting", "running", "error"}
     ]
     if not rows:
-        st.info("暂无符合条件的网格策略。")
+        if strategies:
+            st.info("当前没有运行中的网格策略。")
+        else:
+            st.info("当前策略数据库为空。点击下方「＋」，选择「固定区间等 U」创建网格。")
         render_add_button()
         return
 
