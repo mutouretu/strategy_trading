@@ -771,6 +771,21 @@ def build_cell_rows(grid: dict, cells: list[dict]) -> list[dict]:
                 buy_order = "订单确认中" if cell.get("entry_client_id") else "等待价格带"
             if stage == "pending_exit" and cell.get("exit_order_id") is None:
                 sell_order = "订单确认中" if cell.get("exit_client_id") else "等待价格带"
+        fixed_amounts = {}
+        if grid["grid_kind"] == "fixed_equal_usdt":
+            buy_qty = cell.get("entry_qty") if cell.get("entry_order_id") is not None else None
+            open_qty = Decimal(cell["open_qty"])
+            fixed_amounts = {
+                "预算 (U)": format_quantity(cell.get("budget_usdt", "0")),
+                "买单目标金额 (U)": (
+                    format_quantity(Decimal(buy_qty) * Decimal(cell["buy_price"]))
+                    if buy_qty not in (None, "") else ""
+                ),
+                "卖出目标金额 (U)": (
+                    format_quantity(open_qty * Decimal(cell["sell_price"]))
+                    if open_qty > 0 else ""
+                ),
+            }
         rows.append(
             {
                 "网格": f"#{int(cell['index']):03d}",
@@ -780,7 +795,7 @@ def build_cell_rows(grid: dict, cells: list[dict]) -> list[dict]:
                 "买入": buy_order,
                 "卖出": sell_order,
                 "成交次数": int(cell.get("cycle_count", 0)),
-                **({"预算 (U)": format_quantity(cell.get("budget_usdt", "0"))} if grid["grid_kind"] == "fixed_equal_usdt" else {}),
+                **fixed_amounts,
             }
         )
     return list(reversed(rows))
@@ -1084,12 +1099,20 @@ def _render_detail_live(strategy_id: str) -> None:
             "买入": st.column_config.TextColumn("买入", width="medium"),
             "卖出": st.column_config.TextColumn("卖出", width="medium"),
             "成交次数": st.column_config.NumberColumn("成交次数", width="small", format="%d"),
-            **({"预算 (U)": st.column_config.TextColumn("预算 (U)", width="medium")} if grid["grid_kind"] == "fixed_equal_usdt" else {}),
+            **({
+                "预算 (U)": st.column_config.TextColumn("预算 (U)", width="medium"),
+                "买单目标金额 (U)": st.column_config.TextColumn("买单目标金额 (U)", width="medium"),
+                "卖出目标金额 (U)": st.column_config.TextColumn("卖出目标金额 (U)", width="medium"),
+            } if grid["grid_kind"] == "fixed_equal_usdt" else {}),
         },
     )
     render_cell_boundary_controls(grid, cells, "lower", pending_action)
     if grid["grid_kind"] == "fixed_equal_usdt":
-        st.caption("区间固定；超出边界时不移动网格。资金操作按实际成交数量分配。")
+        st.caption(
+            "预算按每格买入资金分配；买单目标金额受交易所数量步长取整影响。"
+            "启动时上方卖格在同一现价买入，卖出目标金额随卖价上升；"
+            "区间固定，超出边界时不移动网格。"
+        )
     else:
         st.caption(
             "数据来自 FastAPI、SQLite 和调度器；Cell 增删由调度器串行执行。"
