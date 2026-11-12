@@ -65,6 +65,10 @@ class TopupPreviewInput(BaseModel):
     amount_usdt: Decimal = Field(gt=0)
 
 
+class AutoReinvestInput(BaseModel):
+    enabled: bool
+
+
 def strategy_payload(config: StrategyConfig, store: SQLiteStore) -> dict:
     cells = store.list_cells(config.strategy_id)
     runtime = store.get_runtime(config.strategy_id)
@@ -76,6 +80,7 @@ def strategy_payload(config: StrategyConfig, store: SQLiteStore) -> dict:
         "market_type": config.market_type.value,
         "grid_kind": config.grid_kind.value,
         "grid_budget_usdt": None if config.grid_budget_usdt is None else str(config.grid_budget_usdt),
+        "auto_reinvest_enabled": config.auto_reinvest_enabled,
         "quantity_unit": "base_asset",
         "mode": config.mode.value,
         "anchor_price": str(config.anchor_price),
@@ -559,6 +564,20 @@ def create_app(
         if store.get_strategy(strategy_id) is None:
             raise HTTPException(status_code=404, detail="strategy not found")
         return store.list_capital_actions(strategy_id)
+
+    @app.get("/strategies/{strategy_id}/reinvestments")
+    def strategy_reinvestments(strategy_id: str) -> list[dict]:
+        if store.get_strategy(strategy_id) is None:
+            raise HTTPException(status_code=404, detail="strategy not found")
+        return store.list_cell_reinvestments(strategy_id)
+
+    @app.post("/strategies/{strategy_id}/auto-reinvest")
+    def set_auto_reinvest(strategy_id: str, data: AutoReinvestInput) -> dict:
+        try:
+            store.set_auto_reinvest_enabled(strategy_id, data.enabled)
+            return {"strategy_id": strategy_id, "auto_reinvest_enabled": data.enabled}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/strategies/{strategy_id}/topups/preview")
     def preview_topup(strategy_id: str, data: TopupPreviewInput) -> dict:

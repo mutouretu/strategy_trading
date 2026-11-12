@@ -12,6 +12,7 @@ from ..domain.grid import fixed_cell_budgets, round_down
 from ..infrastructure.binance import BinanceAPIError, BinanceFuturesExchange
 from ..ports.exchange import ExchangeExecutionUnknownError, OrderNotFoundError
 from .engine import TradingEngine
+from .grid_performance import strategy_performance, sync_strategy_trades
 
 
 class FixedGridEngine(TradingEngine):
@@ -143,6 +144,8 @@ class FixedGridEngine(TradingEngine):
     def tick(self) -> Decimal:
         if not self.initialized:
             self.initialize()
+        # The API can switch reinvestment while the scheduler keeps this engine.
+        self.config = None
         config = self._config()
         mark = self.exchange.get_mark_price(config.symbol)
         self._tick_mark = mark
@@ -173,11 +176,85 @@ class FixedGridEngine(TradingEngine):
                 self._heartbeat(mark)
                 return mark
 
+        self._reinvest_closed_cells()
         self._arm_untriggered()
         self.sync_orders_only()
         self._resize_orders()
         self._heartbeat(mark)
         return mark
+
+    def _reinvest_closed_cells(self) -> None:
+        config = self._config()
+        if not config.auto_reinvest_enabled:
+            return
+        assert self.filters is not None
+        step = self.filters.step_size
+        if step <= 0:
+            return
+        cells = [
+            cell for cell in self.store.list_cells(self.strategy_id)
+            if cell.stage == CellStage.UNTRIGGERED and cell.cycle_count > 0
+            and cell.open_qty == 0 and cell.entry_order_id is None
+        ]
+        if not cells:
+            return
+        if any(
+            action["status"] in {"requested", "planned", "submitted", "manual_review"}
+            for action in self.store.list_capital_actions(self.strategy_id)
+        ):
+            return
+        try:
+            raw_exchange = getattr(self.exchange, "exchange", self.exchange)
+            coverage = sync_strategy_trades(self.store, raw_exchange, config)
+            if not coverage:
+                return
+            performance = strategy_performance(self.store, config, coverage_complete=True)
+            profits = performance["cell_net_grid_profit_usdt"]
+            if not performance["accounting_complete"] or profits is None:
+                return
+            # A filled order may become visible before its user-trade fees do.
+            # Wait for the complete closing fill before spending its profit.
+            closing_events = {
+                event["cell_id"]: event
+                for event in self.store.list_events(self.strategy_id)
+                if event["event_type"] == "CYCLE_CLOSED"
+                or (event["event_type"] == "EXIT_ENDED"
+                    and event["payload"].get("action") == "cycle_closed")
+            }
+            sell_qty_by_order: dict[int, Decimal] = {}
+            for trade in self.store.list_strategy_trades(self.strategy_id):
+                if trade["side"] == "SELL":
+                    order_id = int(trade["order_id"])
+                    sell_qty_by_order[order_id] = (
+                        sell_qty_by_order.get(order_id, Decimal("0")) + Decimal(trade["quantity"])
+                    )
+            available = self.exchange.get_available_balance("USDT")
+            for cell in cells:
+                closing = closing_events.get(cell.cell_id)
+                if closing is None:
+                    continue
+                payload = closing["payload"]
+                order_id = payload.get("order_id")
+                expected_qty = Decimal(str(payload.get("qty", payload.get("executed_qty", "0"))))
+                if (order_id is None or expected_qty <= 0
+                        or sell_qty_by_order.get(int(order_id), Decimal("0")) < expected_qty):
+                    continue
+                amount = cell.buy_price * step
+                if available < amount:
+                    continue
+                profit = Decimal(profits.get(cell.cell_id, "0"))
+                if self.store.apply_cell_reinvestment(
+                    self.strategy_id, cell.cell_id, cell.cycle_count, step, profit
+                ):
+                    available -= amount
+                    self.config = None
+        except Exception as exc:
+            # Reinvestment is optional; a delayed trade-history response must
+            # not prevent the ordinary next grid buy from being placed.
+            self.store.append_event(
+                self.strategy_id, "AUTO_REINVEST_DEFERRED",
+                {"error": str(exc)}, run_id=self.run_id,
+            )
 
     def _heartbeat(self, mark: Decimal) -> None:
         if self.store.set_status_if_active(self.strategy_id, StrategyStatus.RUNNING):

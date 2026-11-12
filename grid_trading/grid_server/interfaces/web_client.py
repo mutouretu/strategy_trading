@@ -65,6 +65,15 @@ class GridApiClient:
     def topups(self, strategy_id: str) -> list[dict]:
         return self._request("GET", f"/strategies/{strategy_id}/topups")
 
+    def reinvestments(self, strategy_id: str) -> list[dict]:
+        return self._request("GET", f"/strategies/{strategy_id}/reinvestments")
+
+    def set_auto_reinvest(self, strategy_id: str, enabled: bool) -> dict:
+        return self._request(
+            "POST", f"/strategies/{strategy_id}/auto-reinvest",
+            json={"enabled": enabled},
+        )
+
     def update_strategy(self, strategy_id: str, payload: dict) -> dict:
         return self._request("PUT", f"/strategies/{strategy_id}", json=payload)
 

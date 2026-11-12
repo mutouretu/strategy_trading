@@ -151,6 +151,7 @@ def normalize_strategy(item: dict) -> dict:
         "market_type": market_type,
         "grid_kind": item.get("grid_kind", "triggered"),
         "grid_budget_usdt": None if item.get("grid_budget_usdt") is None else decimal_number(item["grid_budget_usdt"]),
+        "auto_reinvest_enabled": bool(item.get("auto_reinvest_enabled", False)),
         "market_label": (
             "固定等 U · U 本位永续"
             if item.get("grid_kind") == "fixed_equal_usdt"
@@ -303,7 +304,7 @@ def render_fixed_grid_create() -> None:
         st.info(
             f"当前有 {allocation['deferred_buy_cell_count']} 个买格和 "
             f"{allocation['deferred_sell_cell_count']} 个卖格超出交易所限价带，"
-            "会先保留为逻辑格，价格靠近时再挂单。若行情跳过格线，可能以市价补执行。"
+            "会先保留为逻辑格，价格靠近时再挂单。若标记价跳过格线，则以格线价格补挂限价单。"
         )
     if allocation["seed_cells_below_fee_break_even"]:
         st.warning(
@@ -1021,6 +1022,41 @@ def render_fixed_topup_form(strategy_id: str) -> None:
             st.rerun()
 
 
+def render_fixed_reinvestment(grid: dict, cells: list[dict]) -> None:
+    strategy_id = grid["id"]
+    try:
+        entries = backend().reinvestments(strategy_id)
+    except GridApiError as exc:
+        st.warning(f"复投记录暂不可用：{exc}")
+        return
+    invested = sum((Decimal(entry["amount_usdt"]) for entry in entries), Decimal("0"))
+    enabled = grid["auto_reinvest_enabled"]
+    label = "开启" if enabled else "关闭"
+    with st.expander(f"自动复投 · {label} · {len(entries)} 次 / {invested:.4f} U", expanded=False):
+        st.caption("每格完成卖出后，若该格累计净利扣除已复投金额仍足够，下一轮买入数量增加一个交易所数量步长；已有卖单不单独补买。")
+        if st.button("关闭自动复投" if enabled else "开启自动复投", key=f"reinvest_toggle_{strategy_id}"):
+            try:
+                backend().set_auto_reinvest(strategy_id, not enabled)
+            except GridApiError as exc:
+                st.error(str(exc))
+            else:
+                st.rerun()
+        if entries:
+            indices = {cell["cell_id"]: int(cell["index"]) for cell in cells}
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "格子": f"#{indices.get(entry['cell_id'], 0):03d}",
+                        "完成轮数": entry["cycle_count"],
+                        "增加数量": entry["quantity_step"],
+                        "使用净利 (U)": entry["amount_usdt"],
+                    }
+                    for entry in entries[-20:][::-1]
+                ]),
+                hide_index=True, width="stretch",
+            )
+
+
 def _render_detail_live(strategy_id: str) -> None:
     try:
         fresh_strategies = load_strategies()
@@ -1117,6 +1153,7 @@ def _render_detail_live(strategy_id: str) -> None:
         return
     if grid["grid_kind"] == "fixed_equal_usdt":
         render_fixed_topup(grid, cells)
+        render_fixed_reinvestment(grid, cells)
     try:
         actions = backend().cell_actions(grid["id"])
     except GridApiError as exc:

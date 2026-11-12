@@ -96,6 +96,85 @@ class FixedEqualUGridTests(unittest.TestCase):
         engine.tick()
         self.assertEqual(self.exchange.calls["place_market_order"], 1)
 
+    def test_auto_reinvests_one_quantity_step_after_sell_without_extra_market_buy(self) -> None:
+        engine = self.make_engine()
+        engine.tick()
+        cell = self.store.list_cells(engine.strategy_id)[0]
+        entry_order = self.exchange.orders[cell.entry_order_id]
+        self.exchange.fill(entry_order.order_id, cell.buy_price)
+        engine.tick()
+        cell = next(item for item in self.store.list_cells(engine.strategy_id) if item.cell_id == cell.cell_id)
+        exit_order = self.exchange.orders[cell.exit_order_id]
+        self.exchange.fill(exit_order.order_id, cell.sell_price)
+        seed = self.store.get_capital_action(f"seed:{engine.strategy_id}")
+        def fill(trade_id, order_id, side, qty, price):
+            return {
+                "id": trade_id, "orderId": order_id, "side": side,
+                "qty": str(qty), "price": str(price), "realizedPnl": "0",
+                "commission": "0", "commissionAsset": "USDT", "time": 1794480000000 + trade_id,
+            }
+        self.store.save_strategy_trades(engine.strategy_id, [
+            fill(1, seed["order_id"], "BUY", seed["executed_qty"], self.exchange.mark),
+            fill(2, entry_order.order_id, "BUY", entry_order.original_qty, cell.buy_price),
+            fill(3, exit_order.order_id, "SELL", exit_order.original_qty, cell.sell_price),
+        ])
+        self.exchange.get_user_trades = lambda symbol, **kwargs: []
+        self.store.set_auto_reinvest_enabled(engine.strategy_id, True)
+        old_budget = cell.budget_usdt
+        before_total = self.store.get_strategy(engine.strategy_id).grid_budget_usdt
+        market_buys = self.exchange.calls["place_market_order"]
+
+        engine.tick()
+
+        updated = next(item for item in self.store.list_cells(engine.strategy_id) if item.cell_id == cell.cell_id)
+        step = self.exchange.filters.step_size
+        amount = cell.buy_price * step
+        self.assertEqual(updated.budget_usdt, old_budget + amount)
+        self.assertEqual(self.store.get_strategy(engine.strategy_id).grid_budget_usdt, before_total + amount)
+        self.assertEqual(self.exchange.orders[updated.entry_order_id].original_qty,
+                         entry_order.original_qty + step)
+        self.assertEqual(self.exchange.calls["place_market_order"], market_buys)
+        entries = self.store.list_cell_reinvestments(engine.strategy_id)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(Decimal(entries[0]["amount_usdt"]), amount)
+        engine.tick()
+        self.assertEqual(len(self.store.list_cell_reinvestments(engine.strategy_id)), 1)
+
+    def test_auto_reinvest_toggle_is_persisted_and_exposes_audit_history(self) -> None:
+        engine = self.make_engine()
+        client = TestClient(create_app(self.store.path, lambda market=FuturesMarket.USDM: self.exchange))
+
+        enabled = client.post(
+            f"/strategies/{engine.strategy_id}/auto-reinvest", json={"enabled": True}
+        )
+
+        self.assertEqual(enabled.status_code, 200, enabled.text)
+        self.assertTrue(self.store.get_strategy(engine.strategy_id).auto_reinvest_enabled)
+        self.assertTrue(client.get("/strategies").json()[0]["auto_reinvest_enabled"])
+        self.assertEqual(client.get(f"/strategies/{engine.strategy_id}/reinvestments").json(), [])
+
+    def test_reinvestment_cannot_spend_same_cycle_profit_twice(self) -> None:
+        engine = self.make_engine()
+        cell = self.store.list_cells(engine.strategy_id)[0]
+        cell.cycle_count = 1
+        self.store.save_cell(cell)
+        self.store.set_auto_reinvest_enabled(engine.strategy_id, True)
+        unit = cell.buy_price * self.exchange.filters.step_size
+        original_budget = cell.budget_usdt
+
+        self.assertFalse(self.store.apply_cell_reinvestment(
+            engine.strategy_id, cell.cell_id, 1, self.exchange.filters.step_size, unit - Decimal("0.00001")
+        ))
+        self.assertTrue(self.store.apply_cell_reinvestment(
+            engine.strategy_id, cell.cell_id, 1, self.exchange.filters.step_size, unit * 3
+        ))
+        self.assertFalse(self.store.apply_cell_reinvestment(
+            engine.strategy_id, cell.cell_id, 1, self.exchange.filters.step_size, unit * 3
+        ))
+        updated = next(item for item in self.store.list_cells(engine.strategy_id) if item.cell_id == cell.cell_id)
+        self.assertEqual(updated.budget_usdt, original_budget + unit)
+        self.assertEqual(len(self.store.list_cell_reinvestments(engine.strategy_id)), 1)
+
     def test_fifty_usdt_cells_seed_variable_qty_for_equal_sell_notional(self) -> None:
         self.exchange.mark = Decimal("62.54")
         self.exchange.filters = replace(

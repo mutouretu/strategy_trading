@@ -81,6 +81,7 @@ class StrategyConfig:
     lower_price: Decimal | None = None
     upper_price: Decimal | None = None
     grid_budget_usdt: Decimal | None = None
+    auto_reinvest_enabled: bool = False
 
     def validate(self) -> None:
         if not self.strategy_id.strip():

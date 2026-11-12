@@ -65,6 +65,7 @@ class SQLiteStore:
                     lower_price TEXT,
                     upper_price TEXT,
                     grid_budget_usdt TEXT,
+                    auto_reinvest_enabled INTEGER NOT NULL DEFAULT 0,
                     order_coin_qty TEXT,
                     contract_size TEXT NOT NULL DEFAULT '0',
                     leverage INTEGER NOT NULL,
@@ -243,6 +244,19 @@ class SQLiteStore:
                 ON capital_actions(strategy_id)
                 WHERE status IN ('requested', 'planned', 'submitted');
 
+                CREATE TABLE IF NOT EXISTS cell_reinvestments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    strategy_id TEXT NOT NULL,
+                    cell_id TEXT NOT NULL,
+                    cycle_count INTEGER NOT NULL,
+                    quantity_step TEXT NOT NULL,
+                    amount_usdt TEXT NOT NULL,
+                    profit_snapshot_usdt TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(strategy_id, cell_id, cycle_count),
+                    FOREIGN KEY(strategy_id) REFERENCES strategies(strategy_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS scheduler_runs (
                     run_id TEXT PRIMARY KEY,
                     pid INTEGER NOT NULL,
@@ -321,6 +335,7 @@ class SQLiteStore:
                 ("lower_price", "TEXT"),
                 ("upper_price", "TEXT"),
                 ("grid_budget_usdt", "TEXT"),
+                ("auto_reinvest_enabled", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 if column not in strategy_columns:
                     conn.execute(f"ALTER TABLE strategies ADD COLUMN {column} {definition}")
@@ -411,10 +426,11 @@ class SQLiteStore:
                 INSERT INTO strategies (
                     strategy_id, symbol, market_type, mode, anchor_price, grid_ratio, grid_count,
                     order_usdt, grid_kind, lower_price, upper_price, grid_budget_usdt,
+                    auto_reinvest_enabled,
                     order_coin_qty, contract_size, leverage,
                     poll_interval_sec, move_grid, status,
                     has_started, archived, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     config.strategy_id,
@@ -429,6 +445,7 @@ class SQLiteStore:
                     None if config.lower_price is None else str(config.lower_price),
                     None if config.upper_price is None else str(config.upper_price),
                     None if config.grid_budget_usdt is None else str(config.grid_budget_usdt),
+                    int(config.auto_reinvest_enabled),
                     None if config.order_coin_qty is None else str(config.order_coin_qty),
                     str(config.contract_size),
                     config.leverage,
@@ -479,6 +496,7 @@ class SQLiteStore:
                 """
                 UPDATE strategies SET symbol=?, market_type=?, mode=?, anchor_price=?, grid_ratio=?, grid_count=?,
                     order_usdt=?, grid_kind=?, lower_price=?, upper_price=?, grid_budget_usdt=?,
+                    auto_reinvest_enabled=?,
                     order_coin_qty=?, contract_size=?, leverage=?,
                     poll_interval_sec=?, move_grid=?, updated_at=?
                 WHERE strategy_id=?
@@ -495,6 +513,7 @@ class SQLiteStore:
                     None if config.lower_price is None else str(config.lower_price),
                     None if config.upper_price is None else str(config.upper_price),
                     None if config.grid_budget_usdt is None else str(config.grid_budget_usdt),
+                    int(config.auto_reinvest_enabled),
                     None if config.order_coin_qty is None else str(config.order_coin_qty),
                     str(config.contract_size),
                     config.leverage,
@@ -994,6 +1013,103 @@ class SQLiteStore:
                 "UPDATE capital_actions SET status='applied', executed_qty=?, updated_at=? WHERE id=?",
                 (str(executed_qty), utc_now(), action_id),
             )
+
+    def set_auto_reinvest_enabled(self, strategy_id: str, enabled: bool) -> None:
+        with self.connection() as conn:
+            result = conn.execute(
+                """
+                UPDATE strategies SET auto_reinvest_enabled=?, updated_at=?
+                WHERE strategy_id=? AND grid_kind=? AND deleted_at IS NULL AND archived=0
+                """,
+                (int(enabled), utc_now(), strategy_id, GridKind.FIXED_EQUAL_USDT.value),
+            )
+            if result.rowcount != 1:
+                raise ValueError("active fixed grid not found")
+
+    def list_cell_reinvestments(self, strategy_id: str) -> list[dict]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM cell_reinvestments WHERE strategy_id=? ORDER BY id",
+                (strategy_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def apply_cell_reinvestment(
+        self,
+        strategy_id: str,
+        cell_id: str,
+        cycle_count: int,
+        quantity_step: Decimal,
+        profit_snapshot_usdt: Decimal,
+    ) -> bool:
+        """Spend one earned quantity step atomically before the next entry."""
+        if quantity_step <= 0 or cycle_count < 1:
+            raise ValueError("invalid reinvestment step or cycle")
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            strategy = conn.execute(
+                """
+                SELECT grid_budget_usdt, grid_count, auto_reinvest_enabled
+                FROM strategies WHERE strategy_id=? AND grid_kind=? AND status IN (?, ?)
+                AND archived=0 AND deleted_at IS NULL
+                """,
+                (strategy_id, GridKind.FIXED_EQUAL_USDT.value,
+                 StrategyStatus.RUNNING.value, StrategyStatus.STARTING.value),
+            ).fetchone()
+            if strategy is None or not strategy["auto_reinvest_enabled"]:
+                return False
+            cell = conn.execute(
+                "SELECT * FROM cells WHERE strategy_id=? AND cell_id=?",
+                (strategy_id, cell_id),
+            ).fetchone()
+            if (
+                cell is None or cell["stage"] != CellStage.UNTRIGGERED.value
+                or Decimal(cell["open_qty"]) != 0 or cell["entry_order_id"] is not None
+                or int(cell["cycle_count"]) != cycle_count
+            ):
+                return False
+            existing_cycle = conn.execute(
+                "SELECT 1 FROM cell_reinvestments WHERE strategy_id=? AND cell_id=? AND cycle_count=?",
+                (strategy_id, cell_id, cycle_count),
+            ).fetchone()
+            if existing_cycle is not None:
+                return False
+            spent_rows = conn.execute(
+                "SELECT amount_usdt FROM cell_reinvestments WHERE strategy_id=? AND cell_id=?",
+                (strategy_id, cell_id),
+            ).fetchall()
+            spent = sum((Decimal(row["amount_usdt"]) for row in spent_rows), Decimal("0"))
+            amount = Decimal(cell["buy_price"]) * quantity_step
+            if profit_snapshot_usdt - spent < amount:
+                return False
+            now = utc_now()
+            new_budget = Decimal(cell["budget_usdt"]) + amount
+            new_total = Decimal(strategy["grid_budget_usdt"]) + amount
+            conn.execute(
+                "UPDATE cells SET budget_usdt=?, updated_at=? WHERE strategy_id=? AND cell_id=?",
+                (str(new_budget), now, strategy_id, cell_id),
+            )
+            conn.execute(
+                "UPDATE strategies SET grid_budget_usdt=?, order_usdt=?, updated_at=? WHERE strategy_id=?",
+                (str(new_total), str(new_total / Decimal(strategy["grid_count"])), now, strategy_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO cell_reinvestments(
+                    strategy_id, cell_id, cycle_count, quantity_step,
+                    amount_usdt, profit_snapshot_usdt, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (strategy_id, cell_id, cycle_count, str(quantity_step),
+                 str(amount), str(profit_snapshot_usdt), now),
+            )
+            conn.execute(
+                "INSERT INTO events(strategy_id, cell_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                (strategy_id, cell_id, "CELL_PROFIT_REINVESTED",
+                 json.dumps({"cycle_count": cycle_count, "quantity_step": str(quantity_step),
+                             "amount_usdt": str(amount), "profit_snapshot_usdt": str(profit_snapshot_usdt)}), now),
+            )
+            return True
 
     def append_event(
         self,
@@ -1573,6 +1689,7 @@ class SQLiteStore:
             lower_price=Decimal(row["lower_price"]) if "lower_price" in row.keys() and row["lower_price"] is not None else None,
             upper_price=Decimal(row["upper_price"]) if "upper_price" in row.keys() and row["upper_price"] is not None else None,
             grid_budget_usdt=Decimal(row["grid_budget_usdt"]) if "grid_budget_usdt" in row.keys() and row["grid_budget_usdt"] is not None else None,
+            auto_reinvest_enabled=bool(row["auto_reinvest_enabled"]) if "auto_reinvest_enabled" in row.keys() else False,
         )
 
     @staticmethod
