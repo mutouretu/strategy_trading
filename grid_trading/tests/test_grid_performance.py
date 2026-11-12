@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 from grid_server.application.grid_performance import strategy_performance, sync_strategy_trades
 from grid_server.application.service import GridService
+from grid_server.domain import GridCell
 from grid_server.infrastructure.sqlite_store import SQLiteStore
 
 
@@ -43,24 +44,28 @@ class GridPerformanceTests(unittest.TestCase):
         self.started = datetime.fromisoformat(
             self.store.get_first_started_at(self.config.strategy_id)
         )
-        self.store.append_event(self.config.strategy_id, "ENTRY_PLACED", {"order_id": 101})
-        self.store.append_event(self.config.strategy_id, "EXIT_PLACED", {"order_id": 102})
-        cell = self.store.list_cells(self.config.strategy_id)[0]
-        cell.cycle_count = 1
-        self.store.save_cell(cell)
+        self.cell = self.store.list_cells(self.config.strategy_id)[0]
+        self.store.append_event(
+            self.config.strategy_id, "ENTRY_PLACED", {"order_id": 101}, self.cell.cell_id
+        )
+        self.store.append_event(
+            self.config.strategy_id, "EXIT_PLACED", {"order_id": 102}, self.cell.cell_id
+        )
+        self.cell.cycle_count = 1
+        self.store.save_cell(self.cell)
 
     def _trade(self, trade_id: int, order_id: int, pnl: str, fee: str,
-               asset: str = "USDT") -> dict:
+               asset: str = "USDT", side: str = "SELL", qty: str = "1") -> dict:
         return {
-            "id": trade_id, "orderId": order_id, "side": "SELL",
-            "qty": "1", "price": "100", "realizedPnl": pnl,
+            "id": trade_id, "orderId": order_id, "side": side,
+            "qty": qty, "price": "100", "realizedPnl": pnl,
             "commission": fee, "commissionAsset": asset,
             "time": int((self.started + timedelta(minutes=trade_id)).timestamp() * 1000),
         }
 
     def test_owned_fills_net_fees_roi_and_annualized(self) -> None:
         exchange = TradeHistoryFake([
-            self._trade(1, 101, "0", "0.02"),
+            self._trade(1, 101, "0", "0.02", side="BUY"),
             self._trade(2, 999, "100", "0"),
             self._trade(3, 102, "0.5", "0.02"),
         ])
@@ -70,11 +75,15 @@ class GridPerformanceTests(unittest.TestCase):
         summary = strategy_performance(
             self.store, self.config, coverage_complete=True, now=now
         )
+        gross = self.cell.sell_price - self.cell.buy_price
+        net = gross - Decimal("0.04")
+        self.assertEqual(Decimal(summary["gross_grid_profit_usdt"]), gross)
+        self.assertEqual(Decimal(summary["grid_trading_fees_usdt"]), Decimal("0.04"))
+        self.assertEqual(Decimal(summary["net_grid_profit_usdt"]), net)
         self.assertEqual(Decimal(summary["gross_realized_pnl_usdt"]), Decimal("0.5"))
-        self.assertEqual(Decimal(summary["trading_fees_usdt"]), Decimal("0.04"))
-        self.assertEqual(Decimal(summary["net_grid_profit_usdt"]), Decimal("0.46"))
-        self.assertEqual(Decimal(summary["grid_profit_pct"]), Decimal("0.115"))
-        self.assertEqual(Decimal(summary["simple_annualized_pct"]), Decimal("41.975"))
+        self.assertEqual(Decimal(summary["grid_profit_pct"]), net / Decimal("400") * 100)
+        self.assertEqual(Decimal(summary["simple_annualized_pct"]), net / Decimal("400") * 36500)
+        self.assertTrue(summary["accounting_complete"])
         self.assertEqual(summary["completed_cycles"], 1)
         self.assertEqual(summary["trade_fill_count"], 2)
         self.assertTrue(sync_strategy_trades(self.store, exchange, self.config, now=now))
@@ -83,7 +92,10 @@ class GridPerformanceTests(unittest.TestCase):
 
     def test_other_fee_asset_does_not_claim_net_profit(self) -> None:
         self.store.save_strategy_trades(
-            self.config.strategy_id, [self._trade(1, 102, "1", "0.01", "BNB")]
+            self.config.strategy_id, [
+                self._trade(1, 101, "0", "0", side="BUY"),
+                self._trade(2, 102, "1", "0.01", "BNB"),
+            ]
         )
         summary = strategy_performance(
             self.store, self.config, coverage_complete=True,
@@ -91,6 +103,86 @@ class GridPerformanceTests(unittest.TestCase):
         )
         self.assertIsNone(summary["net_grid_profit_usdt"])
         self.assertEqual(summary["unsupported_fee_assets"], ["BNB"])
+
+    def test_seed_fee_is_allocated_only_to_sold_quantity(self) -> None:
+        other = self.store.list_cells(self.config.strategy_id)[1]
+        allocations = {self.cell.cell_id: Decimal("1"), other.cell_id: Decimal("1")}
+        action_id = f"seed:{self.config.strategy_id}"
+        self.store.create_capital_action(
+            action_id, self.config.strategy_id, "seed", Decimal("400")
+        )
+        self.store.plan_capital_action(
+            action_id, list(allocations), allocations, Decimal("2"), "seed-client"
+        )
+        self.store.mark_capital_action_submitted(action_id, 100)
+        self.store.apply_capital_action(action_id, allocations, Decimal("2"))
+        self.store.save_strategy_trades(self.config.strategy_id, [
+            self._trade(1, 100, "0", "0.20", side="BUY", qty="2"),
+            self._trade(2, 102, "7.00", "0.01"),
+        ])
+        summary = strategy_performance(
+            self.store, self.config, coverage_complete=True,
+            now=self.started + timedelta(days=1),
+        )
+        self.assertEqual(
+            Decimal(summary["net_grid_profit_usdt"]),
+            self.cell.sell_price - self.cell.buy_price - Decimal("0.11"),
+        )
+        self.assertEqual(Decimal(summary["trading_fees_usdt"]), Decimal("0.21"))
+        self.assertEqual(Decimal(summary["grid_trading_fees_usdt"]), Decimal("0.11"))
+
+    def test_partial_sell_fills_match_one_buy_lot(self) -> None:
+        self.store.save_strategy_trades(self.config.strategy_id, [
+            self._trade(1, 101, "0", "0.04", side="BUY", qty="2"),
+            self._trade(2, 102, "5", "0.005", qty="0.5"),
+            self._trade(3, 102, "5", "0.015", qty="1.5"),
+        ])
+        summary = strategy_performance(
+            self.store, self.config, coverage_complete=True,
+            now=self.started + timedelta(days=1),
+        )
+        gross = Decimal("2") * (self.cell.sell_price - self.cell.buy_price)
+        self.assertEqual(Decimal(summary["gross_grid_profit_usdt"]), gross)
+        self.assertEqual(Decimal(summary["grid_trading_fees_usdt"]), Decimal("0.06"))
+        self.assertEqual(Decimal(summary["net_grid_profit_usdt"]), gross - Decimal("0.06"))
+
+    def test_missing_buy_fill_hides_profit(self) -> None:
+        self.store.save_strategy_trades(
+            self.config.strategy_id, [self._trade(1, 102, "5", "0")]
+        )
+        summary = strategy_performance(
+            self.store, self.config, coverage_complete=True,
+            now=self.started + timedelta(days=1),
+        )
+        self.assertFalse(summary["accounting_complete"])
+        self.assertIsNone(summary["net_grid_profit_usdt"])
+
+    def test_removed_cell_keeps_its_grid_prices(self) -> None:
+        self.store.save_strategy_trades(self.config.strategy_id, [
+            self._trade(1, 101, "0", "0", side="BUY"),
+            self._trade(2, 102, "5", "0"),
+        ])
+        self.store.delete_cell(self.config.strategy_id, self.cell.cell_id)
+        summary = strategy_performance(
+            self.store, self.config, coverage_complete=True,
+            now=self.started + timedelta(days=1),
+        )
+        self.assertEqual(
+            Decimal(summary["net_grid_profit_usdt"]),
+            self.cell.sell_price - self.cell.buy_price,
+        )
+
+    def test_new_cell_prices_survive_insert_and_delete(self) -> None:
+        cell = GridCell(
+            strategy_id=self.config.strategy_id, cell_id="new-cell", index=5,
+            buy_price=Decimal("120"), sell_price=Decimal("121"),
+        )
+        self.store.save_cell(cell)
+        self.store.delete_cell(self.config.strategy_id, cell.cell_id)
+        self.assertEqual(
+            self.store.get_cell_price_history(self.config.strategy_id)[cell.cell_id],
+            (Decimal("120"), Decimal("121")),
+        )
 
     def test_history_coverage_remains_complete_after_ninety_days(self) -> None:
         exchange = TradeHistoryFake([self._trade(1, 101, "0", "0.01")])

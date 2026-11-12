@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -98,37 +100,120 @@ def strategy_performance(
     started = _started_at(store, config.strategy_id)
     if started is None or config.grid_budget_usdt is None:
         raise ValueError("strategy has not started or has no grid budget")
-    order_ids = {
+    if config.mode.value != "long":
+        raise ValueError("fixed grid performance requires a long strategy")
+
+    cells = store.list_cells(config.strategy_id)
+    levels = store.get_cell_price_history(config.strategy_id)
+    order_to_cell: dict[int, str] = {}
+    strategy_events = store.list_events(config.strategy_id)
+    for event in strategy_events:
+        order_id = event["payload"].get("order_id")
+        cell_id = event["cell_id"]
+        if order_id is not None and cell_id is not None:
+            order_to_cell[int(order_id)] = cell_id
+    for cell in cells:
+        for order_id in (cell.entry_order_id, cell.exit_order_id):
+            if order_id is not None:
+                order_to_cell[int(order_id)] = cell.cell_id
+
+    actions = store.list_capital_actions(config.strategy_id)
+    capital_order_ids = {
         int(action["order_id"])
-        for action in store.list_capital_actions(config.strategy_id)
-        if action["order_id"] is not None
+        for action in actions if action["order_id"] is not None
     }
-    order_ids.update(
-        int(event["payload"]["order_id"])
-        for event in store.list_events(config.strategy_id)
-        if isinstance(event["payload"], dict)
-        and event["payload"].get("order_id") is not None
-    )
-    order_ids.update(
-        int(order_id)
-        for cell in store.list_cells(config.strategy_id)
-        for order_id in (cell.entry_order_id, cell.exit_order_id)
-        if order_id is not None
-    )
     trades = [
         trade for trade in store.list_strategy_trades(config.strategy_id)
-        if trade["order_id"] in order_ids
+        if trade["order_id"] in order_to_cell or trade["order_id"] in capital_order_ids
     ]
     other_fee_assets = sorted({
         trade["commission_asset"] for trade in trades
         if trade["commission_asset"] != "USDT" and Decimal(trade["commission"]) != 0
     })
-    gross = sum((Decimal(trade["realized_pnl"]) for trade in trades), Decimal("0"))
-    fees = sum(
+    account_gross = sum(
+        (Decimal(trade["realized_pnl"]) for trade in trades), Decimal("0")
+    )
+    account_fees = sum(
         (Decimal(trade["commission"]) for trade in trades if trade["commission_asset"] == "USDT"),
         Decimal("0"),
     )
-    net = None if other_fee_assets else gross - fees
+    # Use the fixed cell boundaries as the grid component. Binance realizedPnl
+    # uses the aggregate position's average cost and therefore includes trend PnL.
+    by_cell: dict[str, list[tuple[int, int, str, Decimal, Decimal]]] = defaultdict(list)
+    accounting_error: str | None = None
+    for action in actions:
+        if action["status"] != "applied" or action["order_id"] is None:
+            continue
+        action_fills = [trade for trade in trades if trade["order_id"] == int(action["order_id"])]
+        allocations = json.loads(action["planned_allocations_json"] or "{}")
+        executed = Decimal(action["executed_qty"])
+        if (
+            not action_fills
+            or any(trade["side"] != "BUY" for trade in action_fills)
+            or sum((Decimal(trade["quantity"]) for trade in action_fills), Decimal("0")) != executed
+            or sum((Decimal(str(qty)) for qty in allocations.values()), Decimal("0")) != executed
+        ):
+            accounting_error = "aggregate buy fills or cell allocations are incomplete"
+            continue
+        total_fee = sum(
+            (Decimal(trade["commission"]) for trade in action_fills
+             if trade["commission_asset"] == "USDT"), Decimal("0")
+        )
+        last_fill = max(action_fills, key=lambda trade: (trade["traded_at_ms"], trade["trade_id"]))
+        for cell_id, quantity in allocations.items():
+            qty = Decimal(str(quantity))
+            if qty > 0:
+                by_cell[cell_id].append((
+                    last_fill["traded_at_ms"], last_fill["trade_id"],
+                    "BUY", qty, total_fee * qty / executed,
+                ))
+
+    for trade in trades:
+        cell_id = order_to_cell.get(trade["order_id"])
+        if cell_id is None:
+            continue
+        by_cell[cell_id].append((
+            trade["traded_at_ms"], trade["trade_id"], trade["side"],
+            Decimal(trade["quantity"]),
+            Decimal(trade["commission"]) if trade["commission_asset"] == "USDT" else Decimal("0"),
+        ))
+
+    grid_gross = Decimal("0")
+    grid_fees = Decimal("0")
+    sold_quantity = Decimal("0")
+    for cell_id, events in by_cell.items():
+        if cell_id not in levels:
+            accounting_error = f"grid level is missing for cell {cell_id}"
+            continue
+        buy_price, sell_price = levels[cell_id]
+        open_lots: deque[list[Decimal]] = deque()
+        for _, _, side, qty, fee in sorted(events, key=lambda event: (event[0], event[1])):
+            if side == "BUY":
+                open_lots.append([qty, fee])
+                continue
+            if side != "SELL":
+                accounting_error = f"unexpected trade side {side}"
+                continue
+            remaining = qty
+            matched_fee = Decimal("0")
+            while remaining > 0 and open_lots:
+                lot = open_lots[0]
+                taken = min(remaining, lot[0])
+                taken_fee = lot[1] * taken / lot[0]
+                lot[0] -= taken
+                lot[1] -= taken_fee
+                remaining -= taken
+                matched_fee += taken_fee
+                if lot[0] == 0:
+                    open_lots.popleft()
+            if remaining > 0:
+                accounting_error = f"buy fill is missing for cell {cell_id}"
+                continue
+            sold_quantity += qty
+            grid_gross += qty * (sell_price - buy_price)
+            grid_fees += matched_fee + fee
+
+    net = None if other_fee_assets or accounting_error else grid_gross - grid_fees
     budget = config.grid_budget_usdt
     roi = None if net is None else net / budget * Decimal("100")
     elapsed_seconds = max((current - started).total_seconds(), 0)
@@ -141,15 +226,29 @@ def strategy_performance(
         "started_at": started.isoformat(),
         "as_of": current.isoformat(),
         "grid_budget_usdt": str(budget),
-        "gross_realized_pnl_usdt": str(gross),
-        "trading_fees_usdt": str(fees),
+        "gross_grid_profit_usdt": str(grid_gross),
+        "grid_trading_fees_usdt": str(grid_fees),
+        "sold_grid_quantity": str(sold_quantity),
+        "gross_realized_pnl_usdt": str(account_gross),
+        "trading_fees_usdt": str(account_fees),
+        "trend_and_execution_pnl_usdt": str(account_gross - grid_gross),
         "net_grid_profit_usdt": None if net is None else str(net),
         "grid_profit_pct": None if roi is None else str(roi),
         "simple_annualized_pct": None if annualized is None else str(annualized),
         "elapsed_seconds": elapsed_seconds,
-        "completed_cycles": sum(cell.cycle_count for cell in store.list_cells(config.strategy_id)),
+        "completed_cycles": max(
+            sum(cell.cycle_count for cell in cells),
+            sum(
+                event["event_type"] == "CYCLE_CLOSED"
+                or (event["event_type"] == "EXIT_ENDED"
+                    and event["payload"].get("action") == "cycle_closed")
+                for event in strategy_events
+            ),
+        ),
         "trade_fill_count": len(trades),
         "coverage_complete": coverage_complete,
+        "accounting_complete": accounting_error is None,
+        "accounting_error": accounting_error,
         "unsupported_fee_assets": other_fee_assets,
         "funding_included": False,
         "unrealized_included": False,

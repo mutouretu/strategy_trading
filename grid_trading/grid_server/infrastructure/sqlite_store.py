@@ -109,6 +109,31 @@ class SQLiteStore:
                 CREATE INDEX IF NOT EXISTS idx_cells_strategy_index
                 ON cells(strategy_id, cell_index);
 
+                CREATE TABLE IF NOT EXISTS cell_price_history (
+                    strategy_id TEXT NOT NULL,
+                    cell_id TEXT NOT NULL,
+                    buy_price TEXT NOT NULL,
+                    sell_price TEXT NOT NULL,
+                    PRIMARY KEY(strategy_id, cell_id),
+                    FOREIGN KEY(strategy_id) REFERENCES strategies(strategy_id)
+                );
+
+                CREATE TRIGGER IF NOT EXISTS snapshot_fixed_cell_insert
+                AFTER INSERT ON cells
+                WHEN (SELECT grid_kind FROM strategies WHERE strategy_id=NEW.strategy_id) = 'fixed_equal_usdt'
+                BEGIN
+                    INSERT OR IGNORE INTO cell_price_history(strategy_id, cell_id, buy_price, sell_price)
+                    VALUES (NEW.strategy_id, NEW.cell_id, NEW.buy_price, NEW.sell_price);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS snapshot_fixed_cell_delete
+                BEFORE DELETE ON cells
+                WHEN (SELECT grid_kind FROM strategies WHERE strategy_id=OLD.strategy_id) = 'fixed_equal_usdt'
+                BEGIN
+                    INSERT OR IGNORE INTO cell_price_history(strategy_id, cell_id, buy_price, sell_price)
+                    VALUES (OLD.strategy_id, OLD.cell_id, OLD.buy_price, OLD.sell_price);
+                END;
+
                 CREATE TABLE IF NOT EXISTS events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     strategy_id TEXT NOT NULL,
@@ -333,6 +358,14 @@ class SQLiteStore:
                 conn.execute(
                     "ALTER TABLE capital_actions ADD COLUMN planned_allocations_json TEXT"
                 )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO cell_price_history(strategy_id, cell_id, buy_price, sell_price)
+                SELECT cells.strategy_id, cells.cell_id, cells.buy_price, cells.sell_price
+                FROM cells JOIN strategies ON strategies.strategy_id = cells.strategy_id
+                WHERE strategies.grid_kind = 'fixed_equal_usdt'
+                """
+            )
 
     @staticmethod
     def _migrate_position_pools_market_type(conn: sqlite3.Connection) -> None:
@@ -749,6 +782,17 @@ class SQLiteStore:
         cells = [self._cell_from_row(row) for row in rows]
         cells.sort(key=lambda cell: cell.buy_price)
         return cells
+
+    def get_cell_price_history(self, strategy_id: str) -> dict[str, tuple[Decimal, Decimal]]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT cell_id, buy_price, sell_price FROM cell_price_history WHERE strategy_id=?",
+                (strategy_id,),
+            ).fetchall()
+        return {
+            row["cell_id"]: (Decimal(row["buy_price"]), Decimal(row["sell_price"]))
+            for row in rows
+        }
 
     def list_all_cells(self) -> list[GridCell]:
         with self.connection() as conn:

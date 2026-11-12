@@ -1048,9 +1048,11 @@ def _render_detail_live(strategy_id: str) -> None:
     )
     if grid["grid_kind"] == "fixed_equal_usdt":
         st.caption("停止策略只暂停调度；已有挂单和仓位不会自动撤销或平仓。")
-        if performance is not None and performance["coverage_complete"] and performance["net_grid_profit_usdt"] is not None:
+        if (performance is not None and performance["coverage_complete"]
+                and performance["accounting_complete"]
+                and performance["net_grid_profit_usdt"] is not None):
             metrics = st.columns(3)
-            metrics[0].metric("网格盈利", f"{Decimal(performance['net_grid_profit_usdt']):,.4f} U")
+            metrics[0].metric("纯网格盈利", f"{Decimal(performance['net_grid_profit_usdt']):,.4f} U")
             metrics[1].metric("网格收益率", f"{Decimal(performance['grid_profit_pct']):,.3f}%")
             annualized = performance["simple_annualized_pct"]
             metrics[2].metric(
@@ -1058,12 +1060,13 @@ def _render_detail_live(strategy_id: str) -> None:
             )
             st.caption(
                 f"已完成 {performance['completed_cycles']} 轮；"
-                "网格盈利 = 本策略订单已实现盈亏 − USDT 手续费，未计资金费和浮盈亏。"
+                "纯网格盈利 = 已卖出数量 × 该格买卖价差 − 对应买卖手续费。"
+                "按预设格线计算，不含趋势盈亏、成交滑点、资金费和浮盈亏。"
                 "建仓价为交易所当前持仓均价；收益率按当前网格总预算计算；"
                 "年化按运行时长线性折算，短期数据波动较大。"
             )
         elif performance is not None:
-            st.warning("成交历史尚未完整同步，或手续费币种不是 USDT；暂不显示收益率和年化。")
+            st.warning("成交历史或买卖配对尚未完整，或手续费币种不是 USDT；暂不显示网格收益。")
         elif performance_error is not None:
             st.warning(f"盈利数据暂不可用：{performance_error}")
 
