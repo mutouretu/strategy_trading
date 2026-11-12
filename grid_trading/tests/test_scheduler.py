@@ -6,6 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from grid_server.infrastructure.binance import BinanceRateLimitError
 from grid_server.domain import Mode, StrategyStatus
 from grid_server.scheduler import StrategyScheduler
 from grid_server.service import GridService
@@ -174,6 +175,41 @@ class StrategySchedulerLoadTests(unittest.TestCase):
         }
         self.assertIn("SCHEDULER_FAILURE_STARTED", event_types)
         self.assertIn("SCHEDULER_RECOVERED", event_types)
+
+    def test_binance_rate_limit_pauses_trading_and_reconciliation(self):
+        config = self.service.create(
+            "BTCUSDT", Mode.LONG, Decimal("110"), Decimal("0.10"), 1,
+            Decimal("100"), 3, Decimal("0.01"), poll_interval_sec=5.0,
+            move_grid=False,
+        )
+        self.store.mark_started(config.strategy_id)
+        original_mark = self.exchange.get_mark_price
+        attempts = 0
+        wall_time = [100.0]
+
+        def limited_mark(symbol: str):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise BinanceRateLimitError(400.0)
+            return original_mark(symbol)
+
+        self.exchange.get_mark_price = limited_mark  # type: ignore[method-assign]
+        scheduler = StrategyScheduler(
+            self.store, self.exchange, wall_clock=lambda: wall_time[0],
+            reconcile_interval_sec=60.0,
+        )
+        self.assertEqual(scheduler.run_once(now=0), 1)
+        self.assertEqual(scheduler.next_due[config.strategy_id], 300.0)
+        self.assertEqual(scheduler.run_once(now=100), 0)
+        self.assertEqual(scheduler.run_once(now=299), 0)
+        self.assertEqual(attempts, 1)
+        self.assertNotIn("get_positions", self.exchange.calls)
+
+        wall_time[0] = 400.0
+        self.assertEqual(scheduler.run_once(now=300), 1)
+        self.assertEqual(attempts, 2)
+        self.assertEqual(self.store.get_strategy(config.strategy_id).status, StrategyStatus.RUNNING)
 
     def test_long_loop_pause_is_persisted_as_one_gap(self):
         wall_time = [100.0]

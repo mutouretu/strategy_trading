@@ -163,10 +163,14 @@ export GRID_DB_PATH="$PWD/runtime/fixed-grid-live.sqlite3"
 export GRID_RUNTIME_DIR="$PWD/runtime/live"
 export GRID_API_URL=http://127.0.0.1:8111
 export GRID_ENABLE_BINANCE_LIVE_FIXED_GRID=1
+# 若 VPN 使用本机系统代理而没有透明转发，需显式指定代理地址；调度器会继承。
+export HTTPS_PROXY=http://127.0.0.1:7890
 .venv/bin/uvicorn grid_server.interfaces.api:create_app --factory --host 127.0.0.1 --port 8111 --workers 1
 ```
 
 前端在另一个终端设置相同的 `GRID_API_URL` 后启动在独立端口，例如 8511。侧栏显示“币安实盘”。固定网格最多 500 格；SOXL 的 3% 限价带会延后远端新单，并撤掉随行情远离限价带的旧单，待价格靠近时重新挂出。停止策略只暂停调度，**不会撤单或平仓**。生产账户当前精度、手续费和持仓必须在启动前重新读取。
+
+币安返回 HTTP 429 或 418 时，适配器按 `Retry-After` 或封禁截止时间暂停请求；调度器跳过这段时间内的交易轮询与持仓巡检。限流按出口 IP 计算，切换 VPN 后先用同一代理验证币安接口可访问，再重启 API 和调度器以清除旧进程中的冷却状态。
 
 总览、预览、新增、编辑、启动、停止、刷新价格、归档、删除和 Cell 详情均通过 FastAPI 操作 SQLite/调度器。同一币对允许创建多组网格，页面使用 `strategy_id` 区分。
 

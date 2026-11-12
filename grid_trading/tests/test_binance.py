@@ -5,6 +5,7 @@ from decimal import Decimal
 from unittest.mock import Mock
 
 from grid_server.binance import BinanceAPIError, BinanceFuturesExchange
+from grid_server.infrastructure.binance import BinanceRateLimitError
 from grid_server.domain import OrderSide
 from grid_server.exchange import ExchangeExecutionUnknownError, OrderNotFoundError
 
@@ -80,6 +81,23 @@ class BinanceFuturesExchangeTests(unittest.TestCase):
 
         with self.assertRaises(ExchangeExecutionUnknownError):
             exchange._request("POST", "/fapi/v1/order", signed=True)
+
+    def test_http_418_blocks_further_requests_until_ban_expires(self):
+        exchange = BinanceFuturesExchange(
+            "key", "secret", base_url="https://rate-limit-test.example"
+        )
+        response = Mock()
+        response.status_code = 418
+        response.text = '{"code":-1003,"msg":"IP banned until 4102444800000"}'
+        response.headers = {"Retry-After": "60"}
+        exchange.session.request = Mock(return_value=response)
+
+        with self.assertRaises(BinanceRateLimitError) as first:
+            exchange._request("GET", "/fapi/v1/openOrders", signed=True)
+        self.assertGreaterEqual(first.exception.retry_at, 4102444800)
+        with self.assertRaises(BinanceRateLimitError):
+            exchange._request("GET", "/fapi/v1/premiumIndex")
+        self.assertEqual(exchange.session.request.call_count, 1)
 
     def test_place_timeout_confirms_order_by_client_id_without_duplicate(self):
         exchange = BinanceFuturesExchange(

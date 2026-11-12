@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
+import threading
 import time
 from decimal import Decimal
 from typing import Any
@@ -24,11 +26,20 @@ class BinanceAPIError(RuntimeError):
     pass
 
 
+class BinanceRateLimitError(BinanceAPIError):
+    def __init__(self, retry_at: float) -> None:
+        self.retry_at = retry_at
+        super().__init__(f"Binance rate limit active until {int(retry_at * 1000)}")
+
+
 def decimal_text(value: Decimal) -> str:
     return format(value.normalize(), "f")
 
 
 class BinanceFuturesExchange:
+    _rate_limit_until: dict[str, float] = {}
+    _rate_limit_lock = threading.Lock()
+
     def __init__(
         self,
         api_key: str,
@@ -54,6 +65,10 @@ class BinanceFuturesExchange:
         return f"/{self.api_prefix}/{version}/{suffix.lstrip('/')}"
 
     def _request(self, method: str, path: str, params: dict[str, str] | None = None, signed: bool = False) -> Any:
+        with self._rate_limit_lock:
+            retry_at = self._rate_limit_until.get(self.base_url, 0.0)
+        if time.time() < retry_at:
+            raise BinanceRateLimitError(retry_at)
         payload = dict(params or {})
         if signed:
             payload["timestamp"] = str(int(time.time() * 1000))
@@ -72,6 +87,23 @@ class BinanceFuturesExchange:
             raise ExchangeExecutionUnknownError(
                 f"{method} {path}: transport result unknown: {exc}"
             ) from exc
+        if response.status_code in {418, 429}:
+            retry_after = response.headers.get("Retry-After", "")
+            try:
+                delay = max(0.0, float(retry_after))
+            except ValueError:
+                delay = 120.0 if response.status_code == 418 else 60.0
+            ban_match = re.search(r"banned until (\d{13})", response.text)
+            retry_at = max(
+                time.time() + delay,
+                int(ban_match.group(1)) / 1000 if ban_match else 0.0,
+            )
+            with self._rate_limit_lock:
+                self._rate_limit_until[self.base_url] = max(
+                    retry_at, self._rate_limit_until.get(self.base_url, 0.0)
+                )
+                retry_at = self._rate_limit_until[self.base_url]
+            raise BinanceRateLimitError(retry_at)
         if response.status_code >= 400:
             if response.status_code == 408 or response.status_code >= 500:
                 raise ExchangeExecutionUnknownError(
