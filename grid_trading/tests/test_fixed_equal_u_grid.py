@@ -213,7 +213,7 @@ class FixedEqualUGridTests(unittest.TestCase):
             sum((cell.open_qty for cell in seeded), Decimal("0")),
         )
 
-    def test_tradifi_price_band_defers_far_orders_then_places_protected_catchup(self) -> None:
+    def test_tradifi_price_band_allows_far_passive_orders(self) -> None:
         self.exchange.filters = replace(
             self.exchange.filters,
             contract_type="TRADIFI_PERPETUAL",
@@ -224,7 +224,8 @@ class FixedEqualUGridTests(unittest.TestCase):
         engine = self.make_engine()
         engine.tick()
         cells = self.store.list_cells(engine.strategy_id)
-        self.assertTrue(all(cell.entry_order_id is None and cell.exit_order_id is None for cell in cells))
+        self.assertEqual(sum(cell.entry_order_id is not None for cell in cells), 2)
+        self.assertEqual(sum(cell.exit_order_id is not None for cell in cells), 2)
         self.assertEqual(self.exchange.calls["place_market_order"], 1)
 
         client = TestClient(create_app(self.store.path, lambda market=FuturesMarket.USDM: self.exchange))
@@ -236,21 +237,8 @@ class FixedEqualUGridTests(unittest.TestCase):
             },
         )
         self.assertEqual(preview.status_code, 200, preview.text)
-        self.assertEqual(preview.json()["allocation"]["deferred_buy_cell_count"], 2)
-        self.assertEqual(preview.json()["allocation"]["deferred_sell_cell_count"], 2)
-
-        self.exchange.mark = Decimal("88.50")
-        engine.tick()
-        cells = self.store.list_cells(engine.strategy_id)
-        self.assertEqual(cells[1].open_qty, 0)
-        self.assertEqual(self.exchange.calls["place_market_order"], 1)
-        catchup = self.exchange.orders[cells[1].entry_order_id]
-        self.assertEqual(catchup.price, cells[1].buy_price)
-        self.assertFalse(next(order for order in self.exchange.placed if order["order_id"] == catchup.order_id)["post_only"])
-        self.assertTrue(any(
-            event["event_type"] == "GRID_CATCHUP_LIMIT_ORDER"
-            for event in self.store.list_events(engine.strategy_id)
-        ))
+        self.assertEqual(preview.json()["allocation"]["deferred_buy_cell_count"], 0)
+        self.assertEqual(preview.json()["allocation"]["deferred_sell_cell_count"], 0)
 
     def test_crossed_sell_line_never_sends_unprotected_market_order(self) -> None:
         engine = self.make_engine()
@@ -464,7 +452,50 @@ class FixedEqualUGridTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(len(response.json()["cells"]), 323)
 
-    def test_far_orders_are_canceled_and_partial_exit_stays_logical(self) -> None:
+    def test_restart_refills_ten_per_side_without_coordinator_overplacing(self) -> None:
+        self.exchange.mark = Decimal("60.23")
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            step_size=Decimal("0.01"), min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"), contract_type="TRADIFI_PERPETUAL",
+            percent_price_up=Decimal("1.03"), percent_price_down=Decimal("0.97"),
+        )
+        service = GridService(self.store, SimpleNamespace())
+        config = service.create_fixed(
+            "SOXLUSDT", Decimal("30"), Decimal("150"), 323,
+            Decimal("5000"), Decimal("0.01"),
+        )
+        self.store.mark_started(config.strategy_id)
+        scheduler = StrategyScheduler(self.store, self.exchange, pid=12345)
+        scheduler.run_once(now=0)
+        cells = self.store.list_cells(config.strategy_id)
+        self.assertEqual(sum(cell.stage == CellStage.PENDING_ENTRY and cell.entry_order_id is not None for cell in cells), 10)
+        self.assertEqual(sum(cell.stage == CellStage.PENDING_EXIT and cell.exit_order_id is not None for cell in cells), 10)
+        self.assertNotEqual(self.store.get_position_pool("SOXLUSDT", "LONG", FuturesMarket.USDM)["status"], "manual_review")
+
+        for role in ("entry", "exit"):
+            selected = [
+                cell for cell in cells
+                if (cell.entry_order_id if role == "entry" else cell.exit_order_id) is not None
+            ][:4]
+            for cell in selected:
+                order_id = cell.entry_order_id if role == "entry" else cell.exit_order_id
+                self.exchange.cancel_order(config.symbol, order_id)
+                if role == "entry":
+                    cell.entry_order_id = None
+                    cell.entry_client_id = ""
+                else:
+                    cell.exit_order_id = None
+                    cell.exit_client_id = ""
+                self.store.save_cell(cell)
+
+        restarted = FixedGridEngine(self.store, self.exchange, config.strategy_id)
+        restarted.tick()
+        cells = self.store.list_cells(config.strategy_id)
+        self.assertEqual(sum(cell.stage == CellStage.PENDING_ENTRY and cell.entry_order_id is not None for cell in cells), 10)
+        self.assertEqual(sum(cell.stage == CellStage.PENDING_EXIT and cell.exit_order_id is not None for cell in cells), 10)
+
+    def test_rebalance_cancels_old_partial_exit_and_keeps_logical_position(self) -> None:
         self.exchange.mark = Decimal("60.23")
         self.exchange.filters = replace(
             self.exchange.filters,
@@ -489,13 +520,18 @@ class FixedEqualUGridTests(unittest.TestCase):
         engine.tick()
         sell_before = next(cell for cell in self.store.list_cells(config.strategy_id) if cell.cell_id == sell.cell_id)
 
+        for other in [
+            cell for cell in self.store.list_cells(config.strategy_id)
+            if cell.entry_order_id is not None and cell.cell_id != buy.cell_id
+        ][:6]:
+            self.exchange.cancel_order(config.symbol, other.entry_order_id)
+            other.entry_order_id = None
+            other.entry_client_id = ""
+            self.store.save_cell(other)
+
         self.exchange.mark = Decimal("70")
         engine.tick()
-        self.assertEqual(self.exchange.orders[buy_order_id].status, OrderStatus.CANCELED)
-        self.assertIsNone(next(cell for cell in self.store.list_cells(config.strategy_id) if cell.cell_id == buy.cell_id).entry_order_id)
-
-        self.exchange.mark = Decimal("50")
-        engine.tick()
+        self.assertEqual(self.exchange.orders[buy_order_id].status, OrderStatus.NEW)
         sell_after = next(cell for cell in self.store.list_cells(config.strategy_id) if cell.cell_id == sell.cell_id)
         self.assertEqual(self.exchange.orders[sell_order_id].status, OrderStatus.CANCELED)
         self.assertIsNone(sell_after.exit_order_id)

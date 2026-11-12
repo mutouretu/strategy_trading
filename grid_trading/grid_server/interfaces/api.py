@@ -240,14 +240,11 @@ def fixed_grid_preview_details(
     sell_order_notionals = [
         quantities[cell.cell_id] * cell.sell_price for cell in cells
     ]
-    deferred_buy = sum(
-        filters.percent_price_down > 0 and cell.buy_price < mark * filters.percent_price_down
-        for cell in cells if cell not in sell_cells
-    )
-    deferred_sell = sum(
-        filters.percent_price_up > 0 and cell.sell_price > mark * filters.percent_price_up
-        for cell in sell_cells
-    )
+    # Passive BUY prices below mark and passive SELL prices above mark are
+    # allowed by the side-specific futures PERCENT_PRICE filter. The live
+    # ten-per-side order window, rather than the price band, defers the rest.
+    deferred_buy = 0
+    deferred_sell = 0
     if sell_cells and (
         seed_qty <= 0
         or seed_qty * mark < filters.min_notional

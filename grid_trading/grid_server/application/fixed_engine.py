@@ -101,21 +101,20 @@ class FixedGridEngine(TradingEngine):
             side == OrderSide.SELL and mark >= price
         ):
             return True
-        if self.filters.percent_price_down > 0 and price < mark * self.filters.percent_price_down:
-            return False
-        if self.filters.percent_price_up > 0 and price > mark * self.filters.percent_price_up:
-            return False
-        return True
+        # Binance's futures PERCENT_PRICE rule is side-specific: a passive
+        # BUY can rest far below mark and a passive SELL far above mark.
+        if side == OrderSide.BUY:
+            return self.filters.percent_price_up <= 0 or price <= mark * self.filters.percent_price_up
+        return self.filters.percent_price_down <= 0 or price >= mark * self.filters.percent_price_down
 
     def is_virtual_exit(self, cell: GridCell, mark: Decimal) -> bool:
-        """A far sell target is valid grid state while Binance rejects its limit price."""
-        assert self.filters is not None
+        """A held cell outside the ten-order window remains logically covered."""
+        window = getattr(self, "_managed_exit_window_ids", None)
         return (
             cell.open_qty > 0
             and cell.exit_order_id is None
-            and mark < cell.sell_price
-            and self.filters.percent_price_up > 0
-            and cell.sell_price > mark * self.filters.percent_price_up
+            and window is not None
+            and cell.cell_id not in window
         )
 
     @staticmethod
@@ -226,6 +225,8 @@ class FixedGridEngine(TradingEngine):
             self._refresh_order_window(mark, prior_entries, before)
             self.sync_orders_only()
             self._resize_orders()
+            self._managed_exit_window_ids = frozenset(self._window_exit_ids)
+            self._window_initialized = True
             self._heartbeat(mark)
             return mark
         finally:
@@ -253,7 +254,8 @@ class FixedGridEngine(TradingEngine):
         # A boundary crossing can leave old orders resting at Binance. Count
         # them toward the five-order threshold, but rebuild if a price gap
         # leaves an entire side outside the executable price band.
-        if (min(len(active_entries), len(active_exits)) < self.REBALANCE_BELOW
+        if (not getattr(self, "_window_initialized", False)
+                or min(len(active_entries), len(active_exits)) < self.REBALANCE_BELOW
                 or min(ready_entries, ready_exits) == 0):
             self._window_entry_ids = {
                 cell.cell_id for cell in sorted(
