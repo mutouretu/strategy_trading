@@ -802,8 +802,7 @@ def build_cell_rows(grid: dict, cells: list[dict]) -> list[dict]:
                     f"{format_price(cell['buy_price'], precision)} / "
                     f"{format_price(cell['sell_price'], precision)}"
                 ),
-                "当前阶段": STAGE_LABELS.get(stage, stage),
-                "交易次数": int(cell.get("cycle_count", 0)),
+                "阶段/次数": f"{STAGE_LABELS.get(stage, stage)} / {int(cell.get('cycle_count', 0))}",
                 "买入": buy_order,
                 "卖出": sell_order,
                 **fixed_amounts,
@@ -1161,11 +1160,12 @@ def _render_detail_live(strategy_id: str) -> None:
     frame = pd.DataFrame(rows)
 
     def color_grid_row(row: pd.Series) -> list[str]:
-        if row["当前阶段"] == "未触发":
+        stage = row["阶段/次数"].rsplit(" / ", 1)[0]
+        if stage == "未触发":
             color = BINANCE_TEXT
-        elif row["当前阶段"] == "待建仓":
+        elif stage == "待建仓":
             color = BINANCE_GREEN if grid["mode"] == "做多" else BINANCE_RED
-        elif row["当前阶段"] == "待平仓":
+        elif stage == "待平仓":
             color = BINANCE_RED if grid["mode"] == "做多" else BINANCE_GREEN
         else:
             color = BINANCE_YELLOW
@@ -1185,8 +1185,7 @@ def _render_detail_live(strategy_id: str) -> None:
             column_config={
                 "网格": st.column_config.TextColumn("网格", width="small"),
                 "买入/卖出价": st.column_config.TextColumn("买入/卖出价", width="medium"),
-                "当前阶段": st.column_config.TextColumn("当前阶段", width="medium"),
-                "交易次数": st.column_config.NumberColumn("交易次数", width="small", format="%d"),
+                "阶段/次数": st.column_config.TextColumn("阶段/次数", width="medium"),
                 "买入": st.column_config.TextColumn("买入", width="medium"),
                 "卖出": st.column_config.TextColumn("卖出", width="medium"),
                 **({
