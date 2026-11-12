@@ -753,7 +753,7 @@ def build_cell_rows(
 ) -> list[dict]:
     rows = []
     precision = grid["price_precision"]
-    stage_column = "阶段/次数/净利 (U)" if grid["grid_kind"] == "fixed_equal_usdt" else "阶段/次数"
+    stage_column = "次数/净利 (U)" if grid["grid_kind"] == "fixed_equal_usdt" else "阶段/次数"
     for cell in cells:
         stage = cell["stage"]
         entry_prefix = "成交" if decimal_number(cell.get("open_qty")) > 0 else "挂单"
@@ -784,8 +784,13 @@ def build_cell_rows(
                 buy_order = "订单确认中" if cell.get("entry_client_id") else "等待价格带"
             if stage == "pending_exit" and cell.get("exit_order_id") is None:
                 sell_order = "订单确认中" if cell.get("exit_client_id") else "等待价格带"
-        stage_text = f"{STAGE_LABELS.get(stage, stage)} / {int(cell.get('cycle_count', 0))}"
-        fixed_amounts = {}
+        stage_text = (
+            str(int(cell.get("cycle_count", 0)))
+            if grid["grid_kind"] == "fixed_equal_usdt"
+            else f"{STAGE_LABELS.get(stage, stage)} / {int(cell.get('cycle_count', 0))}"
+        )
+        buy_price_text = format_price(cell["buy_price"], precision)
+        sell_price_text = format_price(cell["sell_price"], precision)
         if grid["grid_kind"] == "fixed_equal_usdt":
             open_qty = Decimal(cell["open_qty"])
             buy_order_qty = cell.get("entry_qty") if cell.get("entry_order_id") is not None else None
@@ -800,24 +805,18 @@ def build_cell_rows(
                 else "—"
             )
             stage_text += f" / {profit_text}"
-            fixed_amounts = {
-                "买入/卖出金额 (U)": (
-                    f"{format_quantity(paired_qty * Decimal(cell['buy_price']))} / "
-                    f"{format_quantity(paired_qty * Decimal(cell['sell_price']))}"
-                    if paired_qty is not None else ""
-                ),
-            }
+            if paired_qty is not None:
+                buy_amount = format_quantity(paired_qty * Decimal(cell["buy_price"]))
+                sell_amount = format_quantity(paired_qty * Decimal(cell["sell_price"]))
+                buy_price_text += f" ({buy_amount} U)"
+                sell_price_text += f" ({sell_amount} U)"
         rows.append(
             {
                 "网格": f"#{int(cell['index']):03d}",
-                "买入/卖出价": (
-                    f"{format_price(cell['buy_price'], precision)} / "
-                    f"{format_price(cell['sell_price'], precision)}"
-                ),
+                "买入/卖出价": f"{buy_price_text} / {sell_price_text}",
                 stage_column: stage_text,
                 "买入": buy_order,
                 "卖出": sell_order,
-                **fixed_amounts,
             }
         )
     return list(reversed(rows))
@@ -1168,10 +1167,14 @@ def _render_detail_live(strategy_id: str) -> None:
     )
     rows = build_cell_rows(grid, visible_cells, cell_net_profit)
     frame = pd.DataFrame(rows)
-    stage_column = "阶段/次数/净利 (U)" if grid["grid_kind"] == "fixed_equal_usdt" else "阶段/次数"
+    stage_column = "次数/净利 (U)" if grid["grid_kind"] == "fixed_equal_usdt" else "阶段/次数"
+    stage_by_grid = {
+        f"#{int(cell['index']):03d}": STAGE_LABELS.get(cell["stage"], cell["stage"])
+        for cell in visible_cells
+    }
 
     def color_grid_row(row: pd.Series) -> list[str]:
-        stage = row[stage_column].split(" / ", 1)[0]
+        stage = stage_by_grid[row["网格"]]
         if stage == "未触发":
             color = BINANCE_TEXT
         elif stage == "待建仓":
@@ -1195,13 +1198,12 @@ def _render_detail_live(strategy_id: str) -> None:
             hide_index=True,
             column_config={
                 "网格": st.column_config.TextColumn("网格", width="small"),
-                "买入/卖出价": st.column_config.TextColumn("买入/卖出价", width="medium"),
+                "买入/卖出价": st.column_config.TextColumn(
+                    "买入/卖出价", width="large" if grid["grid_kind"] == "fixed_equal_usdt" else "medium"
+                ),
                 stage_column: st.column_config.TextColumn(stage_column, width="medium"),
                 "买入": st.column_config.TextColumn("买入", width="medium"),
                 "卖出": st.column_config.TextColumn("卖出", width="medium"),
-                **({
-                    "买入/卖出金额 (U)": st.column_config.TextColumn("买入/卖出金额 (U)", width="medium"),
-                } if grid["grid_kind"] == "fixed_equal_usdt" else {}),
             },
         )
     render_cell_boundary_controls(grid, cells, "lower", pending_action)
