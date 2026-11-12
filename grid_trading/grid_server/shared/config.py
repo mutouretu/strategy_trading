@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import dotenv_values, load_dotenv
 
@@ -29,6 +30,20 @@ def binance_credentials(*, required: bool = False) -> tuple[str, str]:
 
 def binance_base_url() -> str:
     return os.getenv("BINANCE_BASE_URL", "https://fapi.binance.com").rstrip("/")
+
+
+def fixed_grid_endpoint_allowed(base_url: str) -> bool:
+    """Require an explicit opt-in before the fixed grid can write to production."""
+    parsed = urlparse(base_url)
+    if parsed.scheme != "https" or parsed.port not in {None, 443}:
+        return False
+    host = parsed.hostname
+    if host in {"demo-fapi.binance.com", "testnet.binancefuture.com"}:
+        return True
+    return (
+        host == "fapi.binance.com"
+        and os.getenv("GRID_ENABLE_BINANCE_LIVE_FIXED_GRID") == "1"
+    )
 
 
 def binance_coinm_base_url() -> str:

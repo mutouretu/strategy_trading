@@ -153,6 +153,21 @@ export GRID_API_URL=http://127.0.0.1:8110
 
 访问 `http://127.0.0.1:8510`，点击「＋」选择「固定区间等 U」创建策略。`scripts/verify_fixed_grid_testnet.py` 使用临时数据库并在测试后清理订单和仓位，因此验证结果不会自动出现在策略列表中。
 
+### 固定区间等 U 币安实盘
+
+实盘需要单独的数据库、调度器 PID 和页面端口。启动时显式设置 `GRID_ENABLE_BINANCE_LIVE_FIXED_GRID=1`，并确认生产 API 地址为 `https://fapi.binance.com`。示例：
+
+```bash
+export GRID_ENV_FILE=/absolute/path/to/production/.env
+export GRID_DB_PATH="$PWD/runtime/fixed-grid-live.sqlite3"
+export GRID_RUNTIME_DIR="$PWD/runtime/live"
+export GRID_API_URL=http://127.0.0.1:8111
+export GRID_ENABLE_BINANCE_LIVE_FIXED_GRID=1
+.venv/bin/uvicorn grid_server.interfaces.api:create_app --factory --host 127.0.0.1 --port 8111 --workers 1
+```
+
+前端在另一个终端设置相同的 `GRID_API_URL` 后启动在独立端口，例如 8511。侧栏显示“币安实盘”。固定网格最多 500 格；SOXL 的 3% 限价带会延后远端新单，并撤掉随行情远离限价带的旧单，待价格靠近时重新挂出。停止策略只暂停调度，**不会撤单或平仓**。生产账户当前精度、手续费和持仓必须在启动前重新读取。
+
 总览、预览、新增、编辑、启动、停止、刷新价格、归档、删除和 Cell 详情均通过 FastAPI 操作 SQLite/调度器。同一币对允许创建多组网格，页面使用 `strategy_id` 区分。
 
 ## 订单一致性规则

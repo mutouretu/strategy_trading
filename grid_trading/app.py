@@ -242,12 +242,12 @@ def display_flash() -> None:
 
 
 def render_fixed_grid_create() -> None:
-    st.caption("币安 U 本位测试网 · 固定天地网格 · 1 倍做多 · 每格等 U")
+    st.caption("币安 U 本位 · 固定天地网格 · 1 倍做多 · 每格等 U")
     with st.form("fixed_grid_preview_form"):
         symbol = st.text_input("交易对", placeholder="例如 SOLUSDT", key="fixed_symbol")
         lower = st.number_input("区间下界", min_value=0.0, value=None, step=0.01, format="%.8f")
         upper = st.number_input("区间上界", min_value=0.0, value=None, step=0.01, format="%.8f")
-        count = st.number_input("网格数量", min_value=1, max_value=100, value=20, step=1)
+        count = st.number_input("网格数量", min_value=1, max_value=500, value=20, step=1)
         budget = st.number_input("网格交易预算 (USDT)", min_value=0.01, value=None, step=100.0, format="%.2f")
         preview_clicked = st.form_submit_button("生成预览", type="primary")
     if preview_clicked:
@@ -558,8 +558,12 @@ def remove_grid_dialog(grid: dict) -> None:
             st.rerun()
 
 
-def render_sidebar(strategies: list[dict]) -> str:
+def render_sidebar(strategies: list[dict], environment: str = "") -> str:
     st.sidebar.title("交易管理")
+    if environment == "live":
+        st.sidebar.error("币安实盘")
+    elif environment == "testnet":
+        st.sidebar.info("币安测试网")
     detail_active = bool(st.query_params.get("strategy") or st.query_params.get("symbol"))
     with st.sidebar.expander("网格交易管理", expanded=True):
         overview = st.button(
@@ -1315,6 +1319,7 @@ def render_detail(strategies: list[dict]) -> None:
 apply_styles()
 display_flash()
 try:
+    health = backend().health()
     strategies = load_strategies()
 except GridApiError as exc:
     st.sidebar.title("交易管理")
@@ -1323,7 +1328,7 @@ except GridApiError as exc:
     st.info("请先启动 FastAPI：.venv/bin/uvicorn grid_server.api:create_app --factory --port 8100 --workers 1")
     st.stop()
 
-current_page = render_sidebar(strategies)
+current_page = render_sidebar(strategies, health.get("environment", ""))
 if current_page == "详情":
     render_detail(strategies)
 else:

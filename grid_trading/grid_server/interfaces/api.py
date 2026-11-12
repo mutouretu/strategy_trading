@@ -17,6 +17,7 @@ from ..shared.config import (
     binance_base_url,
     binance_coinm_base_url,
     binance_credentials,
+    fixed_grid_endpoint_allowed,
     load_environment,
 )
 from ..domain import FuturesMarket, GridKind, Mode, StrategyConfig
@@ -50,7 +51,7 @@ class FixedGridInput(BaseModel):
     symbol: str = Field(min_length=1)
     lower_price: Decimal = Field(gt=0)
     upper_price: Decimal = Field(gt=0)
-    grid_count: int = Field(ge=1, le=100)
+    grid_count: int = Field(ge=1, le=500)
     grid_budget_usdt: Decimal = Field(gt=0)
     poll_interval_sec: float = Field(default=1.0, ge=0.2)
 
@@ -289,7 +290,14 @@ def create_app(
     if db_path is None:
         db_path = os.getenv("GRID_DB_PATH", "grid_trading.sqlite3")
     store = SQLiteStore(db_path)
-    supervisor = StrategySupervisor(store)
+    runtime_dir = os.getenv("GRID_RUNTIME_DIR", "").strip()
+    supervisor = (
+        StrategySupervisor(
+            store,
+            log_dir=Path(runtime_dir) / "logs",
+            pid_path=Path(runtime_dir) / "scheduler.pid",
+        ) if runtime_dir else StrategySupervisor(store)
+    )
     service = GridService(store, supervisor)
 
     if exchange_factory is None:
@@ -331,7 +339,17 @@ def create_app(
     @app.get("/health")
     def health() -> dict:
         api_key, api_secret = binance_credentials()
-        return {"status": "ok", "binance_configured": bool(api_key and api_secret)}
+        host = urlparse(binance_base_url()).hostname
+        environment = (
+            "live" if host == "fapi.binance.com" else
+            "testnet" if host in {"demo-fapi.binance.com", "testnet.binancefuture.com"} else
+            "other"
+        )
+        return {
+            "status": "ok",
+            "binance_configured": bool(api_key and api_secret),
+            "environment": environment,
+        }
 
     @app.get("/strategies")
     def list_strategies(include_archived: bool = False) -> list[dict]:
@@ -685,8 +703,8 @@ def create_app(
             if config is not None and config.grid_kind == GridKind.FIXED_EQUAL_USDT:
                 exchange = exchange_for(FuturesMarket.USDM)
                 if isinstance(exchange, BinanceFuturesExchange):
-                    if urlparse(exchange.base_url).hostname not in {"demo-fapi.binance.com", "testnet.binancefuture.com"}:
-                        raise ValueError("fixed equal-USDT grid is enabled on Binance testnet only")
+                    if not fixed_grid_endpoint_allowed(exchange.base_url):
+                        raise ValueError("fixed equal-USDT grid requires an approved Binance endpoint")
                 if config.lower_price is not None and config.upper_price is not None:
                     mark = exchange.get_mark_price(config.symbol)
                     if not config.lower_price <= mark <= config.upper_price:

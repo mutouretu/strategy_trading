@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest.mock import patch
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
@@ -19,6 +20,7 @@ from grid_server.domain.grid import build_cells, fixed_cell_budgets, fixed_grid_
 from grid_server.infrastructure.binance import BinanceFuturesExchange
 from grid_server.interfaces.api import create_app
 from grid_server.ports.exchange import ExchangeExecutionUnknownError
+from grid_server.shared.config import fixed_grid_endpoint_allowed
 from grid_server.runtime.scheduler import StrategyScheduler
 from grid_server.store import SQLiteStore
 
@@ -424,8 +426,81 @@ class FixedEqualUGridTests(unittest.TestCase):
     def test_production_url_cannot_initialize_fixed_engine(self) -> None:
         engine = self.make_engine()
         engine.exchange = BinanceFuturesExchange("", "", "https://fapi.binance.com")
-        with self.assertRaisesRegex(ValueError, "testnet only"):
+        with self.assertRaisesRegex(ValueError, "approved Binance endpoint"):
             engine.initialize()
+
+    def test_production_endpoint_requires_explicit_opt_in(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertFalse(fixed_grid_endpoint_allowed("https://fapi.binance.com"))
+            self.assertTrue(fixed_grid_endpoint_allowed("https://demo-fapi.binance.com"))
+        with patch.dict("os.environ", {"GRID_ENABLE_BINANCE_LIVE_FIXED_GRID": "1"}):
+            self.assertTrue(fixed_grid_endpoint_allowed("https://fapi.binance.com"))
+            self.assertFalse(fixed_grid_endpoint_allowed("https://example.com"))
+            self.assertFalse(fixed_grid_endpoint_allowed("http://fapi.binance.com"))
+            self.assertFalse(fixed_grid_endpoint_allowed("https://fapi.binance.com:8080"))
+
+    def test_live_runtime_directory_uses_its_own_scheduler_pid(self) -> None:
+        runtime_dir = Path(self.tempdir.name) / "live"
+        with patch.dict("os.environ", {"GRID_RUNTIME_DIR": str(runtime_dir)}):
+            app = create_app(
+                Path(self.tempdir.name) / "live.sqlite3",
+                lambda market=FuturesMarket.USDM: self.exchange,
+            )
+        self.assertEqual(app.state.service.supervisor.pid_path, (runtime_dir / "scheduler.pid").resolve())
+
+    def test_323_cell_preview_is_accepted(self) -> None:
+        self.exchange.mark = Decimal("60.23")
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            step_size=Decimal("0.01"), min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"), contract_type="TRADIFI_PERPETUAL",
+            percent_price_up=Decimal("1.03"), percent_price_down=Decimal("0.97"),
+        )
+        client = TestClient(create_app(Path(self.tempdir.name) / "large.sqlite3", lambda market=FuturesMarket.USDM: self.exchange))
+        response = client.post("/fixed-grids/preview", json={
+            "symbol": "SOXLUSDT", "lower_price": "30", "upper_price": "150",
+            "grid_count": 323, "grid_budget_usdt": "5000",
+        })
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(response.json()["cells"]), 323)
+
+    def test_far_orders_are_canceled_and_partial_exit_stays_logical(self) -> None:
+        self.exchange.mark = Decimal("60.23")
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            step_size=Decimal("0.01"), min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"), contract_type="TRADIFI_PERPETUAL",
+            percent_price_up=Decimal("1.03"), percent_price_down=Decimal("0.97"),
+        )
+        service = GridService(self.store, SimpleNamespace())
+        config = service.create_fixed(
+            "SOXLUSDT", Decimal("30"), Decimal("150"), 323,
+            Decimal("5000"), Decimal("0.01"),
+        )
+        self.store.mark_started(config.strategy_id)
+        engine = FixedGridEngine(self.store, self.exchange, config.strategy_id)
+        engine.tick()
+        cells = self.store.list_cells(config.strategy_id)
+        buy = next(cell for cell in cells if cell.entry_order_id is not None)
+        sell = next(cell for cell in cells if cell.exit_order_id is not None)
+        buy_order_id = buy.entry_order_id
+        sell_order_id = sell.exit_order_id
+        self.exchange.partial_fill(sell_order_id, Decimal("0.01"))
+        engine.tick()
+        sell_before = next(cell for cell in self.store.list_cells(config.strategy_id) if cell.cell_id == sell.cell_id)
+
+        self.exchange.mark = Decimal("70")
+        engine.tick()
+        self.assertEqual(self.exchange.orders[buy_order_id].status, OrderStatus.CANCELED)
+        self.assertIsNone(next(cell for cell in self.store.list_cells(config.strategy_id) if cell.cell_id == buy.cell_id).entry_order_id)
+
+        self.exchange.mark = Decimal("50")
+        engine.tick()
+        sell_after = next(cell for cell in self.store.list_cells(config.strategy_id) if cell.cell_id == sell.cell_id)
+        self.assertEqual(self.exchange.orders[sell_order_id].status, OrderStatus.CANCELED)
+        self.assertIsNone(sell_after.exit_order_id)
+        self.assertEqual(sell_after.stage, CellStage.PENDING_EXIT)
+        self.assertEqual(sell_after.open_qty, sell_before.open_qty)
 
     def test_failed_initial_seed_cannot_be_restarted_blindly(self) -> None:
         engine = self.make_engine()

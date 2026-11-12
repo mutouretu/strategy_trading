@@ -5,12 +5,12 @@ import json
 import os
 from dataclasses import replace
 from decimal import Decimal
-from urllib.parse import urlparse
 
 from ..domain import CellStage, GridCell, OrderSide, OrderStatus, StrategyStatus
 from ..domain.grid import fixed_cell_budgets, round_down
 from ..infrastructure.binance import BinanceAPIError, BinanceFuturesExchange
 from ..ports.exchange import ExchangeExecutionUnknownError, OrderNotFoundError
+from ..shared.config import fixed_grid_endpoint_allowed
 from .engine import TradingEngine
 from .grid_performance import strategy_performance, sync_strategy_trades
 
@@ -21,9 +21,8 @@ class FixedGridEngine(TradingEngine):
     def initialize(self) -> None:
         raw_exchange = getattr(self.exchange, "exchange", self.exchange)
         if isinstance(raw_exchange, BinanceFuturesExchange):
-            host = urlparse(raw_exchange.base_url).hostname
-            if host not in {"demo-fapi.binance.com", "testnet.binancefuture.com"}:
-                raise ValueError("fixed equal-USDT grid is enabled on Binance testnet only")
+            if not fixed_grid_endpoint_allowed(raw_exchange.base_url):
+                raise ValueError("fixed equal-USDT grid requires an approved Binance endpoint")
         super().initialize()
         assert self.filters is not None
         if self.filters.contract_type not in {"", "PERPETUAL", "TRADIFI_PERPETUAL"}:
@@ -162,6 +161,7 @@ class FixedGridEngine(TradingEngine):
         if seed["status"] == "manual_review":
             raise RuntimeError(f"initial position needs manual review: {seed['message']}")
         if seed["status"] == "applied":
+            self._defer_far_orders(mark)
             self.sync_orders_only()
 
         actions = self.store.list_capital_actions(self.strategy_id)
@@ -176,12 +176,62 @@ class FixedGridEngine(TradingEngine):
                 self._heartbeat(mark)
                 return mark
 
+        self._defer_far_orders(mark)
         self._reinvest_closed_cells()
         self._arm_untriggered()
         self.sync_orders_only()
         self._resize_orders()
         self._heartbeat(mark)
         return mark
+
+    def _defer_far_orders(self, mark: Decimal) -> None:
+        """Free exchange order slots when a live order leaves the price band."""
+        assert self.filters is not None
+        config = self._config()
+        for cell in self.store.list_cells(self.strategy_id):
+            if cell.stage == CellStage.PENDING_ENTRY and cell.entry_order_id is not None:
+                if self.filters.percent_price_down <= 0 or cell.buy_price >= mark * self.filters.percent_price_down:
+                    continue
+                order_id = cell.entry_order_id
+                side = "entry"
+            elif cell.stage == CellStage.PENDING_EXIT and cell.exit_order_id is not None:
+                if self.filters.percent_price_up <= 0 or cell.sell_price <= mark * self.filters.percent_price_up:
+                    continue
+                order_id = cell.exit_order_id
+                side = "exit"
+            else:
+                continue
+            order = self.exchange.get_order(config.symbol, order_id)
+            if order.status not in {OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED}:
+                continue
+            final = self.exchange.cancel_order(config.symbol, order_id)
+            if final.status not in {OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.FILLED}:
+                raise RuntimeError(f"far {side} order cancellation is not confirmed")
+            if side == "entry" or final.status == OrderStatus.FILLED:
+                # The existing state machine handles any fill that raced the cancel.
+                self._sync_cell(cell)
+                continue
+            delta = min(
+                cell.open_qty,
+                max(Decimal("0"), final.executed_qty - cell.exit_executed_qty),
+            )
+            if delta >= cell.open_qty:
+                self._sync_cell(cell)
+                continue
+            cell.open_qty -= delta
+            cell.exit_order_id = None
+            cell.exit_client_id = ""
+            cell.exit_executed_qty = Decimal("0")
+            cell.stage = CellStage.PENDING_EXIT
+            self.store.save_cell(cell)
+            self.store.append_event(
+                self.strategy_id, "FAR_EXIT_DEFERRED", {
+                    "order_id": order_id,
+                    "executed_qty": str(final.executed_qty),
+                    "executed_delta": str(delta),
+                    "remaining_open_qty": str(cell.open_qty),
+                }, cell.cell_id, self.run_id,
+            )
 
     def _reinvest_closed_cells(self) -> None:
         config = self._config()
