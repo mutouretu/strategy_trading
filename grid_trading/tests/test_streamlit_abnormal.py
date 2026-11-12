@@ -245,7 +245,10 @@ class StreamlitAbnormalTests(unittest.TestCase):
             app.run()
 
         self.assertEqual(list(app.exception), [])
-        self.assertIn("预算 (U)", app.dataframe[0].value.columns)
+        frame = app.dataframe[0].value
+        self.assertNotIn("预算 (U)", frame.columns)
+        self.assertEqual(frame["买入/卖出价"].iloc[0], "100 / 110")
+        self.assertEqual(frame["买入/卖出金额 (U)"].iloc[0], "100 / 110")
         self.assertTrue(any(button.label == "预览资金分配" for button in app.button))
         self.assertFalse(any(button.key and button.key.startswith("add_cell_") for button in app.button))
 

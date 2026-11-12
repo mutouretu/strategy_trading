@@ -789,21 +789,19 @@ def build_cell_rows(grid: dict, cells: list[dict]) -> list[dict]:
                 else None
             )
             fixed_amounts = {
-                "预算 (U)": format_quantity(cell.get("budget_usdt", "0")),
-                "配对买入金额 (U)": (
-                    format_quantity(paired_qty * Decimal(cell["buy_price"]))
-                    if paired_qty is not None else ""
-                ),
-                "卖出目标金额 (U)": (
-                    format_quantity(paired_qty * Decimal(cell["sell_price"]))
+                "买入/卖出金额 (U)": (
+                    f"{format_quantity(paired_qty * Decimal(cell['buy_price']))} / "
+                    f"{format_quantity(paired_qty * Decimal(cell['sell_price']))}"
                     if paired_qty is not None else ""
                 ),
             }
         rows.append(
             {
                 "网格": f"#{int(cell['index']):03d}",
-                "买入价": format_price(cell["buy_price"], precision),
-                "卖出价": format_price(cell["sell_price"], precision),
+                "买入/卖出价": (
+                    f"{format_price(cell['buy_price'], precision)} / "
+                    f"{format_price(cell['sell_price'], precision)}"
+                ),
                 "当前阶段": STAGE_LABELS.get(stage, stage),
                 "交易次数": int(cell.get("cycle_count", 0)),
                 "买入": buy_order,
@@ -1186,16 +1184,13 @@ def _render_detail_live(strategy_id: str) -> None:
             hide_index=True,
             column_config={
                 "网格": st.column_config.TextColumn("网格", width="small"),
-                "买入价": st.column_config.TextColumn("买入价", width="medium"),
-                "卖出价": st.column_config.TextColumn("卖出价", width="medium"),
+                "买入/卖出价": st.column_config.TextColumn("买入/卖出价", width="medium"),
                 "当前阶段": st.column_config.TextColumn("当前阶段", width="medium"),
                 "交易次数": st.column_config.NumberColumn("交易次数", width="small", format="%d"),
                 "买入": st.column_config.TextColumn("买入", width="medium"),
                 "卖出": st.column_config.TextColumn("卖出", width="medium"),
                 **({
-                    "预算 (U)": st.column_config.TextColumn("预算 (U)", width="medium"),
-                    "配对买入金额 (U)": st.column_config.TextColumn("配对买入金额 (U)", width="medium"),
-                    "卖出目标金额 (U)": st.column_config.TextColumn("卖出目标金额 (U)", width="medium"),
+                    "买入/卖出金额 (U)": st.column_config.TextColumn("买入/卖出金额 (U)", width="medium"),
                 } if grid["grid_kind"] == "fixed_equal_usdt" else {}),
             },
         )
