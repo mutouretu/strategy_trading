@@ -162,6 +162,29 @@ class BinanceFuturesExchangeTests(unittest.TestCase):
             ],
         )
 
+    def test_position_prices_include_exchange_break_even_price(self):
+        exchange = BinanceFuturesExchange("key", "secret")
+        exchange._request = Mock(  # type: ignore[method-assign]
+            return_value=[
+                {
+                    "symbol": "SOXLUSDT", "positionSide": "LONG", "positionAmt": "26.37",
+                    "entryPrice": "62.43520", "breakEvenPrice": "62.55837",
+                },
+                {
+                    "symbol": "SOXLUSDT", "positionSide": "SHORT", "positionAmt": "-2",
+                    "entryPrice": "62.30", "breakEvenPrice": "62.20",
+                },
+            ]
+        )
+
+        self.assertEqual(
+            exchange.get_position_prices("SOXLUSDT"),
+            (Decimal("62.43520"), Decimal("62.55837")),
+        )
+        exchange._request.assert_called_once_with(
+            "GET", "/fapi/v3/positionRisk", {"symbol": "SOXLUSDT"}, signed=True
+        )
+
     def test_all_open_orders_are_fetched_once_and_grouped_by_symbol(self):
         exchange = BinanceFuturesExchange("key", "secret")
         exchange._request = Mock(  # type: ignore[method-assign]

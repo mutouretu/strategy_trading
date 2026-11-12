@@ -107,6 +107,15 @@ def strategy_performance(
     levels = store.get_cell_price_history(config.strategy_id)
     order_to_cell: dict[int, str] = {}
     strategy_events = store.list_events(config.strategy_id)
+    initial_entry_price = next(
+        (
+            event["payload"].get("average_price")
+            for event in strategy_events
+            if event["event_type"] == "CAPITAL_ACTION_APPLIED"
+            and event["payload"].get("operation") == "seed"
+        ),
+        None,
+    )
     for event in strategy_events:
         order_id = event["payload"].get("order_id")
         cell_id = event["cell_id"]
@@ -231,6 +240,7 @@ def strategy_performance(
     )
     return {
         "strategy_id": config.strategy_id,
+        "initial_entry_price": initial_entry_price,
         "started_at": started.isoformat(),
         "as_of": current.isoformat(),
         "grid_budget_usdt": str(budget),

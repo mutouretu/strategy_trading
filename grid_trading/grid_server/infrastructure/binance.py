@@ -313,7 +313,9 @@ class BinanceFuturesExchange:
             if Decimal(str(item.get("positionAmt", "0"))) != 0
         ]
 
-    def get_position_entry_price(self, symbol: str, position_side: str = "LONG") -> Decimal | None:
+    def get_position_prices(
+        self, symbol: str, position_side: str = "LONG"
+    ) -> tuple[Decimal | None, Decimal | None]:
         version = "v1" if self.market_type == FuturesMarket.COINM else "v3"
         data = self._request(
             "GET", self._path("positionRisk", version=version),
@@ -336,7 +338,16 @@ class BinanceFuturesExchange:
             ),
             None,
         )
-        return None if row is None else Decimal(str(row.get("entryPrice", "0")))
+        if row is None:
+            return None, None
+        break_even_price = row.get("breakEvenPrice")
+        return (
+            Decimal(str(row.get("entryPrice", "0"))),
+            None if break_even_price is None else Decimal(str(break_even_price)),
+        )
+
+    def get_position_entry_price(self, symbol: str, position_side: str = "LONG") -> Decimal | None:
+        return self.get_position_prices(symbol, position_side)[0]
 
     def cancel_order(self, symbol: str, order_id: int) -> OrderSnapshot:
         try:

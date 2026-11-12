@@ -239,6 +239,8 @@ class StreamlitAbnormalTests(unittest.TestCase):
                 ("GET", f"/strategies/{item['strategy_id']}/topups"): (200, []),
                 ("GET", f"/strategies/{item['strategy_id']}/performance"): (200, {
                     "position_entry_price": "100",
+                    "initial_entry_price": "105",
+                    "position_break_even_price": "101",
                     "coverage_complete": True,
                     "accounting_complete": True,
                     "completed_cycles": 7,
@@ -257,6 +259,15 @@ class StreamlitAbnormalTests(unittest.TestCase):
             app.run()
 
         self.assertEqual(list(app.exception), [])
+        price_summary = next(
+            section.value for section in app.markdown
+            if "初始建仓价" in section.value
+        )
+        for label, value in (
+            ("初始建仓价", "105"), ("建仓均价", "100"),
+            ("当前价", "64,000"), ("损益两平价", "101"),
+        ):
+            self.assertIn(f"<div class='label'>{label}</div><div class='value'>{value}</div>", price_summary)
         frame = app.dataframe[0].value
         self.assertNotIn("预算 (U)", frame.columns)
         self.assertEqual(frame["买入/卖出价"].iloc[0], "100 (100 U) / 110 (110 U)")

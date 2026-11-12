@@ -81,11 +81,13 @@ def apply_styles() -> None:
         div[data-testid="stMetricValue"] { font-size: 1.05rem !important; }
         div[data-testid="stMetric"] { padding-top: .15rem; padding-bottom: .15rem; }
         .grid-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1.2rem; margin: .8rem 0 1.15rem; }
+        .grid-summary.config { grid-template-columns: 1.1fr 1.6fr 1fr; margin-bottom: .55rem; }
+        .grid-summary.prices { margin-top: .25rem; }
         .grid-summary .item { min-width: 0; }
         .grid-summary .label { font-size: .72rem; opacity: .72; margin-bottom: .22rem; }
         .grid-summary .value { font-size: 1.05rem; font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
-        @media (max-width: 900px) { .grid-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-        @media (max-width: 600px) { .grid-summary { grid-template-columns: 1fr; } }
+        @media (max-width: 900px) { .grid-summary, .grid-summary.config { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        @media (max-width: 600px) { .grid-summary, .grid-summary.config { grid-template-columns: 1fr; } }
         </style>
         """,
         unsafe_allow_html=True,
@@ -1057,25 +1059,36 @@ def _render_detail_live(strategy_id: str) -> None:
         if grid["grid_kind"] == "fixed_equal_usdt"
         else grid["runtime"]
     )
-    summary_items = [
+    config_items = [
         ("合约 / 方向 / 杠杆", f"{grid['market_label']} · {grid['mode']} {grid['leverage']}×"),
         ("网格范围 / 总数 / 间距 / 单格金额", grid_configuration),
         ("预算 / 运行", budget_runtime),
-        (
-            "建仓价 / 当前价",
-            f"{format_price(entry_price, precision) if entry_price is not None else '—'} / "
-            f"{format_price(grid['current_price'], precision)}",
-        ),
     ]
-    summary_html = "".join(
-        f"<div class='item'><div class='label'>{escape(label)}</div>"
-        f"<div class='value'>{escape(value)}</div></div>"
-        for label, value in summary_items
-    )
-    st.markdown(
-        f"<div class='grid-summary' style='color:{direction_color}'>{summary_html}</div>",
-        unsafe_allow_html=True,
-    )
+    def shown_price(value: str | None) -> str:
+        return "—" if value is None else format_price(value, precision)
+
+    if grid["grid_kind"] == "fixed_equal_usdt":
+        price_items = [
+            ("初始建仓价", shown_price(performance.get("initial_entry_price") if performance else None)),
+            ("建仓均价", shown_price(entry_price)),
+            ("当前价", shown_price(grid["current_price"])),
+            ("损益两平价", shown_price(performance.get("position_break_even_price") if performance else None)),
+        ]
+        summary_sections = [("config", config_items), ("prices", price_items)]
+    else:
+        summary_sections = [
+            ("", config_items + [("建仓价 / 当前价", f"{shown_price(entry_price)} / {shown_price(grid['current_price'])}")])
+        ]
+    for section_class, summary_items in summary_sections:
+        summary_html = "".join(
+            f"<div class='item'><div class='label'>{escape(label)}</div>"
+            f"<div class='value'>{escape(value)}</div></div>"
+            for label, value in summary_items
+        )
+        st.markdown(
+            f"<div class='grid-summary {section_class}' style='color:{direction_color}'>{summary_html}</div>",
+            unsafe_allow_html=True,
+        )
     if grid["grid_kind"] == "fixed_equal_usdt":
         if performance is not None:
             metrics = st.columns(4)

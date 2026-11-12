@@ -349,9 +349,12 @@ def create_app(
                 result = strategy_performance(
                     store, config, coverage_complete=coverage_complete
                 )
-                entry_price = exchange.get_position_entry_price(config.symbol)
+                entry_price, break_even_price = exchange.get_position_prices(config.symbol)
                 result["position_entry_price"] = (
                     None if entry_price is None else str(entry_price)
+                )
+                result["position_break_even_price"] = (
+                    None if break_even_price is None else str(break_even_price)
                 )
                 performance_cache[strategy_id] = (time.monotonic(), result)
                 return result

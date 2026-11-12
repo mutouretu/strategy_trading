@@ -101,6 +101,23 @@ class GridPerformanceTests(unittest.TestCase):
         self.assertEqual(len(self.store.list_strategy_trades(self.config.strategy_id)), 3)
         self.assertEqual(exchange.calls[-1]["from_id"], 4)
 
+    def test_initial_entry_price_comes_from_seed_fill_event(self) -> None:
+        self.store.append_event(
+            self.config.strategy_id,
+            "CAPITAL_ACTION_APPLIED",
+            {"operation": "seed", "average_price": "62.93"},
+        )
+        self.store.append_event(
+            self.config.strategy_id,
+            "CAPITAL_ACTION_APPLIED",
+            {"operation": "topup", "average_price": "60.00"},
+        )
+        summary = strategy_performance(
+            self.store, self.config, coverage_complete=True,
+            now=self.started + timedelta(days=1),
+        )
+        self.assertEqual(summary["initial_entry_price"], "62.93")
+
     def test_other_fee_asset_does_not_claim_net_profit(self) -> None:
         self.store.save_strategy_trades(
             self.config.strategy_id, [
