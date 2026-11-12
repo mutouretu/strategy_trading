@@ -226,8 +226,11 @@ class FixedEqualUGridTests(unittest.TestCase):
         engine = self.make_engine()
         engine.tick()
         sold_cell = self.store.list_cells(engine.strategy_id)[2]
+        paired_qty = sold_cell.open_qty
         self.exchange.fill(sold_cell.exit_order_id)
         engine.tick()
+        reentry = self.store.list_cells(engine.strategy_id)[2]
+        self.assertEqual(self.exchange.orders[reentry.entry_order_id].original_qty, paired_qty)
         self.store.create_capital_action("topup-after-sell", engine.strategy_id, "topup", Decimal("40"))
         engine.tick()
         action = self.store.get_capital_action("topup-after-sell")

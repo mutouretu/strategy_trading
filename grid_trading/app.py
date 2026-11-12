@@ -780,17 +780,22 @@ def build_cell_rows(grid: dict, cells: list[dict]) -> list[dict]:
                 sell_order = "订单确认中" if cell.get("exit_client_id") else "等待价格带"
         fixed_amounts = {}
         if grid["grid_kind"] == "fixed_equal_usdt":
-            buy_qty = cell.get("entry_qty") if cell.get("entry_order_id") is not None else None
             open_qty = Decimal(cell["open_qty"])
+            buy_order_qty = cell.get("entry_qty") if cell.get("entry_order_id") is not None else None
+            paired_qty = (
+                open_qty if open_qty > 0
+                else Decimal(buy_order_qty) if buy_order_qty not in (None, "")
+                else None
+            )
             fixed_amounts = {
                 "预算 (U)": format_quantity(cell.get("budget_usdt", "0")),
-                "买单目标金额 (U)": (
-                    format_quantity(Decimal(buy_qty) * Decimal(cell["buy_price"]))
-                    if buy_qty not in (None, "") else ""
+                "配对买入金额 (U)": (
+                    format_quantity(paired_qty * Decimal(cell["buy_price"]))
+                    if paired_qty is not None else ""
                 ),
                 "卖出目标金额 (U)": (
-                    format_quantity(open_qty * Decimal(cell["sell_price"]))
-                    if open_qty > 0 else ""
+                    format_quantity(paired_qty * Decimal(cell["sell_price"]))
+                    if paired_qty is not None else ""
                 ),
             }
         rows.append(
@@ -1108,7 +1113,7 @@ def _render_detail_live(strategy_id: str) -> None:
             "成交次数": st.column_config.NumberColumn("成交次数", width="small", format="%d"),
             **({
                 "预算 (U)": st.column_config.TextColumn("预算 (U)", width="medium"),
-                "买单目标金额 (U)": st.column_config.TextColumn("买单目标金额 (U)", width="medium"),
+                "配对买入金额 (U)": st.column_config.TextColumn("配对买入金额 (U)", width="medium"),
                 "卖出目标金额 (U)": st.column_config.TextColumn("卖出目标金额 (U)", width="medium"),
             } if grid["grid_kind"] == "fixed_equal_usdt" else {}),
         },
@@ -1116,8 +1121,9 @@ def _render_detail_live(strategy_id: str) -> None:
     render_cell_boundary_controls(grid, cells, "lower", pending_action)
     if grid["grid_kind"] == "fixed_equal_usdt":
         st.caption(
-            "预算按每格买入资金分配；买单目标金额受交易所数量步长取整影响。"
-            "启动时上方卖格在同一现价买入，卖出目标金额随卖价上升；"
+            "同一行的买卖金额按同一数量配对计算；已持仓格的配对买入金额是卖出后"
+            "在该格买价重挂的金额，首次建仓按启动时市价。"
+            "实际金额受交易所价格和数量精度影响；"
             "区间固定，超出边界时不移动网格。"
         )
     else:
