@@ -886,7 +886,9 @@ def render_fixed_topup(grid: dict) -> None:
             if "-4411" in message:
                 st.error(
                     "币安测试网账户尚未接受 TradFi 永续合约协议。"
-                    "请在币安 Demo 交易界面自行阅读并接受；完成后需新建这组固定网格。"
+                    "请在 demo.binance.com/futures 确认 SOXLUSDT，"
+                    "并核对登录账户与 test.env 的 API Key 属于同一 Demo 账户；"
+                    "完成后需新建这组固定网格。"
                 )
             else:
                 st.error(message)
