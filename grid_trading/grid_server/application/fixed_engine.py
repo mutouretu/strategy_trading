@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from dataclasses import replace
 from decimal import Decimal
 from urllib.parse import urlparse
 
@@ -210,7 +211,8 @@ class FixedGridEngine(TradingEngine):
             return
         if action["status"] == "planned":
             if Decimal(action["target_qty"]) == 0:
-                self.store.apply_capital_action(action["id"], {}, Decimal("0"))
+                allocations = self._planned_allocations(action, Decimal("0"))
+                self.store.apply_capital_action(action["id"], allocations, Decimal("0"))
                 self.config = None
                 return
             # Persist the client identity before the network write. An unknown
@@ -247,10 +249,7 @@ class FixedGridEngine(TradingEngine):
                     f"aggregate order {order.status.value}: executed {order.executed_qty} of {target}",
                 )
                 raise RuntimeError("aggregate fill requires manual review")
-            allocations = self._split_quantity(
-                order.executed_qty,
-                json.loads(action["sell_cell_ids_json"]),
-            )
+            allocations = self._planned_allocations(action, order.executed_qty)
             self.store.apply_capital_action(action["id"], allocations, order.executed_qty)
             self.store.append_event(
                 self.strategy_id,
@@ -276,11 +275,13 @@ class FixedGridEngine(TradingEngine):
             self.store.mark_capital_action_review(action["id"], "a grid cell requires manual review")
             raise ValueError("cannot add capital while a grid cell requires manual review")
         if action["operation"] == "seed":
-            sell_ids = [cell.cell_id for cell in cells if cell.sell_price > mark]
-            target_notional = sum(
-                (cell.budget_usdt for cell in cells if cell.cell_id in sell_ids),
-                Decimal("0"),
-            )
+            sell_cells = [cell for cell in cells if cell.sell_price > mark]
+            allocations = {
+                cell.cell_id: self._quantity(cell.buy_price, cell)
+                for cell in sell_cells
+            }
+            if any(qty == 0 for qty in allocations.values()):
+                raise ValueError("initial sell-side cell is below exchange minimum")
         else:
             invalidate = getattr(self.exchange, "invalidate_positions", None)
             if invalidate is not None:
@@ -299,7 +300,8 @@ class FixedGridEngine(TradingEngine):
                     action["id"], "available USDT is below the top-up amount"
                 )
                 return self.store.get_capital_action(action["id"])
-            sell_ids = [cell.cell_id for cell in cells if cell.open_qty > 0]
+            sell_cells = [cell for cell in cells if cell.open_qty > 0]
+            sell_ids = [cell.cell_id for cell in sell_cells]
             if action["expected_sell_cell_ids_json"] is not None:
                 expected_ids = json.loads(action["expected_sell_cell_ids_json"])
                 if sell_ids != expected_ids:
@@ -308,19 +310,21 @@ class FixedGridEngine(TradingEngine):
                     )
                     return self.store.get_capital_action(action["id"])
             increments = fixed_cell_budgets(Decimal(action["amount_usdt"]), len(cells))
-            target_notional = sum(
-                (increment for cell, increment in zip(cells, increments) if cell.cell_id in sell_ids),
-                Decimal("0"),
-            )
-        target_qty = round_down(target_notional / mark, self.filters.step_size)
-        minimum_per_cell = (
-            self.filters.min_qty if action["operation"] == "seed" else self.filters.step_size
-        )
+            increment_by_id = {
+                cell.cell_id: increment for cell, increment in zip(cells, increments)
+            }
+            allocations = {}
+            for cell in sell_cells:
+                old_target = self._quantity(cell.buy_price, cell)
+                updated = replace(cell, budget_usdt=cell.budget_usdt + increment_by_id[cell.cell_id])
+                new_target = self._quantity(cell.buy_price, updated)
+                allocations[cell.cell_id] = max(Decimal("0"), new_target - old_target)
+        sell_ids = [cell.cell_id for cell in sell_cells]
+        target_qty = sum(allocations.values(), Decimal("0"))
         if sell_ids and (
             target_qty <= 0
             or target_qty < self.filters.min_qty
             or target_qty * mark < self.filters.min_notional
-            or target_qty / len(sell_ids) < minimum_per_cell
         ):
             message = "aggregate position or per-cell quantity is below exchange minimum"
             if action["operation"] == "topup":
@@ -329,8 +333,22 @@ class FixedGridEngine(TradingEngine):
             raise ValueError(message)
         digest = hashlib.sha1(action["id"].encode("utf-8")).hexdigest()[:18]
         client_order_id = f"fg-{digest}"
-        self.store.plan_capital_action(action["id"], sell_ids, target_qty, client_order_id)
+        self.store.plan_capital_action(
+            action["id"], sell_ids, allocations, target_qty, client_order_id
+        )
         return self.store.get_capital_action(action["id"])
+
+    def _planned_allocations(self, action: dict, quantity: Decimal) -> dict[str, Decimal]:
+        planned = action.get("planned_allocations_json")
+        if planned is None:
+            # Recover actions created before per-cell allocations were persisted.
+            return self._split_quantity(quantity, json.loads(action["sell_cell_ids_json"]))
+        allocations = {
+            cell_id: Decimal(qty) for cell_id, qty in json.loads(planned).items()
+        }
+        if sum(allocations.values(), Decimal("0")) != quantity:
+            raise ValueError("planned cell quantities do not match aggregate fill")
+        return allocations
 
     def _split_quantity(self, quantity: Decimal, cell_ids: list[str]) -> dict[str, Decimal]:
         assert self.filters is not None

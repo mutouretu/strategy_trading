@@ -275,8 +275,15 @@ def render_fixed_grid_create() -> None:
     )
     st.info(
         f"启动时将按当时市价一次性买入全部 {allocation['sell_cell_count']} 个上方卖格"
-        f"对应的约 {allocation['seed_notional_usdt']} U 仓位，再逐格卖出；"
+        f"对应的数量，预计花费约 {float(allocation['estimated_seed_market_buy_usdt']):.2f} U；"
+        f"这些格子的预算上限合计 {allocation['seed_notional_usdt']} U。"
         "下方买格等待价格跌到格线后买入。"
+    )
+    st.caption(
+        "数量按每格预算 ÷ 该格买价计算；完整循环的卖出目标金额理论上约为"
+        "单格预算 × (1 + 等比间距)。受币安数量与价格精度影响，"
+        f"本次各格预计卖出金额为 {float(allocation['minimum_sell_order_notional_usdt']):.2f}–"
+        f"{float(allocation['maximum_sell_order_notional_usdt']):.2f} U。"
     )
     st.caption(
         f"当前账户 maker {float(allocation['maker_fee_rate']) * 100:.4f}% / "

@@ -200,10 +200,12 @@ def fixed_grid_preview_details(
     taker_net_profits = []
     maker_returns = []
     taker_returns = []
+    quantities = {}
     for cell in cells:
         qty = round_down(cell.budget_usdt / cell.buy_price, filters.step_size)
         if qty < filters.min_qty or qty * cell.buy_price < filters.min_notional:
             raise ValueError(f"Cell #{cell.index} is below exchange minimum order size")
+        quantities[cell.cell_id] = qty
         net = qty * (
             cell.sell_price - cell.buy_price
             - cell.buy_price * maker_rate
@@ -224,7 +226,11 @@ def fixed_grid_preview_details(
         taker_returns.append(taker_net / (qty * cell.buy_price))
     sell_cells = [cell for cell in cells if cell.sell_price > mark]
     seed_notional = sum((cell.budget_usdt for cell in sell_cells), Decimal("0"))
-    seed_qty = round_down(seed_notional / mark, filters.step_size)
+    seed_qty = sum((quantities[cell.cell_id] for cell in sell_cells), Decimal("0"))
+    seed_market_buy = seed_qty * mark
+    sell_order_notionals = [
+        quantities[cell.cell_id] * cell.sell_price for cell in cells
+    ]
     deferred_buy = sum(
         filters.percent_price_down > 0 and cell.buy_price < mark * filters.percent_price_down
         for cell in cells if cell not in sell_cells
@@ -236,7 +242,6 @@ def fixed_grid_preview_details(
     if sell_cells and (
         seed_qty <= 0
         or seed_qty * mark < filters.min_notional
-        or seed_qty / len(sell_cells) < filters.min_qty
     ):
         raise ValueError("initial sell-side position is below exchange minimum")
     return {
@@ -245,6 +250,9 @@ def fixed_grid_preview_details(
         "sell_cell_count": len(sell_cells),
         "seed_notional_usdt": str(seed_notional),
         "seed_quantity": str(seed_qty),
+        "estimated_seed_market_buy_usdt": str(seed_market_buy),
+        "minimum_sell_order_notional_usdt": str(min(sell_order_notionals)),
+        "maximum_sell_order_notional_usdt": str(max(sell_order_notionals)),
         "buy_budget_usdt": str(sum((cell.budget_usdt for cell in cells if cell not in sell_cells), Decimal("0"))),
         "inside_range": cells[0].buy_price <= mark <= cells[-1].sell_price,
         "maker_fee_rate": str(maker_rate),
@@ -257,7 +265,7 @@ def fixed_grid_preview_details(
         "deferred_sell_cell_count": deferred_sell,
         "percent_price_up": str(filters.percent_price_up),
         "percent_price_down": str(filters.percent_price_down),
-        "estimated_seed_opening_fee_usdt": str(seed_notional * taker_rate),
+        "estimated_seed_opening_fee_usdt": str(seed_market_buy * taker_rate),
         "seed_cells_below_fee_break_even": sum(
             cell.sell_price <= mark * (Decimal("1") + taker_rate) / (Decimal("1") - maker_rate)
             for cell in sell_cells
@@ -519,28 +527,38 @@ def create_app(
             available = exchange.get_available_balance("USDT")
             if available < data.amount_usdt:
                 raise ValueError("available USDT is below the top-up amount")
-            if sell_count:
-                filters = exchange.get_symbol_filters(config.symbol)
-                mark = exchange.get_mark_price(config.symbol)
-                quantity = round_down(sell_amount / mark, filters.step_size)
-                if (
-                    quantity <= 0
-                    or quantity < filters.min_qty
-                    or quantity * mark < filters.min_notional
-                    or quantity / sell_count < filters.step_size
-                ):
-                    raise ValueError("top-up sell-side amount is below exchange minimum")
+            filters = exchange.get_symbol_filters(config.symbol)
+            mark = exchange.get_mark_price(config.symbol)
+            quantity = sum(
+                (
+                    max(
+                        Decimal("0"),
+                        round_down((cell.budget_usdt + increment) / cell.buy_price, filters.step_size)
+                        - round_down(cell.budget_usdt / cell.buy_price, filters.step_size),
+                    )
+                    for cell, increment in zip(cells, increments) if cell.open_qty > 0
+                ),
+                Decimal("0"),
+            )
+            if sell_count and (
+                quantity <= 0
+                or quantity < filters.min_qty
+                or quantity * mark < filters.min_notional
+            ):
+                raise ValueError("top-up sell-side amount is below exchange minimum")
+            estimated_buy = quantity * mark
             return {
                 "amount_usdt": str(data.amount_usdt),
                 "per_cell_usdt": str(increments[0]),
                 "sell_cell_ids": [cell.cell_id for cell in cells if cell.open_qty > 0],
                 "sell_cell_count": sell_count,
                 "buy_cell_count": len(cells) - sell_count,
-                "aggregate_buy_usdt": str(sell_amount),
+                "aggregate_buy_usdt": str(estimated_buy),
+                "sell_budget_increase_usdt": str(sell_amount),
                 "buy_order_budget_increase_usdt": str(data.amount_usdt - sell_amount),
                 "available_usdt": str(available),
                 "estimated_opening_fee_usdt": str(
-                    sell_amount * exchange.get_commission_rates(config.symbol)[1]
+                    estimated_buy * exchange.get_commission_rates(config.symbol)[1]
                 ),
             }
         except KeyError as exc:

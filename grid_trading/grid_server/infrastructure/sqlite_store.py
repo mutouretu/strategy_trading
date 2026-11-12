@@ -178,6 +178,7 @@ class SQLiteStore:
                     status TEXT NOT NULL CHECK(status IN ('requested', 'planned', 'submitted', 'applied', 'rejected', 'manual_review')),
                     expected_sell_cell_ids_json TEXT,
                     sell_cell_ids_json TEXT NOT NULL DEFAULT '[]',
+                    planned_allocations_json TEXT,
                     target_qty TEXT NOT NULL DEFAULT '0',
                     client_order_id TEXT NOT NULL DEFAULT '',
                     order_id INTEGER,
@@ -302,6 +303,10 @@ class SQLiteStore:
             if "expected_sell_cell_ids_json" not in action_columns:
                 conn.execute(
                     "ALTER TABLE capital_actions ADD COLUMN expected_sell_cell_ids_json TEXT"
+                )
+            if "planned_allocations_json" not in action_columns:
+                conn.execute(
+                    "ALTER TABLE capital_actions ADD COLUMN planned_allocations_json TEXT"
                 )
 
     @staticmethod
@@ -823,17 +828,24 @@ class SQLiteStore:
         self,
         action_id: str,
         sell_cell_ids: list[str],
+        allocations: dict[str, Decimal],
         target_qty: Decimal,
         client_order_id: str,
     ) -> None:
+        if set(allocations) != set(sell_cell_ids) or sum(allocations.values(), Decimal("0")) != target_qty:
+            raise ValueError("planned capital allocation does not match aggregate quantity")
         with self.connection() as conn:
             result = conn.execute(
                 """
                 UPDATE capital_actions SET status='planned', sell_cell_ids_json=?,
-                    target_qty=?, client_order_id=?, updated_at=?
+                    planned_allocations_json=?, target_qty=?, client_order_id=?, updated_at=?
                 WHERE id=? AND status='requested'
                 """,
-                (json.dumps(sell_cell_ids), str(target_qty), client_order_id, utc_now(), action_id),
+                (
+                    json.dumps(sell_cell_ids),
+                    json.dumps({cell_id: str(qty) for cell_id, qty in allocations.items()}),
+                    str(target_qty), client_order_id, utc_now(), action_id,
+                ),
             )
             if result.rowcount != 1:
                 raise ValueError("capital action is not requested")

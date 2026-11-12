@@ -15,7 +15,7 @@ from grid_server.domain import (
     CellStage, FuturesMarket, GridKind, Mode, OrderSide, OrderSnapshot,
     OrderStatus, StrategyConfig,
 )
-from grid_server.domain.grid import build_cells, fixed_cell_budgets, fixed_grid_ratio
+from grid_server.domain.grid import build_cells, fixed_cell_budgets, fixed_grid_ratio, round_down
 from grid_server.infrastructure.binance import BinanceFuturesExchange
 from grid_server.interfaces.api import create_app
 from grid_server.ports.exchange import ExchangeExecutionUnknownError
@@ -72,20 +72,65 @@ class FixedEqualUGridTests(unittest.TestCase):
         engine = self.make_engine()
         engine.tick()
         cells = self.store.list_cells(engine.strategy_id)
+        expected = [
+            round_down(cell.budget_usdt / cell.buy_price, self.exchange.filters.step_size)
+            for cell in cells[2:]
+        ]
         market_buys = [order for order in self.exchange.placed if order["price"] == Decimal("100")]
         self.assertEqual(len(market_buys), 1)
-        self.assertEqual(market_buys[0]["quantity"], Decimal("2.000"))
+        self.assertEqual(market_buys[0]["quantity"], sum(expected))
         self.assertEqual([cell.stage for cell in cells], [
             CellStage.PENDING_ENTRY, CellStage.PENDING_ENTRY,
             CellStage.PENDING_EXIT, CellStage.PENDING_EXIT,
         ])
         self.assertEqual([cell.open_qty for cell in cells], [
-            Decimal("0"), Decimal("0"), Decimal("1"), Decimal("1")
+            Decimal("0"), Decimal("0"), *expected
         ])
+        self.assertNotEqual(expected[0], expected[1])
+        for cell in cells[2:]:
+            target = cell.budget_usdt * (Decimal("1") + engine._config().grid_ratio)
+            self.assertLessEqual(target - cell.open_qty * cell.sell_price,
+                                 self.exchange.filters.step_size * cell.sell_price)
         self.assertEqual(len([order for order in self.exchange.placed if order["side"].value == "SELL"]), 2)
         self.assertTrue(all(order["post_only"] for order in self.exchange.placed[1:]))
         engine.tick()
         self.assertEqual(self.exchange.calls["place_market_order"], 1)
+
+    def test_fifty_usdt_cells_seed_variable_qty_for_equal_sell_notional(self) -> None:
+        self.exchange.mark = Decimal("62.54")
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            step_size=Decimal("0.01"), min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"), contract_type="TRADIFI_PERPETUAL",
+            percent_price_up=Decimal("1.03"), percent_price_down=Decimal("0.97"),
+        )
+        service = GridService(self.store, SimpleNamespace())
+        config = service.create_fixed(
+            "SOXLUSDT", Decimal("51.22"), Decimal("76.34"), 80,
+            Decimal("4000"), Decimal("0.01"),
+        )
+        self.store.mark_started(config.strategy_id)
+        engine = FixedGridEngine(self.store, self.exchange, config.strategy_id)
+        engine.tick()
+        cells = self.store.list_cells(config.strategy_id)
+        seeded = [cell for cell in cells if cell.sell_price > self.exchange.mark]
+        target_sell = Decimal("50") * (Decimal("1") + config.grid_ratio)
+        self.assertEqual(self.exchange.calls["place_market_order"], 1)
+        self.assertGreater(len({cell.open_qty for cell in seeded}), 1)
+        self.assertTrue(all(
+            cell.open_qty == round_down(Decimal("50") / cell.buy_price, Decimal("0.01"))
+            for cell in seeded
+        ))
+        self.assertTrue(all(
+            abs(cell.open_qty * cell.sell_price - target_sell) < Decimal("0.80")
+            for cell in seeded
+        ))
+        action = self.store.get_capital_action(f"seed:{config.strategy_id}")
+        self.assertIsNotNone(action["planned_allocations_json"])
+        self.assertEqual(
+            Decimal(action["executed_qty"]),
+            sum((cell.open_qty for cell in seeded), Decimal("0")),
+        )
 
     def test_tradifi_price_band_defers_far_orders_then_catches_up_crossed_entry(self) -> None:
         self.exchange.filters = replace(
@@ -148,7 +193,9 @@ class FixedEqualUGridTests(unittest.TestCase):
         cells = self.store.list_cells(engine.strategy_id)
         self.assertEqual([cell.budget_usdt for cell in cells], [Decimal("110")] * 4)
         self.assertEqual([cell.open_qty for cell in cells], [
-            Decimal("0"), Decimal("0"), Decimal("1.1"), Decimal("1.1")
+            Decimal("0"), Decimal("0"),
+            *[round_down(Decimal("110") / cell.buy_price, self.exchange.filters.step_size)
+              for cell in cells[2:]],
         ])
         self.assertEqual(self.store.get_strategy(engine.strategy_id).grid_budget_usdt, Decimal("440"))
         self.assertEqual(self.exchange.calls["place_market_order"], 2)
@@ -184,8 +231,37 @@ class FixedEqualUGridTests(unittest.TestCase):
         self.store.create_capital_action("topup-after-sell", engine.strategy_id, "topup", Decimal("40"))
         engine.tick()
         action = self.store.get_capital_action("topup-after-sell")
-        self.assertEqual(action["executed_qty"], "0.100")
+        remaining = self.store.list_cells(engine.strategy_id)[3]
+        expected_increment = (
+            round_down(Decimal("110") / remaining.buy_price, self.exchange.filters.step_size)
+            - round_down(Decimal("100") / remaining.buy_price, self.exchange.filters.step_size)
+        )
+        self.assertEqual(Decimal(action["executed_qty"]), expected_increment)
         self.assertEqual(self.store.list_cells(engine.strategy_id)[2].stage, CellStage.PENDING_ENTRY)
+
+    def test_topup_does_not_rebuy_quantity_already_sold_from_a_cell(self) -> None:
+        engine = self.make_engine()
+        engine.tick()
+        cells = self.store.list_cells(engine.strategy_id)
+        first_sell = cells[2]
+        self.exchange.partial_fill(first_sell.exit_order_id, Decimal("0.200"))
+        engine.tick()
+        self.store.create_capital_action("topup-after-partial", engine.strategy_id, "topup", Decimal("40"))
+        engine.tick()
+        action = self.store.get_capital_action("topup-after-partial")
+        expected_delta = sum(
+            (
+                round_down(Decimal("110") / cell.buy_price, self.exchange.filters.step_size)
+                - round_down(Decimal("100") / cell.buy_price, self.exchange.filters.step_size)
+                for cell in cells[2:]
+            ),
+            Decimal("0"),
+        )
+        self.assertEqual(Decimal(action["executed_qty"]), expected_delta)
+        updated = self.store.list_cells(engine.strategy_id)
+        self.assertEqual(updated[2].open_qty, cells[2].open_qty - Decimal("0.200") +
+                         round_down(Decimal("110") / cells[2].buy_price, self.exchange.filters.step_size) -
+                         round_down(Decimal("100") / cells[2].buy_price, self.exchange.filters.step_size))
 
     def test_topup_rejects_stale_sell_cell_preview_without_buying(self) -> None:
         engine = self.make_engine()
@@ -286,7 +362,7 @@ class FixedEqualUGridTests(unittest.TestCase):
         self.assertEqual(self.exchange.calls["place_market_order"], 1)
         self.assertEqual(
             sum((cell.open_qty for cell in self.store.list_cells(engine.strategy_id)), Decimal("0")),
-            Decimal("2"),
+            Decimal("1.942"),
         )
 
     def test_position_coordinator_accepts_virtual_far_exits(self) -> None:
@@ -305,7 +381,7 @@ class FixedEqualUGridTests(unittest.TestCase):
         pool = self.store.get_position_pool("SOLUSDT", "LONG", FuturesMarket.USDM)
         self.assertIsNotNone(pool)
         self.assertNotEqual(pool["status"], "manual_review")
-        self.assertEqual(pool["actual_qty"], "2.000")
+        self.assertEqual(Decimal(pool["actual_qty"]), Decimal("1.942"))
         self.assertTrue(all(
             cell.stage != CellStage.MANUAL_REVIEW
             for cell in self.store.list_cells(engine.strategy_id)
