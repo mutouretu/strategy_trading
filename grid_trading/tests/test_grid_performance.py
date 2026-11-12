@@ -55,10 +55,12 @@ class GridPerformanceTests(unittest.TestCase):
         self.store.save_cell(self.cell)
 
     def _trade(self, trade_id: int, order_id: int, pnl: str, fee: str,
-               asset: str = "USDT", side: str = "SELL", qty: str = "1") -> dict:
+               asset: str = "USDT", side: str = "SELL", qty: str = "1",
+               price: str | None = None) -> dict:
         return {
             "id": trade_id, "orderId": order_id, "side": side,
-            "qty": qty, "price": "100", "realizedPnl": pnl,
+            "qty": qty, "price": price or str(self.cell.buy_price if side == "BUY" else self.cell.sell_price),
+            "realizedPnl": pnl,
             "commission": fee, "commissionAsset": asset,
             "time": int((self.started + timedelta(minutes=trade_id)).timestamp() * 1000),
         }
@@ -117,6 +119,21 @@ class GridPerformanceTests(unittest.TestCase):
             now=self.started + timedelta(days=1),
         )
         self.assertEqual(summary["initial_entry_price"], "62.93")
+
+    def test_adverse_catchup_fill_is_a_grid_loss_not_theoretical_line_profit(self) -> None:
+        self.store.save_strategy_trades(self.config.strategy_id, [
+            self._trade(1, 101, "0", "0", side="BUY", qty="0.79", price="62.82"),
+            self._trade(2, 102, "0.20894230", "0.01984480", qty="0.79", price="62.80"),
+        ])
+
+        summary = strategy_performance(
+            self.store, self.config, coverage_complete=True,
+            now=self.started + timedelta(days=1),
+        )
+
+        self.assertEqual(Decimal(summary["gross_grid_profit_usdt"]), Decimal("-0.0158"))
+        self.assertEqual(Decimal(summary["net_grid_profit_usdt"]), Decimal("-0.03564480"))
+        self.assertEqual(Decimal(summary["gross_realized_pnl_usdt"]), Decimal("0.20894230"))
 
     def test_other_fee_asset_does_not_claim_net_profit(self) -> None:
         self.store.save_strategy_trades(

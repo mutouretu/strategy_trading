@@ -50,12 +50,16 @@ class FixedGridEngine(TradingEngine):
         if (side == OrderSide.BUY and mark <= price) or (
             side == OrderSide.SELL and mark >= price
         ):
-            order_id = self.exchange.place_market_order(
-                symbol, side, position_side, quantity, client_order_id
+            # Mark price can cross a grid line while the executable book has not.
+            # A GTC limit catches up immediately when possible and never trades
+            # through the cell's target price when mark and book diverge.
+            order_id = self.exchange.place_limit_order(
+                symbol, side, position_side, quantity, price, client_order_id,
+                post_only=False,
             )
             self.store.append_event(
                 self.strategy_id,
-                "GRID_CATCHUP_MARKET_ORDER",
+                "GRID_CATCHUP_LIMIT_ORDER",
                 {
                     "order_id": order_id,
                     "client_order_id": client_order_id,
@@ -121,8 +125,8 @@ class FixedGridEngine(TradingEngine):
     def _recovery_mismatches(self, cell: GridCell, role: str, order) -> list[str]:
         # A top-up changes the desired entry size; a still-open old order is
         # resized after restart instead of being treated as an alien order.
-        # A crossed virtual grid level is caught up with a market order; Binance
-        # reports its limit price as zero when recovering by client ID.
+        # Historical market catch-up orders report a zero limit price when
+        # recovering by client ID. New catch-up orders use price-protected limits.
         return [
             mismatch
             for mismatch in super()._recovery_mismatches(cell, role, order)

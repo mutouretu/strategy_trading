@@ -146,9 +146,10 @@ def strategy_performance(
         (Decimal(trade["commission"]) for trade in trades if trade["commission_asset"] == "USDT"),
         Decimal("0"),
     )
-    # Use the fixed cell boundaries as the grid component. Binance realizedPnl
-    # uses the aggregate position's average cost and therefore includes trend PnL.
-    by_cell: dict[str, list[tuple[int, int, str, Decimal, Decimal]]] = defaultdict(list)
+    # Match each cell's actual fills. Aggregate seed/top-up buys use the cell's
+    # grid buy line as their virtual basis so their initial trend PnL stays out.
+    # Binance realizedPnl uses the whole position's average cost instead.
+    by_cell: dict[str, list[tuple[int, int, str, Decimal, Decimal, Decimal]]] = defaultdict(list)
     accounting_error: str | None = None
     for action in actions:
         if action["status"] != "applied" or action["order_id"] is None:
@@ -172,9 +173,12 @@ def strategy_performance(
         for cell_id, quantity in allocations.items():
             qty = Decimal(str(quantity))
             if qty > 0:
+                if cell_id not in levels:
+                    accounting_error = f"grid level is missing for cell {cell_id}"
+                    continue
                 by_cell[cell_id].append((
                     last_fill["traded_at_ms"], last_fill["trade_id"],
-                    "BUY", qty, total_fee * qty / executed,
+                    "BUY", qty, total_fee * qty / executed, levels[cell_id][0],
                 ))
 
     for trade in trades:
@@ -185,6 +189,7 @@ def strategy_performance(
             trade["traded_at_ms"], trade["trade_id"], trade["side"],
             Decimal(trade["quantity"]),
             Decimal(trade["commission"]) if trade["commission_asset"] == "USDT" else Decimal("0"),
+            Decimal(trade["price"]),
         ))
 
     grid_gross = Decimal("0")
@@ -195,21 +200,22 @@ def strategy_performance(
         if cell_id not in levels:
             accounting_error = f"grid level is missing for cell {cell_id}"
             continue
-        buy_price, sell_price = levels[cell_id]
         open_lots: deque[list[Decimal]] = deque()
-        for _, _, side, qty, fee in sorted(events, key=lambda event: (event[0], event[1])):
+        for _, _, side, qty, fee, fill_price in sorted(events, key=lambda event: (event[0], event[1])):
             if side == "BUY":
-                open_lots.append([qty, fee])
+                open_lots.append([qty, fee, fill_price])
                 continue
             if side != "SELL":
                 accounting_error = f"unexpected trade side {side}"
                 continue
             remaining = qty
             matched_fee = Decimal("0")
+            matched_buy_cost = Decimal("0")
             while remaining > 0 and open_lots:
                 lot = open_lots[0]
                 taken = min(remaining, lot[0])
                 taken_fee = lot[1] * taken / lot[0]
+                matched_buy_cost += taken * lot[2]
                 lot[0] -= taken
                 lot[1] -= taken_fee
                 remaining -= taken
@@ -220,7 +226,7 @@ def strategy_performance(
                 accounting_error = f"buy fill is missing for cell {cell_id}"
                 continue
             sold_quantity += qty
-            gross = qty * (sell_price - buy_price)
+            gross = qty * fill_price - matched_buy_cost
             fees = matched_fee + fee
             grid_gross += gross
             grid_fees += fees

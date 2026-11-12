@@ -132,7 +132,7 @@ class FixedEqualUGridTests(unittest.TestCase):
             sum((cell.open_qty for cell in seeded), Decimal("0")),
         )
 
-    def test_tradifi_price_band_defers_far_orders_then_catches_up_crossed_entry(self) -> None:
+    def test_tradifi_price_band_defers_far_orders_then_places_protected_catchup(self) -> None:
         self.exchange.filters = replace(
             self.exchange.filters,
             contract_type="TRADIFI_PERPETUAL",
@@ -161,14 +161,29 @@ class FixedEqualUGridTests(unittest.TestCase):
         self.exchange.mark = Decimal("88.50")
         engine.tick()
         cells = self.store.list_cells(engine.strategy_id)
-        self.assertGreater(cells[1].open_qty, 0)
-        self.assertEqual(self.exchange.calls["place_market_order"], 2)
+        self.assertEqual(cells[1].open_qty, 0)
+        self.assertEqual(self.exchange.calls["place_market_order"], 1)
+        catchup = self.exchange.orders[cells[1].entry_order_id]
+        self.assertEqual(catchup.price, cells[1].buy_price)
+        self.assertFalse(next(order for order in self.exchange.placed if order["order_id"] == catchup.order_id)["post_only"])
         self.assertTrue(any(
-            event["event_type"] == "GRID_CATCHUP_MARKET_ORDER"
+            event["event_type"] == "GRID_CATCHUP_LIMIT_ORDER"
             for event in self.store.list_events(engine.strategy_id)
         ))
 
-    def test_recovered_market_catchup_order_allows_zero_limit_price(self) -> None:
+    def test_crossed_sell_line_never_sends_unprotected_market_order(self) -> None:
+        engine = self.make_engine()
+        engine.initialize()
+        self.exchange.mark = Decimal("63.26")
+        order_id = engine._submit_limit_order(
+            "SOLUSDT", OrderSide.SELL, "LONG", Decimal("0.79"),
+            Decimal("63.13"), "catchup-sell",
+        )
+        self.assertEqual(self.exchange.calls.get("place_market_order", 0), 0)
+        self.assertEqual(self.exchange.orders[order_id].price, Decimal("63.13"))
+        self.assertFalse(self.exchange.placed[-1]["post_only"])
+
+    def test_recovered_historical_market_catchup_order_allows_zero_limit_price(self) -> None:
         engine = self.make_engine()
         engine.initialize()
         cell = self.store.list_cells(engine.strategy_id)[0]

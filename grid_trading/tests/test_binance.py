@@ -106,6 +106,20 @@ class BinanceFuturesExchangeTests(unittest.TestCase):
         self.assertEqual(order_id, 123)
         self.assertEqual(exchange._request.call_count, 2)
 
+    def test_price_protected_catchup_uses_gtc_limit(self):
+        exchange = BinanceFuturesExchange("key", "secret")
+        exchange._request = Mock(return_value=self.order_payload())  # type: ignore[method-assign]
+
+        exchange.place_limit_order(
+            "SOXLUSDT", OrderSide.SELL, "LONG", Decimal("0.79"),
+            Decimal("63.13"), "catchup-sell", post_only=False,
+        )
+
+        params = exchange._request.call_args.args[2]
+        self.assertEqual(params["type"], "LIMIT")
+        self.assertEqual(params["timeInForce"], "GTC")
+        self.assertEqual(params["price"], "63.13")
+
     def test_cancel_timeout_accepts_later_canceled_status(self):
         exchange = BinanceFuturesExchange(
             "key",
