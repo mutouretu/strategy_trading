@@ -71,6 +71,12 @@ class GridApiClient:
     def cells(self, strategy_id: str) -> list[dict]:
         return self._request("GET", f"/strategies/{strategy_id}/cells")
 
+    def performance(self, strategy_id: str) -> dict:
+        return self._request("GET", f"/strategies/{strategy_id}/performance")
+
+    def position(self, strategy_id: str) -> dict:
+        return self._request("GET", f"/strategies/{strategy_id}/position")
+
     def cell_actions(self, strategy_id: str) -> list[dict]:
         return self._request("GET", f"/strategies/{strategy_id}/cell-actions")
 

@@ -318,6 +318,7 @@ class StreamlitAbnormalTests(unittest.TestCase):
             ["成交:#102 · 5,412 AKE", "挂单:#101 · 5,466 AKE"],
         )
         self.assertEqual(list(frame["卖出"]), ["挂单:#202 · 1,818 AKE", ""])
+        self.assertEqual(list(frame["交易次数"]), [7, 0])
 
     def test_short_detail_puts_entry_quantity_under_sell_and_exit_under_buy(self):
         item = strategy_payload(symbol="HOMEUSDT", mode="short")

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import inspect
+import threading
+import time
 from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Literal
@@ -20,6 +22,7 @@ from ..shared.config import (
 from ..domain import FuturesMarket, GridKind, Mode, StrategyConfig
 from ..domain.grid import fixed_cell_budgets, round_down
 from ..application.service import GridService
+from ..application.grid_performance import strategy_performance, sync_strategy_trades
 from ..infrastructure.sqlite_store import SQLiteStore
 from ..runtime.supervisor import StrategySupervisor
 
@@ -317,6 +320,8 @@ def create_app(
     app.state.service = service
     app.state.exchange_factory = exchange_factory
     app.state.exchange_for = exchange_for
+    performance_cache: dict[str, tuple[float, dict]] = {}
+    performance_lock = threading.Lock()
 
     @app.get("/health")
     def health() -> dict:
@@ -326,6 +331,50 @@ def create_app(
     @app.get("/strategies")
     def list_strategies(include_archived: bool = False) -> list[dict]:
         return [strategy_payload(config, store) for config in store.list_strategies(include_archived)]
+
+    @app.get("/strategies/{strategy_id}/performance")
+    def grid_performance(strategy_id: str) -> dict:
+        try:
+            config = store.get_strategy(strategy_id)
+            if config is None:
+                raise KeyError(strategy_id)
+            if config.grid_kind != GridKind.FIXED_EQUAL_USDT:
+                raise ValueError("realized performance currently supports fixed equal-USDT grids")
+            with performance_lock:
+                cached = performance_cache.get(strategy_id)
+                if cached is not None and time.monotonic() - cached[0] < 15:
+                    return cached[1]
+                exchange = exchange_for(config.market_type)
+                coverage_complete = sync_strategy_trades(store, exchange, config)
+                result = strategy_performance(
+                    store, config, coverage_complete=coverage_complete
+                )
+                entry_price = exchange.get_position_entry_price(config.symbol)
+                result["position_entry_price"] = (
+                    None if entry_price is None else str(entry_price)
+                )
+                performance_cache[strategy_id] = (time.monotonic(), result)
+                return result
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="strategy not found") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/strategies/{strategy_id}/position")
+    def strategy_position(strategy_id: str) -> dict:
+        try:
+            config = store.get_strategy(strategy_id)
+            if config is None:
+                raise KeyError(strategy_id)
+            side = "LONG" if config.mode == Mode.LONG else "SHORT"
+            entry_price = exchange_for(config.market_type).get_position_entry_price(
+                config.symbol, side
+            )
+            return {"entry_price": None if entry_price is None else str(entry_price)}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="strategy not found") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.get("/position-pools")
     def list_position_pools() -> list[dict]:

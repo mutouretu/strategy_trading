@@ -80,11 +80,12 @@ def apply_styles() -> None:
         div[data-testid="stMetricLabel"] { font-size: .72rem !important; }
         div[data-testid="stMetricValue"] { font-size: 1.05rem !important; }
         div[data-testid="stMetric"] { padding-top: .15rem; padding-bottom: .15rem; }
-        .grid-summary { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 1rem; margin: .8rem 0 1.15rem; }
+        .grid-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1.2rem; margin: .8rem 0 1.15rem; }
         .grid-summary .item { min-width: 0; }
         .grid-summary .label { font-size: .72rem; opacity: .72; margin-bottom: .22rem; }
         .grid-summary .value { font-size: 1.05rem; font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
-        @media (max-width: 900px) { .grid-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+        @media (max-width: 900px) { .grid-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        @media (max-width: 600px) { .grid-summary { grid-template-columns: 1fr; } }
         </style>
         """,
         unsafe_allow_html=True,
@@ -804,9 +805,9 @@ def build_cell_rows(grid: dict, cells: list[dict]) -> list[dict]:
                 "买入价": format_price(cell["buy_price"], precision),
                 "卖出价": format_price(cell["sell_price"], precision),
                 "当前阶段": STAGE_LABELS.get(stage, stage),
+                "交易次数": int(cell.get("cycle_count", 0)),
                 "买入": buy_order,
                 "卖出": sell_order,
-                "成交次数": int(cell.get("cycle_count", 0)),
                 **fixed_amounts,
             }
         )
@@ -1000,28 +1001,45 @@ def _render_detail_live(strategy_id: str) -> None:
         return
     direction_color = BINANCE_GREEN if grid["mode"] == "做多" else BINANCE_RED
     precision = grid["price_precision"]
+    performance = None
+    performance_error = None
+    entry_price = None
+    try:
+        if grid["grid_kind"] == "fixed_equal_usdt" and grid["has_started"]:
+            performance = backend().performance(grid["id"])
+            entry_price = performance.get("position_entry_price")
+        else:
+            entry_price = backend().position(grid["id"]).get("entry_price")
+    except GridApiError as exc:
+        performance_error = str(exc)
+    per_cell_label = (
+        f"{format_quantity(grid['order_amount'])} {grid['order_unit']}/格"
+        if grid["market_type"] == "coinm"
+        else f"{format_quantity(grid['order_amount'])} U/格"
+    )
+    grid_configuration = (
+        f"{format_price(grid['lower_price'], precision)}–"
+        f"{format_price(grid['upper_price'], precision)} · "
+        f"{grid['grid_count']} 格 · {grid['grid_ratio']:.2f}% · {per_cell_label}"
+    )
+    budget_runtime = (
+        f"{format_quantity(grid['grid_budget_usdt'])} U · {grid['runtime']}"
+        if grid["grid_kind"] == "fixed_equal_usdt"
+        else grid["runtime"]
+    )
     summary_items = [
-        ("合约", grid["market_label"]),
-        ("方向", grid["mode"]),
-        ("当前价格", format_price(grid["current_price"], precision)),
+        ("合约 / 方向 / 杠杆", f"{grid['market_label']} · {grid['mode']} {grid['leverage']}×"),
+        ("网格范围 / 总数 / 间距 / 单格金额", grid_configuration),
+        ("预算 / 运行", budget_runtime),
         (
-            "网格范围",
-            f"{format_price(grid['lower_price'], precision)} – "
-            f"{format_price(grid['upper_price'], precision)}",
+            "建仓价 / 当前价",
+            f"{format_price(entry_price, precision) if entry_price is not None else '—'} / "
+            f"{format_price(grid['current_price'], precision)}",
         ),
-        ("间距", f"{grid['grid_ratio']:.2f}%"),
-        (
-            "单格币数量" if grid["market_type"] == "coinm" else "单格名义金额",
-            f"{format_quantity(grid['order_amount'])} {grid['order_unit']}",
-        ),
-        ("网格总数", str(grid["grid_count"])),
-        ("杠杆", f"{grid['leverage']}×"),
-        ("运行时间", grid["runtime"]),
     ]
-    if grid["grid_kind"] == "fixed_equal_usdt":
-        summary_items.append(("网格交易预算", f"{format_quantity(grid['grid_budget_usdt'])} U"))
     summary_html = "".join(
-        f"<div class='item'><div class='label'>{label}</div><div class='value'>{value}</div></div>"
+        f"<div class='item'><div class='label'>{escape(label)}</div>"
+        f"<div class='value'>{escape(value)}</div></div>"
         for label, value in summary_items
     )
     st.markdown(
@@ -1030,6 +1048,24 @@ def _render_detail_live(strategy_id: str) -> None:
     )
     if grid["grid_kind"] == "fixed_equal_usdt":
         st.caption("停止策略只暂停调度；已有挂单和仓位不会自动撤销或平仓。")
+        if performance is not None and performance["coverage_complete"] and performance["net_grid_profit_usdt"] is not None:
+            metrics = st.columns(3)
+            metrics[0].metric("网格盈利", f"{Decimal(performance['net_grid_profit_usdt']):,.4f} U")
+            metrics[1].metric("网格收益率", f"{Decimal(performance['grid_profit_pct']):,.3f}%")
+            annualized = performance["simple_annualized_pct"]
+            metrics[2].metric(
+                "简单年化", "—" if annualized is None else f"{Decimal(annualized):,.2f}%"
+            )
+            st.caption(
+                f"已完成 {performance['completed_cycles']} 轮；"
+                "网格盈利 = 本策略订单已实现盈亏 − USDT 手续费，未计资金费和浮盈亏。"
+                "建仓价为交易所当前持仓均价；收益率按当前网格总预算计算；"
+                "年化按运行时长线性折算，短期数据波动较大。"
+            )
+        elif performance is not None:
+            st.warning("成交历史尚未完整同步，或手续费币种不是 USDT；暂不显示收益率和年化。")
+        elif performance_error is not None:
+            st.warning(f"盈利数据暂不可用：{performance_error}")
 
     try:
         cells = backend().cells(grid["id"])
@@ -1108,9 +1144,9 @@ def _render_detail_live(strategy_id: str) -> None:
             "买入价": st.column_config.TextColumn("买入价", width="medium"),
             "卖出价": st.column_config.TextColumn("卖出价", width="medium"),
             "当前阶段": st.column_config.TextColumn("当前阶段", width="medium"),
+            "交易次数": st.column_config.NumberColumn("交易次数", width="small", format="%d"),
             "买入": st.column_config.TextColumn("买入", width="medium"),
             "卖出": st.column_config.TextColumn("卖出", width="medium"),
-            "成交次数": st.column_config.NumberColumn("成交次数", width="small", format="%d"),
             **({
                 "预算 (U)": st.column_config.TextColumn("预算 (U)", width="medium"),
                 "配对买入金额 (U)": st.column_config.TextColumn("配对买入金额 (U)", width="medium"),
@@ -1124,6 +1160,7 @@ def _render_detail_live(strategy_id: str) -> None:
             "同一行的买卖金额按同一数量配对计算；已持仓格的配对买入金额是卖出后"
             "在该格买价重挂的金额，首次建仓按启动时市价。"
             "实际金额受交易所价格和数量精度影响；"
+            "交易次数按该格完整卖出一轮计 1 次；"
             "区间固定，超出边界时不移动网格。"
         )
     else:

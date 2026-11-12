@@ -221,6 +221,30 @@ class BinanceFuturesExchange:
             Decimal(str(data["takerCommissionRate"])),
         )
 
+    def get_user_trades(
+        self,
+        symbol: str,
+        *,
+        start_time_ms: int | None = None,
+        end_time_ms: int | None = None,
+        from_id: int | None = None,
+        limit: int = 1000,
+    ) -> list[dict]:
+        if self.market_type != FuturesMarket.USDM:
+            raise ValueError("trade history currently supports USD-M only")
+        if from_id is not None and (start_time_ms is not None or end_time_ms is not None):
+            raise ValueError("fromId cannot be combined with startTime or endTime")
+        if not 1 <= limit <= 1000:
+            raise ValueError("trade history limit must be between 1 and 1000")
+        params = {"symbol": symbol, "limit": str(limit)}
+        if start_time_ms is not None:
+            params["startTime"] = str(start_time_ms)
+        if end_time_ms is not None:
+            params["endTime"] = str(end_time_ms)
+        if from_id is not None:
+            params["fromId"] = str(from_id)
+        return self._request("GET", self._path("userTrades"), params, signed=True)
+
     def get_order(self, symbol: str, order_id: int) -> OrderSnapshot:
         return self._query_order(
             {"symbol": symbol, "orderId": str(order_id)},
@@ -288,6 +312,31 @@ class BinanceFuturesExchange:
             for item in data
             if Decimal(str(item.get("positionAmt", "0"))) != 0
         ]
+
+    def get_position_entry_price(self, symbol: str, position_side: str = "LONG") -> Decimal | None:
+        version = "v1" if self.market_type == FuturesMarket.COINM else "v3"
+        data = self._request(
+            "GET", self._path("positionRisk", version=version),
+            {"symbol": symbol}, signed=True,
+        )
+        row = next(
+            (
+                item for item in data
+                if (
+                    item.get("positionSide") == position_side
+                    and Decimal(str(item.get("positionAmt", "0"))) != 0
+                ) or (
+                    item.get("positionSide") == "BOTH"
+                    and (
+                        Decimal(str(item.get("positionAmt", "0"))) > 0
+                        if position_side == "LONG" else
+                        Decimal(str(item.get("positionAmt", "0"))) < 0
+                    )
+                )
+            ),
+            None,
+        )
+        return None if row is None else Decimal(str(row.get("entryPrice", "0")))
 
     def cancel_order(self, symbol: str, order_id: int) -> OrderSnapshot:
         try:

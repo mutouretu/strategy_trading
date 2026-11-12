@@ -123,6 +123,31 @@ class SQLiteStore:
                 CREATE INDEX IF NOT EXISTS idx_events_strategy_id
                 ON events(strategy_id, id);
 
+                CREATE TABLE IF NOT EXISTS strategy_trade_fills (
+                    strategy_id TEXT NOT NULL,
+                    trade_id INTEGER NOT NULL,
+                    order_id INTEGER NOT NULL,
+                    side TEXT NOT NULL,
+                    quantity TEXT NOT NULL,
+                    price TEXT NOT NULL,
+                    realized_pnl TEXT NOT NULL,
+                    commission TEXT NOT NULL,
+                    commission_asset TEXT NOT NULL,
+                    traded_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY(strategy_id, trade_id),
+                    FOREIGN KEY(strategy_id) REFERENCES strategies(strategy_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_strategy_trade_fills_order
+                ON strategy_trade_fills(strategy_id, order_id);
+
+                CREATE TABLE IF NOT EXISTS strategy_trade_sync (
+                    strategy_id TEXT PRIMARY KEY,
+                    history_complete INTEGER NOT NULL,
+                    scanned_through_ms INTEGER NOT NULL,
+                    FOREIGN KEY(strategy_id) REFERENCES strategies(strategy_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS runtime (
                     strategy_id TEXT PRIMARY KEY,
                     run_id TEXT,
@@ -958,6 +983,75 @@ class SQLiteStore:
             }
             for row in rows
         ]
+
+    def get_first_started_at(self, strategy_id: str) -> str | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT first_started_at FROM strategies WHERE strategy_id=?",
+                (strategy_id,),
+            ).fetchone()
+        return None if row is None else row["first_started_at"]
+
+    def get_strategy_trade_sync(self, strategy_id: str) -> dict | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT history_complete, scanned_through_ms FROM strategy_trade_sync WHERE strategy_id=?",
+                (strategy_id,),
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def save_strategy_trade_sync(
+        self, strategy_id: str, history_complete: bool, scanned_through_ms: int
+    ) -> None:
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO strategy_trade_sync(strategy_id, history_complete, scanned_through_ms)
+                VALUES (?, ?, ?)
+                ON CONFLICT(strategy_id) DO UPDATE SET
+                    history_complete=excluded.history_complete,
+                    scanned_through_ms=excluded.scanned_through_ms
+                """,
+                (strategy_id, int(history_complete), scanned_through_ms),
+            )
+
+    def latest_strategy_trade_id(self, strategy_id: str) -> int | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT MAX(trade_id) AS latest FROM strategy_trade_fills WHERE strategy_id=?",
+                (strategy_id,),
+            ).fetchone()
+        return None if row is None else row["latest"]
+
+    def save_strategy_trades(self, strategy_id: str, trades: list[dict]) -> None:
+        if not trades:
+            return
+        with self.connection() as conn:
+            conn.executemany(
+                """
+                INSERT OR IGNORE INTO strategy_trade_fills(
+                    strategy_id, trade_id, order_id, side, quantity, price,
+                    realized_pnl, commission, commission_asset, traded_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        strategy_id, int(trade["id"]), int(trade["orderId"]),
+                        str(trade["side"]), str(trade["qty"]), str(trade["price"]),
+                        str(trade["realizedPnl"]), str(trade["commission"]),
+                        str(trade["commissionAsset"]), int(trade["time"]),
+                    )
+                    for trade in trades
+                ],
+            )
+
+    def list_strategy_trades(self, strategy_id: str) -> list[dict]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM strategy_trade_fills WHERE strategy_id=? ORDER BY trade_id",
+                (strategy_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_order_quantities(
         self,
