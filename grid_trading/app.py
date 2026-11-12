@@ -748,7 +748,9 @@ def order_text(
     return text
 
 
-def build_cell_rows(grid: dict, cells: list[dict]) -> list[dict]:
+def build_cell_rows(
+    grid: dict, cells: list[dict], cell_net_profit: dict[str, str] | None = None,
+) -> list[dict]:
     rows = []
     precision = grid["price_precision"]
     for cell in cells:
@@ -781,6 +783,7 @@ def build_cell_rows(grid: dict, cells: list[dict]) -> list[dict]:
                 buy_order = "订单确认中" if cell.get("entry_client_id") else "等待价格带"
             if stage == "pending_exit" and cell.get("exit_order_id") is None:
                 sell_order = "订单确认中" if cell.get("exit_client_id") else "等待价格带"
+        fixed_profit = {}
         fixed_amounts = {}
         if grid["grid_kind"] == "fixed_equal_usdt":
             open_qty = Decimal(cell["open_qty"])
@@ -790,6 +793,13 @@ def build_cell_rows(grid: dict, cells: list[dict]) -> list[dict]:
                 else Decimal(buy_order_qty) if buy_order_qty not in (None, "")
                 else None
             )
+            fixed_profit = {
+                "累计净利 (U)": (
+                    f"{Decimal(cell_net_profit[cell['cell_id']]):,.4f}"
+                    if cell_net_profit is not None and cell["cell_id"] in cell_net_profit
+                    else "—"
+                ),
+            }
             fixed_amounts = {
                 "买入/卖出金额 (U)": (
                     f"{format_quantity(paired_qty * Decimal(cell['buy_price']))} / "
@@ -805,6 +815,7 @@ def build_cell_rows(grid: dict, cells: list[dict]) -> list[dict]:
                     f"{format_price(cell['sell_price'], precision)}"
                 ),
                 "阶段/次数": f"{STAGE_LABELS.get(stage, stage)} / {int(cell.get('cycle_count', 0))}",
+                **fixed_profit,
                 "买入": buy_order,
                 "卖出": sell_order,
                 **fixed_amounts,
@@ -1150,7 +1161,13 @@ def _render_detail_live(strategy_id: str) -> None:
             st.caption(f"显示 {len(visible_cells)} / {len(cells)} 格 · 表格内可滚动")
     else:
         visible_cells = cells
-    rows = build_cell_rows(grid, visible_cells)
+    cell_net_profit = (
+        performance.get("cell_net_grid_profit_usdt")
+        if performance is not None and performance["coverage_complete"]
+        and performance["accounting_complete"]
+        else None
+    )
+    rows = build_cell_rows(grid, visible_cells, cell_net_profit)
     frame = pd.DataFrame(rows)
 
     def color_grid_row(row: pd.Series) -> list[str]:
@@ -1180,6 +1197,9 @@ def _render_detail_live(strategy_id: str) -> None:
                 "网格": st.column_config.TextColumn("网格", width="small"),
                 "买入/卖出价": st.column_config.TextColumn("买入/卖出价", width="medium"),
                 "阶段/次数": st.column_config.TextColumn("阶段/次数", width="medium"),
+                **({
+                    "累计净利 (U)": st.column_config.TextColumn("累计净利 (U)", width="small"),
+                } if grid["grid_kind"] == "fixed_equal_usdt" else {}),
                 "买入": st.column_config.TextColumn("买入", width="medium"),
                 "卖出": st.column_config.TextColumn("卖出", width="medium"),
                 **({

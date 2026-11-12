@@ -243,6 +243,9 @@ class StreamlitAbnormalTests(unittest.TestCase):
                     "accounting_complete": True,
                     "completed_cycles": 7,
                     "net_grid_profit_usdt": "1.25",
+                    "cell_net_grid_profit_usdt": {
+                        "cell-1": "0", "cell-2": "1.25",
+                    },
                     "grid_profit_pct": "0.3125",
                     "simple_annualized_pct": "12.5",
                 }),
@@ -257,6 +260,11 @@ class StreamlitAbnormalTests(unittest.TestCase):
         frame = app.dataframe[0].value
         self.assertNotIn("预算 (U)", frame.columns)
         self.assertEqual(frame["买入/卖出价"].iloc[0], "100 / 110")
+        self.assertEqual(
+            list(frame.columns)[list(frame.columns).index("阶段/次数") + 1],
+            "累计净利 (U)",
+        )
+        self.assertEqual(frame["累计净利 (U)"].tolist(), ["1.2500", "0.0000"])
         self.assertEqual(frame["买入/卖出金额 (U)"].iloc[0], "100 / 110")
         self.assertTrue(any(metric.label == "总交易次数" and metric.value == "7" for metric in app.metric))
         self.assertTrue(any(section.label == "追加资金" for section in app.expander))

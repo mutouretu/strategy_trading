@@ -181,6 +181,7 @@ def strategy_performance(
     grid_gross = Decimal("0")
     grid_fees = Decimal("0")
     sold_quantity = Decimal("0")
+    cell_grid_profit = {cell_id: Decimal("0") for cell_id in levels}
     for cell_id, events in by_cell.items():
         if cell_id not in levels:
             accounting_error = f"grid level is missing for cell {cell_id}"
@@ -210,10 +211,17 @@ def strategy_performance(
                 accounting_error = f"buy fill is missing for cell {cell_id}"
                 continue
             sold_quantity += qty
-            grid_gross += qty * (sell_price - buy_price)
-            grid_fees += matched_fee + fee
+            gross = qty * (sell_price - buy_price)
+            fees = matched_fee + fee
+            grid_gross += gross
+            grid_fees += fees
+            cell_grid_profit[cell_id] += gross - fees
 
     net = None if other_fee_assets or accounting_error else grid_gross - grid_fees
+    cell_net = (
+        None if net is None or not coverage_complete
+        else {cell_id: str(profit) for cell_id, profit in cell_grid_profit.items()}
+    )
     budget = config.grid_budget_usdt
     roi = None if net is None else net / budget * Decimal("100")
     elapsed_seconds = max((current - started).total_seconds(), 0)
@@ -233,6 +241,7 @@ def strategy_performance(
         "trading_fees_usdt": str(account_fees),
         "trend_and_execution_pnl_usdt": str(account_gross - grid_gross),
         "net_grid_profit_usdt": None if net is None else str(net),
+        "cell_net_grid_profit_usdt": cell_net,
         "grid_profit_pct": None if roi is None else str(roi),
         "simple_annualized_pct": None if annualized is None else str(annualized),
         "elapsed_seconds": elapsed_seconds,

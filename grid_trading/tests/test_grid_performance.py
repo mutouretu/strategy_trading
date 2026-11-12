@@ -80,12 +80,23 @@ class GridPerformanceTests(unittest.TestCase):
         self.assertEqual(Decimal(summary["gross_grid_profit_usdt"]), gross)
         self.assertEqual(Decimal(summary["grid_trading_fees_usdt"]), Decimal("0.04"))
         self.assertEqual(Decimal(summary["net_grid_profit_usdt"]), net)
+        self.assertEqual(
+            Decimal(summary["cell_net_grid_profit_usdt"][self.cell.cell_id]), net
+        )
+        self.assertEqual(
+            sum((Decimal(value) for value in summary["cell_net_grid_profit_usdt"].values()), Decimal("0")),
+            net,
+        )
         self.assertEqual(Decimal(summary["gross_realized_pnl_usdt"]), Decimal("0.5"))
         self.assertEqual(Decimal(summary["grid_profit_pct"]), net / Decimal("400") * 100)
         self.assertEqual(Decimal(summary["simple_annualized_pct"]), net / Decimal("400") * 36500)
         self.assertTrue(summary["accounting_complete"])
         self.assertEqual(summary["completed_cycles"], 1)
         self.assertEqual(summary["trade_fill_count"], 2)
+        incomplete = strategy_performance(
+            self.store, self.config, coverage_complete=False, now=now
+        )
+        self.assertIsNone(incomplete["cell_net_grid_profit_usdt"])
         self.assertTrue(sync_strategy_trades(self.store, exchange, self.config, now=now))
         self.assertEqual(len(self.store.list_strategy_trades(self.config.strategy_id)), 3)
         self.assertEqual(exchange.calls[-1]["from_id"], 4)
@@ -102,6 +113,7 @@ class GridPerformanceTests(unittest.TestCase):
             now=self.started + timedelta(days=1),
         )
         self.assertIsNone(summary["net_grid_profit_usdt"])
+        self.assertIsNone(summary["cell_net_grid_profit_usdt"])
         self.assertEqual(summary["unsupported_fee_assets"], ["BNB"])
 
     def test_seed_fee_is_allocated_only_to_sold_quantity(self) -> None:
@@ -130,6 +142,13 @@ class GridPerformanceTests(unittest.TestCase):
         )
         self.assertEqual(Decimal(summary["trading_fees_usdt"]), Decimal("0.21"))
         self.assertEqual(Decimal(summary["grid_trading_fees_usdt"]), Decimal("0.11"))
+        self.assertEqual(
+            Decimal(summary["cell_net_grid_profit_usdt"][self.cell.cell_id]),
+            self.cell.sell_price - self.cell.buy_price - Decimal("0.11"),
+        )
+        self.assertEqual(
+            Decimal(summary["cell_net_grid_profit_usdt"][other.cell_id]), Decimal("0"),
+        )
 
     def test_partial_sell_fills_match_one_buy_lot(self) -> None:
         self.store.save_strategy_trades(self.config.strategy_id, [
@@ -145,6 +164,24 @@ class GridPerformanceTests(unittest.TestCase):
         self.assertEqual(Decimal(summary["gross_grid_profit_usdt"]), gross)
         self.assertEqual(Decimal(summary["grid_trading_fees_usdt"]), Decimal("0.06"))
         self.assertEqual(Decimal(summary["net_grid_profit_usdt"]), gross - Decimal("0.06"))
+        self.assertEqual(
+            Decimal(summary["cell_net_grid_profit_usdt"][self.cell.cell_id]), gross - Decimal("0.06")
+        )
+
+    def test_partial_sell_books_only_sold_quantity_and_matched_buy_fee(self) -> None:
+        self.store.save_strategy_trades(self.config.strategy_id, [
+            self._trade(1, 101, "0", "0.04", side="BUY", qty="2"),
+            self._trade(2, 102, "1", "0.005", qty="0.5"),
+        ])
+        summary = strategy_performance(
+            self.store, self.config, coverage_complete=True,
+            now=self.started + timedelta(days=1),
+        )
+        expected = Decimal("0.5") * (self.cell.sell_price - self.cell.buy_price) - Decimal("0.015")
+        self.assertEqual(
+            Decimal(summary["cell_net_grid_profit_usdt"][self.cell.cell_id]), expected
+        )
+        self.assertEqual(Decimal(summary["net_grid_profit_usdt"]), expected)
 
     def test_missing_buy_fill_hides_profit(self) -> None:
         self.store.save_strategy_trades(
@@ -156,6 +193,7 @@ class GridPerformanceTests(unittest.TestCase):
         )
         self.assertFalse(summary["accounting_complete"])
         self.assertIsNone(summary["net_grid_profit_usdt"])
+        self.assertIsNone(summary["cell_net_grid_profit_usdt"])
 
     def test_removed_cell_keeps_its_grid_prices(self) -> None:
         self.store.save_strategy_trades(self.config.strategy_id, [
