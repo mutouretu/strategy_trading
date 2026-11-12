@@ -991,14 +991,7 @@ class TradingEngine:
         return True
 
     def _stored_cell(self, cell_id: str) -> GridCell | None:
-        return next(
-            (
-                item
-                for item in self.store.list_cells(self.strategy_id)
-                if item.cell_id == cell_id
-            ),
-            None,
-        )
+        return self.store.get_cell(self.strategy_id, cell_id)
 
     def _retry_ready(self, cell: GridCell, operation: str) -> bool:
         return time.monotonic() >= self._retry_not_before.get(

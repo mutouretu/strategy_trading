@@ -802,6 +802,14 @@ class SQLiteStore:
         cells.sort(key=lambda cell: cell.buy_price)
         return cells
 
+    def get_cell(self, strategy_id: str, cell_id: str) -> GridCell | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM cells WHERE strategy_id=? AND cell_id=?",
+                (strategy_id, cell_id),
+            ).fetchone()
+        return None if row is None else self._cell_from_row(row)
+
     def get_cell_price_history(self, strategy_id: str) -> dict[str, tuple[Decimal, Decimal]]:
         with self.connection() as conn:
             rows = conn.execute(
