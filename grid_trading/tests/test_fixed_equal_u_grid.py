@@ -593,6 +593,86 @@ class FixedEqualUGridTests(unittest.TestCase):
             11,
         )
 
+    def test_crossed_limits_are_clamped_to_binance_price_band(self) -> None:
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            percent_price_up=Decimal("1.03"),
+            percent_price_down=Decimal("0.97"),
+        )
+        engine = self.make_engine()
+        engine.initialize()
+        engine._submit_limit_order(
+            "SOLUSDT", OrderSide.SELL, "LONG", Decimal("0.24"),
+            Decimal("95"), "catchup-sell",
+        )
+        engine._submit_limit_order(
+            "SOLUSDT", OrderSide.BUY, "LONG", Decimal("0.24"),
+            Decimal("105"), "catchup-buy",
+        )
+        self.assertEqual(self.exchange.placed[-2]["price"], Decimal("97"))
+        self.assertEqual(self.exchange.placed[-1]["price"], Decimal("103"))
+        self.assertFalse(self.exchange.placed[-2]["post_only"])
+        self.assertFalse(self.exchange.placed[-1]["post_only"])
+
+    def test_recovery_accepts_only_price_improvement_from_catchup_limit(self) -> None:
+        engine = self.make_engine()
+        cell = self.store.list_cells(engine.strategy_id)[2]
+        cell.open_qty = Decimal("1")
+        order = OrderSnapshot(
+            order_id=123, client_order_id="catchup-sell", status=OrderStatus.NEW,
+            side=OrderSide.SELL, position_side="LONG",
+            price=cell.sell_price + Decimal("1"),
+            original_qty=Decimal("1"),
+        )
+        self.assertEqual(engine._recovery_mismatches(cell, "exit", order), [])
+        worse = replace(order, price=cell.sell_price - Decimal("0.01"))
+        self.assertTrue(any(
+            item.startswith("price:")
+            for item in engine._recovery_mismatches(cell, "exit", worse)
+        ))
+
+    def test_previously_deferred_held_exit_is_placed_without_window_rebalance(self) -> None:
+        self.exchange.mark = Decimal("60.23")
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            step_size=Decimal("0.01"), min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"), contract_type="TRADIFI_PERPETUAL",
+            percent_price_up=Decimal("1.03"), percent_price_down=Decimal("0.97"),
+        )
+        service = GridService(self.store, SimpleNamespace())
+        config = service.create_fixed(
+            "SOXLUSDT", Decimal("30"), Decimal("150"), 323,
+            Decimal("5000"), Decimal("0.01"),
+        )
+        self.store.mark_started(config.strategy_id)
+        engine = FixedGridEngine(self.store, self.exchange, config.strategy_id)
+        engine.tick()
+        cell = next(
+            item for item in self.store.list_cells(config.strategy_id)
+            if item.exit_order_id is not None
+        )
+        old_id = cell.exit_order_id
+        self.exchange.cancel_order(config.symbol, old_id)
+        cell.exit_order_id = None
+        cell.exit_client_id = ""
+        self.store.save_cell(cell)
+        self.exchange.mark = cell.sell_price + Decimal("0.10")
+        before = sum(
+            event["event_type"] == "ORDER_WINDOW_REBALANCED"
+            for event in self.store.list_events(config.strategy_id)
+        )
+
+        engine.tick()
+
+        updated = self.store.get_cell(config.strategy_id, cell.cell_id)
+        self.assertIsNotNone(updated.exit_order_id)
+        self.assertNotEqual(updated.exit_order_id, old_id)
+        self.assertEqual(
+            sum(event["event_type"] == "ORDER_WINDOW_REBALANCED"
+                for event in self.store.list_events(config.strategy_id)),
+            before,
+        )
+
     def test_failed_initial_seed_cannot_be_restarted_blindly(self) -> None:
         engine = self.make_engine()
         seed_id = f"seed:{engine.strategy_id}"

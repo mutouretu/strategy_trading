@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 from dataclasses import replace
-from decimal import Decimal
+from decimal import Decimal, ROUND_CEILING
 
 from ..domain import CellStage, GridCell, OrderSide, OrderStatus, StrategyStatus
 from ..domain.grid import fixed_cell_budgets, round_down
@@ -49,15 +49,29 @@ class FixedGridEngine(TradingEngine):
         price: Decimal,
         client_order_id: str,
     ) -> int:
+        assert self.filters is not None
         mark = getattr(self, "_tick_mark", None) or self.exchange.get_mark_price(symbol)
         if (side == OrderSide.BUY and mark <= price) or (
             side == OrderSide.SELL and mark >= price
         ):
             # Mark price can cross a grid line while the executable book has not.
-            # A GTC limit catches up immediately when possible and never trades
-            # through the cell's target price when mark and book diverge.
+            # Keep the catch-up limit on the favorable side of the grid target
+            # while moving it inside Binance's current percent-price band.
+            submitted_price = price
+            if side == OrderSide.BUY and self.filters.percent_price_up > 0:
+                submitted_price = min(
+                    price, round_down(mark * self.filters.percent_price_up, self.filters.tick_size)
+                )
+            elif side == OrderSide.SELL and self.filters.percent_price_down > 0:
+                minimum = mark * self.filters.percent_price_down
+                tick = self.filters.tick_size
+                legal_minimum = (
+                    (minimum / tick).to_integral_value(rounding=ROUND_CEILING) * tick
+                    if tick > 0 else minimum
+                )
+                submitted_price = max(price, legal_minimum)
             order_id = self.exchange.place_limit_order(
-                symbol, side, position_side, quantity, price, client_order_id,
+                symbol, side, position_side, quantity, submitted_price, client_order_id,
                 post_only=False,
             )
             self.store.append_event(
@@ -68,6 +82,7 @@ class FixedGridEngine(TradingEngine):
                     "client_order_id": client_order_id,
                     "side": side.value,
                     "target_price": str(price),
+                    "submitted_price": str(submitted_price),
                     "observed_mark": str(mark),
                     "quantity": str(quantity),
                 },
@@ -142,6 +157,14 @@ class FixedGridEngine(TradingEngine):
             if not (
                 (role == "entry" and mismatch.startswith("qty:"))
                 or (
+                    mismatch.startswith("price:")
+                    and order.price > 0
+                    and (
+                        (role == "entry" and order.price <= cell.buy_price)
+                        or (role == "exit" and order.price >= cell.sell_price)
+                    )
+                )
+                or (
                     order.status == OrderStatus.FILLED
                     and order.price == 0
                     and mismatch.startswith("price:")
@@ -175,7 +198,7 @@ class FixedGridEngine(TradingEngine):
             prior_entries = {
                 cell.cell_id: cell.entry_order_id
                 for cell in self.store.list_cells(self.strategy_id)
-                if cell.entry_order_id is not None
+                if cell.stage == CellStage.PENDING_ENTRY and cell.entry_order_id is not None
             }
             before = {
                 cell.cell_id: cell.exit_order_id
@@ -268,10 +291,23 @@ class FixedGridEngine(TradingEngine):
                 cell for cell in entries
                 if cell.entry_order_id is None and cell.cell_id in prior_exits
             ]
+            # A fresh buy gets its paired sell. Previously deferred held cells
+            # are also caught up after mark crosses their sell target; ordinary
+            # far cells wait for the next batch rebalance.
             new_exits = [
                 cell for cell in exits
                 if cell.exit_order_id is None and cell.cell_id in prior_entries
             ]
+            crossed_exits = sorted(
+                (
+                    cell for cell in exits
+                    if cell.exit_order_id is None
+                    and cell.cell_id not in prior_entries
+                    and cell.sell_price <= mark
+                ),
+                key=lambda cell: abs(cell.sell_price - mark),
+            )[:self.ORDERS_PER_SIDE]
+            new_exits.extend(crossed_exits)
             for cell in sorted(new_entries, key=lambda item: abs(item.buy_price - mark)):
                 self._window_entry_ids.add(cell.cell_id)
             for cell in sorted(new_exits, key=lambda item: abs(item.sell_price - mark)):
