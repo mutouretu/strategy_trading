@@ -1068,14 +1068,16 @@ def _render_detail_live(strategy_id: str) -> None:
         unsafe_allow_html=True,
     )
     if grid["grid_kind"] == "fixed_equal_usdt":
+        if performance is not None:
+            metrics = st.columns(4)
+            metrics[0].metric("总交易次数", f"{int(performance['completed_cycles']):,}")
         if (performance is not None and performance["coverage_complete"]
                 and performance["accounting_complete"]
                 and performance["net_grid_profit_usdt"] is not None):
-            metrics = st.columns(3)
-            metrics[0].metric("纯网格盈利", f"{Decimal(performance['net_grid_profit_usdt']):,.4f} U")
-            metrics[1].metric("网格收益率", f"{Decimal(performance['grid_profit_pct']):,.3f}%")
+            metrics[1].metric("纯网格盈利", f"{Decimal(performance['net_grid_profit_usdt']):,.4f} U")
+            metrics[2].metric("网格收益率", f"{Decimal(performance['grid_profit_pct']):,.3f}%")
             annualized = performance["simple_annualized_pct"]
-            metrics[2].metric(
+            metrics[3].metric(
                 "简单年化", "—" if annualized is None else f"{Decimal(annualized):,.2f}%"
             )
         elif performance is not None:

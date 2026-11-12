@@ -237,6 +237,15 @@ class StreamlitAbnormalTests(unittest.TestCase):
             cells=cells,
             status_overrides={
                 ("GET", f"/strategies/{item['strategy_id']}/topups"): (200, []),
+                ("GET", f"/strategies/{item['strategy_id']}/performance"): (200, {
+                    "position_entry_price": "100",
+                    "coverage_complete": True,
+                    "accounting_complete": True,
+                    "completed_cycles": 7,
+                    "net_grid_profit_usdt": "1.25",
+                    "grid_profit_pct": "0.3125",
+                    "simple_annualized_pct": "12.5",
+                }),
             },
         )
         with stub_api(state):
@@ -249,6 +258,7 @@ class StreamlitAbnormalTests(unittest.TestCase):
         self.assertNotIn("预算 (U)", frame.columns)
         self.assertEqual(frame["买入/卖出价"].iloc[0], "100 / 110")
         self.assertEqual(frame["买入/卖出金额 (U)"].iloc[0], "100 / 110")
+        self.assertTrue(any(metric.label == "总交易次数" and metric.value == "7" for metric in app.metric))
         self.assertTrue(any(section.label == "追加资金" for section in app.expander))
         self.assertTrue(any(button.label == "预览资金分配" for button in app.button))
         self.assertFalse(any(button.key and button.key.startswith("add_cell_") for button in app.button))
