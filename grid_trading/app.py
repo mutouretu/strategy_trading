@@ -238,7 +238,7 @@ def display_flash() -> None:
 
 
 def render_fixed_grid_create() -> None:
-    st.caption("币安 U 本位测试网 · 固定区间 · 1 倍做多 · 每格等 U")
+    st.caption("币安 U 本位测试网 · 固定天地网格 · 1 倍做多 · 每格等 U")
     with st.form("fixed_grid_preview_form"):
         symbol = st.text_input("交易对", placeholder="例如 SOLUSDT", key="fixed_symbol")
         lower = st.number_input("区间下界", min_value=0.0, value=None, step=0.01, format="%.8f")
@@ -271,7 +271,12 @@ def render_fixed_grid_create() -> None:
     allocation = preview["allocation"]
     st.write(
         f"当前价 {allocation['current_price']} · 买格 {allocation['buy_cell_count']} · "
-        f"卖格 {allocation['sell_cell_count']} · 初始合并开仓约 {allocation['seed_notional_usdt']} U"
+        f"卖格 {allocation['sell_cell_count']}"
+    )
+    st.info(
+        f"启动时将按当时市价一次性买入全部 {allocation['sell_cell_count']} 个上方卖格"
+        f"对应的约 {allocation['seed_notional_usdt']} U 仓位，再逐格卖出；"
+        "下方买格等待价格跌到格线后买入。"
     )
     st.caption(
         f"当前账户 maker {float(allocation['maker_fee_rate']) * 100:.4f}% / "
@@ -867,15 +872,33 @@ def render_cell_boundary_controls(
             confirm_cell_removal(grid, boundary, cell)
 
 
-def render_fixed_topup(grid: dict) -> None:
+def render_fixed_topup(grid: dict, cells: list[dict]) -> None:
     strategy_id = grid["id"]
-    st.subheader("手动增加网格资金")
-    st.caption("追加金额等分到所有格子；卖格对应部分合并开多一次，买格增加挂单预算。")
     try:
         actions = backend().topups(strategy_id)
     except GridApiError as exc:
         st.error(str(exc))
         return
+    seed = next((action for action in actions if action["operation"] == "seed"), None)
+    if seed is not None and seed["status"] == "applied":
+        held = [cell for cell in cells if Decimal(cell["open_qty"]) > 0]
+        held_qty = sum((Decimal(cell["open_qty"]) for cell in held), Decimal("0"))
+        posted_sells = sum(cell["exit_order_id"] is not None for cell in held)
+        waiting_sells = sum(
+            cell["stage"] == "pending_exit"
+            and cell["exit_order_id"] is None
+            and not cell.get("exit_client_id")
+            for cell in held
+        )
+        st.info(
+            f"天地网格启动时已按市价一次性买入 {format_quantity(seed['executed_qty'])} "
+            f"{base_asset(grid['symbol'])}，分配给当时现价上方的卖格。"
+            f"当前持仓 {len(held)} 格、合计 {format_quantity(held_qty)} "
+            f"{base_asset(grid['symbol'])}；已挂出 {posted_sells} 笔卖单，"
+            f"另有 {waiting_sells} 个已持仓卖格等待进入交易所限价带。"
+        )
+    st.subheader("手动增加网格资金")
+    st.caption("追加金额等分到所有格子；卖格对应部分合并开多一次，买格增加挂单预算。")
     if actions:
         latest = actions[-1]
         st.caption(
@@ -990,7 +1013,7 @@ def _render_detail_live(strategy_id: str) -> None:
         st.info("该策略还没有 Cell；启动后由调度器初始化网格。")
         return
     if grid["grid_kind"] == "fixed_equal_usdt":
-        render_fixed_topup(grid)
+        render_fixed_topup(grid, cells)
     try:
         actions = backend().cell_actions(grid["id"])
     except GridApiError as exc:
