@@ -18,6 +18,9 @@ from .grid_performance import strategy_performance, sync_strategy_trades
 class FixedGridEngine(TradingEngine):
     """Fixed long grid with one exchange position and per-cell logical ownership."""
 
+    ORDERS_PER_SIDE = 10
+    REBALANCE_BELOW = 5
+
     def initialize(self) -> None:
         raw_exchange = getattr(self.exchange, "exchange", self.exchange)
         if isinstance(raw_exchange, BinanceFuturesExchange):
@@ -105,6 +108,9 @@ class FixedGridEngine(TradingEngine):
         return any(code in str(exc) for code in ("-4016", "-4024", "-5022"))
 
     def _place_entry(self, cell: GridCell) -> None:
+        allowed = getattr(self, "_window_entry_ids", None)
+        if allowed is not None and cell.cell_id not in allowed:
+            return
         if not self._order_is_ready(OrderSide.BUY, cell.buy_price):
             return
         try:
@@ -114,6 +120,9 @@ class FixedGridEngine(TradingEngine):
                 raise
 
     def _ensure_exit(self, cell: GridCell, quantity: Decimal | None = None) -> None:
+        allowed = getattr(self, "_window_exit_ids", None)
+        if allowed is not None and cell.cell_id not in allowed:
+            return
         if not self._order_is_ready(OrderSide.SELL, cell.sell_price):
             return
         try:
@@ -160,42 +169,126 @@ class FixedGridEngine(TradingEngine):
 
         if seed["status"] == "manual_review":
             raise RuntimeError(f"initial position needs manual review: {seed['message']}")
-        if seed["status"] == "applied":
-            self._defer_far_orders(mark)
+        self._window_entry_ids = set()
+        self._window_exit_ids = set()
+        try:
+            prior_entries = {
+                cell.cell_id: cell.entry_order_id
+                for cell in self.store.list_cells(self.strategy_id)
+                if cell.entry_order_id is not None
+            }
+            before = {
+                cell.cell_id: cell.exit_order_id
+                for cell in self.store.list_cells(self.strategy_id)
+                if cell.exit_order_id is not None
+            }
+            if seed["status"] == "applied":
+                self.sync_orders_only()
+
+            actions = self.store.list_capital_actions(self.strategy_id)
+            pending = next(
+                (item for item in actions if item["status"] in {"requested", "planned", "submitted"}),
+                None,
+            )
+            if pending is not None:
+                self._process_capital_action(pending, mark)
+                pending = self.store.get_capital_action(pending["id"])
+                if pending["status"] != "applied":
+                    self._heartbeat(mark)
+                    return mark
+
+            self._reinvest_closed_cells()
+            self._arm_untriggered()
             self.sync_orders_only()
+            self._refresh_order_window(mark, prior_entries, before)
+            self.sync_orders_only()
+            self._resize_orders()
+            self._heartbeat(mark)
+            return mark
+        finally:
+            self._window_entry_ids = None
+            self._window_exit_ids = None
 
-        actions = self.store.list_capital_actions(self.strategy_id)
-        pending = next(
-            (item for item in actions if item["status"] in {"requested", "planned", "submitted"}),
-            None,
+    def _refresh_order_window(
+        self, mark: Decimal, prior_entries: dict[str, int], prior_exits: dict[str, int]
+    ) -> None:
+        cells = self.store.list_cells(self.strategy_id)
+        entries = [cell for cell in cells if cell.stage == CellStage.PENDING_ENTRY]
+        exits = [cell for cell in cells if cell.stage == CellStage.PENDING_EXIT and cell.open_qty > 0]
+        active_entries = {cell.cell_id for cell in entries if cell.entry_order_id is not None}
+        active_exits = {cell.cell_id for cell in exits if cell.exit_order_id is not None}
+        ready_entries = sum(
+            cell.entry_order_id is not None
+            and self._order_is_ready(OrderSide.BUY, cell.buy_price)
+            for cell in entries
         )
-        if pending is not None:
-            self._process_capital_action(pending, mark)
-            pending = self.store.get_capital_action(pending["id"])
-            if pending["status"] != "applied":
-                self._heartbeat(mark)
-                return mark
+        ready_exits = sum(
+            cell.exit_order_id is not None
+            and self._order_is_ready(OrderSide.SELL, cell.sell_price)
+            for cell in exits
+        )
+        # A boundary crossing can leave old orders resting at Binance. Count
+        # them toward the five-order threshold, but rebuild if a price gap
+        # leaves an entire side outside the executable price band.
+        if (min(len(active_entries), len(active_exits)) < self.REBALANCE_BELOW
+                or min(ready_entries, ready_exits) == 0):
+            self._window_entry_ids = {
+                cell.cell_id for cell in sorted(
+                    entries, key=lambda cell: (abs(cell.buy_price - mark), cell.index)
+                )[:self.ORDERS_PER_SIDE]
+            }
+            self._window_exit_ids = {
+                cell.cell_id for cell in sorted(
+                    exits, key=lambda cell: (abs(cell.sell_price - mark), cell.index)
+                )[:self.ORDERS_PER_SIDE]
+            }
+            self._defer_far_orders(mark, self._window_entry_ids, self._window_exit_ids)
+            signature = (
+                frozenset(self._window_entry_ids), frozenset(self._window_exit_ids),
+                frozenset(active_entries), frozenset(active_exits),
+            )
+            if signature != getattr(self, "_last_window_signature", None):
+                self.store.append_event(
+                    self.strategy_id, "ORDER_WINDOW_REBALANCED", {
+                        "mark": str(mark),
+                        "entries_before": len(active_entries),
+                        "exits_before": len(active_exits),
+                        "entry_target": self.ORDERS_PER_SIDE,
+                        "exit_target": self.ORDERS_PER_SIDE,
+                    }, run_id=self.run_id,
+                )
+                self._last_window_signature = signature
+        else:
+            # Keep existing limits in place. Paired orders take priority over
+            # the window target so a newly filled cell can complete its cycle.
+            # The next batch rebalance returns both sides to ten.
+            self._window_entry_ids = active_entries
+            self._window_exit_ids = active_exits
+            new_entries = [
+                cell for cell in entries
+                if cell.entry_order_id is None and cell.cell_id in prior_exits
+            ]
+            new_exits = [
+                cell for cell in exits
+                if cell.exit_order_id is None and cell.cell_id in prior_entries
+            ]
+            for cell in sorted(new_entries, key=lambda item: abs(item.buy_price - mark)):
+                self._window_entry_ids.add(cell.cell_id)
+            for cell in sorted(new_exits, key=lambda item: abs(item.sell_price - mark)):
+                self._window_exit_ids.add(cell.cell_id)
 
-        self._defer_far_orders(mark)
-        self._reinvest_closed_cells()
-        self._arm_untriggered()
-        self.sync_orders_only()
-        self._resize_orders()
-        self._heartbeat(mark)
-        return mark
-
-    def _defer_far_orders(self, mark: Decimal) -> None:
-        """Free exchange order slots when a live order leaves the price band."""
+    def _defer_far_orders(self, mark: Decimal, entry_ids: set[str], exit_ids: set[str]) -> None:
+        """Cancel limits outside the chosen window only during a rebalance."""
         assert self.filters is not None
         config = self._config()
         for cell in self.store.list_cells(self.strategy_id):
             if cell.stage == CellStage.PENDING_ENTRY and cell.entry_order_id is not None:
-                if self.filters.percent_price_down <= 0 or cell.buy_price >= mark * self.filters.percent_price_down:
+                if cell.cell_id in entry_ids and self._order_is_ready(OrderSide.BUY, cell.buy_price):
                     continue
                 order_id = cell.entry_order_id
                 side = "entry"
             elif cell.stage == CellStage.PENDING_EXIT and cell.exit_order_id is not None:
-                if self.filters.percent_price_up <= 0 or cell.sell_price <= mark * self.filters.percent_price_up:
+                if cell.cell_id in exit_ids and self._order_is_ready(OrderSide.SELL, cell.sell_price):
                     continue
                 order_id = cell.exit_order_id
                 side = "exit"
@@ -210,6 +303,12 @@ class FixedGridEngine(TradingEngine):
             if side == "entry" or final.status == OrderStatus.FILLED:
                 # The existing state machine handles any fill that raced the cancel.
                 self._sync_cell(cell)
+                updated = self._stored_cell(cell.cell_id)
+                if (side == "entry" and updated is not None
+                        and updated.stage == CellStage.PENDING_EXIT
+                        and updated.open_qty > 0 and updated.exit_order_id is None):
+                    self._window_exit_ids.add(updated.cell_id)
+                    self._ensure_exit(updated)
                 continue
             delta = min(
                 cell.open_qty,

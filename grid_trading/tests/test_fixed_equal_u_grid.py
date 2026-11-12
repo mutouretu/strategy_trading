@@ -502,6 +502,97 @@ class FixedEqualUGridTests(unittest.TestCase):
         self.assertEqual(sell_after.stage, CellStage.PENDING_EXIT)
         self.assertEqual(sell_after.open_qty, sell_before.open_qty)
 
+    def test_order_window_waits_until_one_side_has_fewer_than_five(self) -> None:
+        self.exchange.mark = Decimal("60.23")
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            step_size=Decimal("0.01"), min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"), contract_type="TRADIFI_PERPETUAL",
+        )
+        service = GridService(self.store, SimpleNamespace())
+        config = service.create_fixed(
+            "SOXLUSDT", Decimal("30"), Decimal("150"), 323,
+            Decimal("5000"), Decimal("0.01"),
+        )
+        self.store.mark_started(config.strategy_id)
+        engine = FixedGridEngine(self.store, self.exchange, config.strategy_id)
+        engine.tick()
+        cells = self.store.list_cells(config.strategy_id)
+        self.assertEqual(sum(cell.entry_order_id is not None for cell in cells), 10)
+        self.assertEqual(sum(cell.exit_order_id is not None for cell in cells), 10)
+        sell_ids = [cell.exit_order_id for cell in cells if cell.exit_order_id is not None]
+        window_events = lambda: sum(
+            event["event_type"] == "ORDER_WINDOW_REBALANCED"
+            for event in self.store.list_events(config.strategy_id)
+        )
+        initial_rebalances = window_events()
+
+        for order_id in sell_ids[:5]:
+            self.exchange.fill(order_id)
+        engine.tick()
+        cells = self.store.list_cells(config.strategy_id)
+        self.assertEqual(sum(cell.exit_order_id is not None for cell in cells), 5)
+        self.assertEqual(sum(cell.entry_order_id is not None for cell in cells), 15)
+        self.assertEqual(window_events(), initial_rebalances)
+        self.assertEqual(self.exchange.calls.get("cancel_order", 0), 0)
+
+        self.exchange.fill(sell_ids[5])
+        engine.tick()
+        cells = self.store.list_cells(config.strategy_id)
+        self.assertEqual(sum(cell.exit_order_id is not None for cell in cells), 10)
+        self.assertEqual(sum(cell.entry_order_id is not None for cell in cells), 10)
+        self.assertEqual(window_events(), initial_rebalances + 1)
+
+    def test_small_price_move_keeps_existing_window(self) -> None:
+        self.exchange.mark = Decimal("60.23")
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            step_size=Decimal("0.01"), min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"), contract_type="TRADIFI_PERPETUAL",
+            percent_price_up=Decimal("1.03"), percent_price_down=Decimal("0.97"),
+        )
+        service = GridService(self.store, SimpleNamespace())
+        config = service.create_fixed(
+            "SOXLUSDT", Decimal("30"), Decimal("150"), 323,
+            Decimal("5000"), Decimal("0.01"),
+        )
+        self.store.mark_started(config.strategy_id)
+        engine = FixedGridEngine(self.store, self.exchange, config.strategy_id)
+        engine.tick()
+        placements = self.exchange.calls["place_limit_order"]
+        self.exchange.mark = Decimal("60.35")
+        engine.tick()
+        self.assertEqual(self.exchange.calls["place_limit_order"], placements)
+        self.assertEqual(self.exchange.calls.get("cancel_order", 0), 0)
+
+    def test_filled_buy_gets_paired_sell_even_when_sell_window_is_full(self) -> None:
+        self.exchange.mark = Decimal("60.23")
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            step_size=Decimal("0.01"), min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"), contract_type="TRADIFI_PERPETUAL",
+        )
+        service = GridService(self.store, SimpleNamespace())
+        config = service.create_fixed(
+            "SOXLUSDT", Decimal("30"), Decimal("150"), 323,
+            Decimal("5000"), Decimal("0.01"),
+        )
+        self.store.mark_started(config.strategy_id)
+        engine = FixedGridEngine(self.store, self.exchange, config.strategy_id)
+        engine.tick()
+        buy = next(
+            cell for cell in self.store.list_cells(config.strategy_id)
+            if cell.entry_order_id is not None
+        )
+        self.exchange.fill(buy.entry_order_id)
+        engine.tick()
+        updated = self.store.get_cell(config.strategy_id, buy.cell_id)
+        self.assertIsNotNone(updated.exit_order_id)
+        self.assertEqual(
+            sum(cell.exit_order_id is not None for cell in self.store.list_cells(config.strategy_id)),
+            11,
+        )
+
     def test_failed_initial_seed_cannot_be_restarted_blindly(self) -> None:
         engine = self.make_engine()
         seed_id = f"seed:{engine.strategy_id}"
