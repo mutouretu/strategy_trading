@@ -753,10 +753,11 @@ def order_text(
 
 def build_cell_rows(
     grid: dict, cells: list[dict], cell_net_profit: dict[str, str] | None = None,
+    reinvest_counts: dict[str, int] | None = None,
 ) -> list[dict]:
     rows = []
     precision = grid["price_precision"]
-    stage_column = "次数/净利 (U)" if grid["grid_kind"] == "fixed_equal_usdt" else "阶段/次数"
+    stage_column = "交易次数/复投次数/净利 (U)" if grid["grid_kind"] == "fixed_equal_usdt" else "阶段/次数"
     for cell in cells:
         stage = cell["stage"]
         entry_prefix = "成交" if decimal_number(cell.get("open_qty")) > 0 else "挂单"
@@ -788,7 +789,8 @@ def build_cell_rows(
             if stage == "pending_exit" and cell.get("exit_order_id") is None:
                 sell_order = "订单确认中" if cell.get("exit_client_id") else "等待价格带"
         stage_text = (
-            str(int(cell.get("cycle_count", 0)))
+            f"{int(cell.get('cycle_count', 0))} / "
+            f"{reinvest_counts.get(cell['cell_id'], 0) if reinvest_counts is not None else '—'}"
             if grid["grid_kind"] == "fixed_equal_usdt"
             else f"{STAGE_LABELS.get(stage, stage)} / {int(cell.get('cycle_count', 0))}"
         )
@@ -1022,13 +1024,16 @@ def render_fixed_topup_form(strategy_id: str) -> None:
             st.rerun()
 
 
-def render_fixed_reinvestment(grid: dict, cells: list[dict]) -> None:
+def render_fixed_reinvestment(grid: dict, cells: list[dict]) -> dict[str, int] | None:
     strategy_id = grid["id"]
     try:
         entries = backend().reinvestments(strategy_id)
     except GridApiError as exc:
         st.warning(f"复投记录暂不可用：{exc}")
-        return
+        return None
+    counts: dict[str, int] = {}
+    for entry in entries:
+        counts[entry["cell_id"]] = counts.get(entry["cell_id"], 0) + 1
     invested = sum((Decimal(entry["amount_usdt"]) for entry in entries), Decimal("0"))
     enabled = grid["auto_reinvest_enabled"]
     label = "开启" if enabled else "关闭"
@@ -1055,6 +1060,7 @@ def render_fixed_reinvestment(grid: dict, cells: list[dict]) -> None:
                 ]),
                 hide_index=True, width="stretch",
             )
+    return counts
 
 
 def _render_detail_live(strategy_id: str) -> None:
@@ -1151,9 +1157,10 @@ def _render_detail_live(strategy_id: str) -> None:
     if not cells:
         st.info("该策略还没有 Cell；启动后由调度器初始化网格。")
         return
+    reinvest_counts = None
     if grid["grid_kind"] == "fixed_equal_usdt":
         render_fixed_topup(grid, cells)
-        render_fixed_reinvestment(grid, cells)
+        reinvest_counts = render_fixed_reinvestment(grid, cells)
     try:
         actions = backend().cell_actions(grid["id"])
     except GridApiError as exc:
@@ -1215,9 +1222,9 @@ def _render_detail_live(strategy_id: str) -> None:
         and performance["accounting_complete"]
         else None
     )
-    rows = build_cell_rows(grid, visible_cells, cell_net_profit)
+    rows = build_cell_rows(grid, visible_cells, cell_net_profit, reinvest_counts)
     frame = pd.DataFrame(rows)
-    stage_column = "次数/净利 (U)" if grid["grid_kind"] == "fixed_equal_usdt" else "阶段/次数"
+    stage_column = "交易次数/复投次数/净利 (U)" if grid["grid_kind"] == "fixed_equal_usdt" else "阶段/次数"
     stage_by_grid = {
         f"#{int(cell['index']):03d}": STAGE_LABELS.get(cell["stage"], cell["stage"])
         for cell in visible_cells
@@ -1251,7 +1258,11 @@ def _render_detail_live(strategy_id: str) -> None:
                 "买入/卖出价": st.column_config.TextColumn(
                     "买入/卖出价", width="large" if grid["grid_kind"] == "fixed_equal_usdt" else "medium"
                 ),
-                stage_column: st.column_config.TextColumn(stage_column, width="medium"),
+                stage_column: st.column_config.TextColumn(
+                    stage_column, width="medium",
+                    help="交易次数 / 复投次数 / 累计纯网格净利（U）"
+                    if grid["grid_kind"] == "fixed_equal_usdt" else None,
+                ),
                 "买入": st.column_config.TextColumn("买入", width="medium"),
                 "卖出": st.column_config.TextColumn("卖出", width="medium"),
             },

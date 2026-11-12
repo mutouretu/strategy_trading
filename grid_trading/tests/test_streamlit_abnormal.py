@@ -194,6 +194,7 @@ class StreamlitAbnormalTests(unittest.TestCase):
             strategies=[item], cells=cells,
             status_overrides={
                 ("GET", f"/strategies/{item['strategy_id']}/topups"): (200, []),
+                ("GET", f"/strategies/{item['strategy_id']}/reinvestments"): (200, []),
             },
         )
         with stub_api(state):
@@ -237,6 +238,9 @@ class StreamlitAbnormalTests(unittest.TestCase):
             cells=cells,
             status_overrides={
                 ("GET", f"/strategies/{item['strategy_id']}/topups"): (200, []),
+                ("GET", f"/strategies/{item['strategy_id']}/reinvestments"): (200, [
+                    {"cell_id": "cell-2", "cycle_count": 1, "quantity_step": "0.01", "amount_usdt": "1"},
+                ]),
                 ("GET", f"/strategies/{item['strategy_id']}/performance"): (200, {
                     "position_entry_price": "100",
                     "initial_entry_price": "105",
@@ -268,15 +272,15 @@ class StreamlitAbnormalTests(unittest.TestCase):
             ("当前价", "64,000"), ("损益两平价", "101"),
         ):
             self.assertIn(f"<div class='label'>{label}</div><div class='value'>{value}</div>", price_summary)
-        frame = app.dataframe[0].value
+        frame = next(frame.value for frame in app.dataframe if "买入/卖出价" in frame.value.columns)
         self.assertNotIn("预算 (U)", frame.columns)
         self.assertEqual(frame["买入/卖出价"].iloc[0], "100 (100 U) / 110 (110 U)")
         self.assertEqual(frame["买入/卖出价"].iloc[1], "90 / 100")
         self.assertNotIn("买入/卖出金额 (U)", frame.columns)
         self.assertNotIn("累计净利 (U)", frame.columns)
         self.assertEqual(
-            frame["次数/净利 (U)"].tolist(),
-            ["0 / 1.2500", "0 / 0.0000"],
+            frame["交易次数/复投次数/净利 (U)"].tolist(),
+            ["0 / 1 / 1.2500", "0 / 0 / 0.0000"],
         )
         self.assertTrue(any(metric.label == "总交易次数" and metric.value == "7" for metric in app.metric))
         self.assertTrue(any(section.label == "追加资金" for section in app.expander))
