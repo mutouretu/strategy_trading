@@ -814,6 +814,30 @@ def build_cell_rows(grid: dict, cells: list[dict]) -> list[dict]:
     return list(reversed(rows))
 
 
+def visible_grid_cells(grid: dict, cells: list[dict], view: str) -> list[dict]:
+    if view == "持仓格":
+        return [cell for cell in cells if Decimal(cell["open_qty"]) > 0]
+    if view == "空仓格":
+        return [cell for cell in cells if Decimal(cell["open_qty"]) == 0]
+    if view == "已成交格":
+        return [cell for cell in cells if int(cell.get("cycle_count", 0)) > 0]
+    if view != "现价附近" or len(cells) <= 25:
+        return cells
+    ordered = sorted(cells, key=lambda cell: Decimal(cell["buy_price"]))
+    price = Decimal(str(
+        grid["current_price"] if grid["current_price"] is not None else grid["anchor_price"]
+    ))
+    nearest = min(
+        range(len(ordered)),
+        key=lambda index: abs(
+            (Decimal(ordered[index]["buy_price"]) + Decimal(ordered[index]["sell_price"])) / 2
+            - price
+        ),
+    )
+    start = min(max(0, nearest - 12), len(ordered) - 25)
+    return ordered[start:start + 25]
+
+
 def cell_action_state_key(strategy_id: str) -> str:
     return f"cell_action_pending_{strategy_id}"
 
@@ -1120,7 +1144,22 @@ def _render_detail_live(strategy_id: str) -> None:
 
     if pending_action:
         st.caption("Cell 调整请求正在由调度器串行处理，本区域会自动更新。")
-    rows = build_cell_rows(grid, cells)
+    view = "全部"
+    if len(cells) > 25:
+        view_column, count_column = st.columns([1, 3], vertical_alignment="bottom")
+        with view_column:
+            view = st.selectbox(
+                "网格视图",
+                ("现价附近", "持仓格", "空仓格", "已成交格", "全部"),
+                index=0 if grid["grid_kind"] == "fixed_equal_usdt" else 4,
+                key=f"grid_view_{grid['id']}",
+            )
+        visible_cells = visible_grid_cells(grid, cells, view)
+        with count_column:
+            st.caption(f"显示 {len(visible_cells)} / {len(cells)} 格 · 表格内可滚动")
+    else:
+        visible_cells = cells
+    rows = build_cell_rows(grid, visible_cells)
     frame = pd.DataFrame(rows)
 
     def color_grid_row(row: pd.Series) -> list[str]:
@@ -1135,28 +1174,31 @@ def _render_detail_live(strategy_id: str) -> None:
         return [f"color: {color}; font-weight: 600; background-color: transparent;"] * len(row)
 
     render_cell_boundary_controls(grid, cells, "upper", pending_action)
-    styled_frame = frame.style.apply(color_grid_row, axis=1)
-    st.dataframe(
-        styled_frame,
-        width="stretch",
-        height=max(80, 36 * (len(frame) + 1) + 3),
-        row_height=35,
-        hide_index=True,
-        column_config={
-            "网格": st.column_config.TextColumn("网格", width="small"),
-            "买入价": st.column_config.TextColumn("买入价", width="medium"),
-            "卖出价": st.column_config.TextColumn("卖出价", width="medium"),
-            "当前阶段": st.column_config.TextColumn("当前阶段", width="medium"),
-            "交易次数": st.column_config.NumberColumn("交易次数", width="small", format="%d"),
-            "买入": st.column_config.TextColumn("买入", width="medium"),
-            "卖出": st.column_config.TextColumn("卖出", width="medium"),
-            **({
-                "预算 (U)": st.column_config.TextColumn("预算 (U)", width="medium"),
-                "配对买入金额 (U)": st.column_config.TextColumn("配对买入金额 (U)", width="medium"),
-                "卖出目标金额 (U)": st.column_config.TextColumn("卖出目标金额 (U)", width="medium"),
-            } if grid["grid_kind"] == "fixed_equal_usdt" else {}),
-        },
-    )
+    if frame.empty:
+        st.info(f"当前没有{view}。")
+    else:
+        styled_frame = frame.style.apply(color_grid_row, axis=1)
+        st.dataframe(
+            styled_frame,
+            width="stretch",
+            height=min(520, max(80, 36 * (len(frame) + 1) + 3)),
+            row_height=35,
+            hide_index=True,
+            column_config={
+                "网格": st.column_config.TextColumn("网格", width="small"),
+                "买入价": st.column_config.TextColumn("买入价", width="medium"),
+                "卖出价": st.column_config.TextColumn("卖出价", width="medium"),
+                "当前阶段": st.column_config.TextColumn("当前阶段", width="medium"),
+                "交易次数": st.column_config.NumberColumn("交易次数", width="small", format="%d"),
+                "买入": st.column_config.TextColumn("买入", width="medium"),
+                "卖出": st.column_config.TextColumn("卖出", width="medium"),
+                **({
+                    "预算 (U)": st.column_config.TextColumn("预算 (U)", width="medium"),
+                    "配对买入金额 (U)": st.column_config.TextColumn("配对买入金额 (U)", width="medium"),
+                    "卖出目标金额 (U)": st.column_config.TextColumn("卖出目标金额 (U)", width="medium"),
+                } if grid["grid_kind"] == "fixed_equal_usdt" else {}),
+            },
+        )
     render_cell_boundary_controls(grid, cells, "lower", pending_action)
     if grid["grid_kind"] == "fixed_equal_usdt":
         st.caption(

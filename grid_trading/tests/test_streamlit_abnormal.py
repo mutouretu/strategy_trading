@@ -167,6 +167,47 @@ def run_app(*, timeout: float = 8) -> AppTest:
 
 
 class StreamlitAbnormalTests(unittest.TestCase):
+    def test_fixed_grid_large_table_defaults_to_near_price_and_can_show_all(self):
+        item = strategy_payload(symbol="SOXLUSDT", status="running", has_started=True)
+        item.update({
+            "grid_kind": "fixed_equal_usdt",
+            "grid_budget_usdt": "4000",
+            "order_usdt": "50",
+            "current_price": "60",
+        })
+        cells = [
+            {
+                "index": index,
+                "cell_id": f"cell-{index}",
+                "buy_price": str(50 + index * 0.25),
+                "sell_price": str(50.25 + index * 0.25),
+                "stage": "pending_entry",
+                "entry_order_id": index,
+                "exit_order_id": None,
+                "open_qty": "0",
+                "budget_usdt": "50",
+                "cycle_count": 0,
+            }
+            for index in range(1, 81)
+        ]
+        state = StubState(
+            strategies=[item], cells=cells,
+            status_overrides={
+                ("GET", f"/strategies/{item['strategy_id']}/topups"): (200, []),
+            },
+        )
+        with stub_api(state):
+            app = AppTest.from_file(APP_FILE, default_timeout=12)
+            app.query_params["strategy"] = item["strategy_id"]
+            app.run()
+            self.assertEqual(list(app.exception), [])
+            self.assertEqual(len(app.dataframe[0].value), 25)
+            view = next(widget for widget in app.selectbox if widget.key == f"grid_view_{item['strategy_id']}")
+            view.set_value("全部").run()
+
+        self.assertEqual(list(app.exception), [])
+        self.assertEqual(len(app.dataframe[0].value), 80)
+
     def test_fixed_grid_detail_shows_cell_budgets_and_topup_controls(self):
         item = strategy_payload(symbol="SOLUSDT", status="running", has_started=True)
         item.update({
