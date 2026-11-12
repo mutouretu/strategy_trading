@@ -208,7 +208,7 @@ class StreamlitAbnormalTests(unittest.TestCase):
         self.assertEqual(list(app.exception), [])
         self.assertEqual(len(app.dataframe[0].value), 80)
 
-    def test_fixed_grid_detail_shows_cell_budgets_and_topup_controls(self):
+    def test_fixed_grid_detail_keeps_topup_in_expander(self):
         item = strategy_payload(symbol="SOLUSDT", status="running", has_started=True)
         item.update({
             "grid_kind": "fixed_equal_usdt",
@@ -249,6 +249,7 @@ class StreamlitAbnormalTests(unittest.TestCase):
         self.assertNotIn("预算 (U)", frame.columns)
         self.assertEqual(frame["买入/卖出价"].iloc[0], "100 / 110")
         self.assertEqual(frame["买入/卖出金额 (U)"].iloc[0], "100 / 110")
+        self.assertTrue(any(section.label == "追加资金" for section in app.expander))
         self.assertTrue(any(button.label == "预览资金分配" for button in app.button))
         self.assertFalse(any(button.key and button.key.startswith("add_cell_") for button in app.button))
 

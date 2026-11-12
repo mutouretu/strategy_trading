@@ -577,11 +577,10 @@ def render_sidebar(strategies: list[dict]) -> str:
         st.query_params.clear()
         st.query_params["strategy"] = strategies[0]["id"]
         st.rerun()
-    st.sidebar.caption(f"API {api_base_url()} · Binance Futures")
     return "详情" if detail_active and strategies else "总览"
 
 
-def change_run_state(strategy_id: str, previous_running: bool) -> None:
+def change_run_state(strategy_id: str, previous_running: bool, fixed_grid: bool = False) -> None:
     key = f"run_{strategy_id}"
     requested = bool(st.session_state[key])
     try:
@@ -594,7 +593,11 @@ def change_run_state(strategy_id: str, previous_running: bool) -> None:
         st.session_state["api_flash_error"] = str(exc)
     else:
         st.session_state[f"{key}_server"] = requested
-        st.session_state["api_flash_success"] = "策略已启动" if requested else "策略已停止"
+        st.session_state["api_flash_success"] = (
+            "策略已启动" if requested
+            else "策略已停止；挂单和仓位仍保留" if fixed_grid
+            else "策略已停止"
+        )
 
 
 def render_add_button() -> None:
@@ -605,7 +608,6 @@ def render_add_button() -> None:
 
 def render_overview(strategies: list[dict]) -> None:
     st.title("网格交易总览")
-    st.caption("触发式网格与固定区间等 U 网格；同一币对可以创建多组。")
 
     active = st.toggle("仅显示运行中", value=False)
     rows = [
@@ -677,7 +679,7 @@ def render_overview(strategies: list[dict]) -> None:
                 if item["grid_kind"] == "fixed_equal_usdt" else None
             ),
             on_change=change_run_state,
-            args=(item["id"], is_running),
+            args=(item["id"], is_running, item["grid_kind"] == "fixed_equal_usdt"),
         )
         with cols[13]:
             delete_col, edit_col, refresh_col = st.columns(3, gap="small")
@@ -928,8 +930,7 @@ def render_fixed_topup(grid: dict, cells: list[dict]) -> None:
     except GridApiError as exc:
         st.error(str(exc))
         return
-    seed = next((action for action in actions if action["operation"] == "seed"), None)
-    if seed is not None and seed["status"] == "applied":
+    if any(action["operation"] == "seed" and action["status"] == "applied" for action in actions):
         held = [cell for cell in cells if Decimal(cell["open_qty"]) > 0]
         held_qty = sum((Decimal(cell["open_qty"]) for cell in held), Decimal("0"))
         posted_sells = sum(cell["exit_order_id"] is not None for cell in held)
@@ -939,20 +940,12 @@ def render_fixed_topup(grid: dict, cells: list[dict]) -> None:
             and not cell.get("exit_client_id")
             for cell in held
         )
-        st.info(
-            f"天地网格启动时已按市价一次性买入 {format_quantity(seed['executed_qty'])} "
-            f"{base_asset(grid['symbol'])}，分配给当时现价上方的卖格。"
-            f"当前持仓 {len(held)} 格、合计 {format_quantity(held_qty)} "
-            f"{base_asset(grid['symbol'])}；已挂出 {posted_sells} 笔卖单，"
-            f"另有 {waiting_sells} 个已持仓卖格等待进入交易所限价带。"
+        st.caption(
+            f"持仓 {format_quantity(held_qty)} {base_asset(grid['symbol'])}"
+            f"（{len(held)} 格） · 卖单 {posted_sells} · 待挂 {waiting_sells}"
         )
-    st.subheader("手动增加网格资金")
-    st.caption("追加金额等分到所有格子；卖格对应部分合并开多一次，买格增加挂单预算。")
     if actions:
         latest = actions[-1]
-        st.caption(
-            f"最近资金操作：{latest['operation']} · {latest['amount_usdt']} U · {latest['status']}"
-        )
         if latest["status"] in {"manual_review", "rejected"}:
             message = latest.get("message") or "资金操作未执行，请重新预览"
             if "-4411" in message:
@@ -964,8 +957,15 @@ def render_fixed_topup(grid: dict, cells: list[dict]) -> None:
                 )
             else:
                 st.error(message)
+        elif latest["operation"] == "topup" and latest["status"] in {"requested", "planned", "submitted"}:
+            st.info(f"追加资金 {latest['amount_usdt']} U 正在处理")
     if grid["status_value"] not in {"starting", "running", "error"}:
         return
+    with st.expander("追加资金", expanded=False):
+        render_fixed_topup_form(strategy_id)
+
+
+def render_fixed_topup_form(strategy_id: str) -> None:
     with st.form(f"topup_form_{strategy_id}"):
         amount = st.number_input(
             "追加金额 (USDT)", min_value=0.01, value=None,
@@ -991,10 +991,10 @@ def render_fixed_topup(grid: dict, cells: list[dict]) -> None:
         return
     details = planned["details"]
     st.info(
-        f"每格约 +{details['per_cell_usdt']} U；"
-        f"卖格 {details['sell_cell_count']} 格，合并买入约 {details['aggregate_buy_usdt']} U；"
-        f"买格 {details['buy_cell_count']} 格，增加挂单预算 {details['buy_order_budget_increase_usdt']} U；"
-        f"按当前账户费率估算，本次开仓手续费约 {float(details['estimated_opening_fee_usdt']):.4f} U。"
+        f"每格 +{details['per_cell_usdt']} U · "
+        f"合并买入 {details['aggregate_buy_usdt']} U（{details['sell_cell_count']} 格） · "
+        f"买单预算 +{details['buy_order_budget_increase_usdt']} U（{details['buy_cell_count']} 格） · "
+        f"预计开仓费 {float(details['estimated_opening_fee_usdt']):.4f} U"
     )
     if st.button("确认追加资金", type="primary", key=f"topup_confirm_{strategy_id}"):
         try:
@@ -1068,7 +1068,6 @@ def _render_detail_live(strategy_id: str) -> None:
         unsafe_allow_html=True,
     )
     if grid["grid_kind"] == "fixed_equal_usdt":
-        st.caption("停止策略只暂停调度；已有挂单和仓位不会自动撤销或平仓。")
         if (performance is not None and performance["coverage_complete"]
                 and performance["accounting_complete"]
                 and performance["net_grid_profit_usdt"] is not None):
@@ -1078,13 +1077,6 @@ def _render_detail_live(strategy_id: str) -> None:
             annualized = performance["simple_annualized_pct"]
             metrics[2].metric(
                 "简单年化", "—" if annualized is None else f"{Decimal(annualized):,.2f}%"
-            )
-            st.caption(
-                f"已完成 {performance['completed_cycles']} 轮；"
-                "纯网格盈利 = 已卖出数量 × 该格买卖价差 − 对应买卖手续费。"
-                "按预设格线计算，不含趋势盈亏、成交滑点、资金费和浮盈亏。"
-                "建仓价为交易所当前持仓均价；收益率按当前网格总预算计算；"
-                "年化按运行时长线性折算，短期数据波动较大。"
             )
         elif performance is not None:
             st.warning("成交历史或买卖配对尚未完整，或手续费币种不是 USDT；暂不显示网格收益。")
@@ -1194,19 +1186,6 @@ def _render_detail_live(strategy_id: str) -> None:
             },
         )
     render_cell_boundary_controls(grid, cells, "lower", pending_action)
-    if grid["grid_kind"] == "fixed_equal_usdt":
-        st.caption(
-            "同一行的买卖金额按同一数量配对计算；已持仓格的配对买入金额是卖出后"
-            "在该格买价重挂的金额，首次建仓按启动时市价。"
-            "实际金额受交易所价格和数量精度影响；"
-            "交易次数按该格完整卖出一轮计 1 次；"
-            "区间固定，超出边界时不移动网格。"
-        )
-    else:
-        st.caption(
-            "数据来自 FastAPI、SQLite 和调度器；Cell 增删由调度器串行执行。"
-            "删除待建仓 Cell 时会联动撤销零成交挂单。"
-        )
 
 
 @st.fragment
