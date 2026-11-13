@@ -614,6 +614,30 @@ class FixedEqualUGridTests(unittest.TestCase):
         self.assertFalse(engine._window_cleanup_pending)
         self.assertEqual(sum(c.entry_order_id is not None for c in self.store.list_cells(config.strategy_id)), 10)
 
+    def test_position_patrol_does_not_place_orders_outside_window(self) -> None:
+        self.exchange.mark = Decimal("60.23")
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            step_size=Decimal("0.01"), min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"), contract_type="TRADIFI_PERPETUAL",
+        )
+        service = GridService(self.store, SimpleNamespace())
+        config = service.create_fixed(
+            "SOXLUSDT", Decimal("30"), Decimal("150"), 323,
+            Decimal("5000"), Decimal("0.01"),
+        )
+        self.store.mark_started(config.strategy_id)
+        engine = FixedGridEngine(self.store, self.exchange, config.strategy_id)
+        engine.tick()
+        before = self.exchange.calls["place_limit_order"]
+
+        engine.sync_orders_only()  # scheduler's position patrol, outside tick()
+
+        self.assertEqual(self.exchange.calls["place_limit_order"], before)
+        cells = self.store.list_cells(config.strategy_id)
+        self.assertEqual(sum(cell.entry_order_id is not None for cell in cells), 10)
+        self.assertEqual(sum(cell.exit_order_id is not None for cell in cells), 10)
+
     def test_small_price_move_keeps_existing_window(self) -> None:
         self.exchange.mark = Decimal("60.23")
         self.exchange.filters = replace(
