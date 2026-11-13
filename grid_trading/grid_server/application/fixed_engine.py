@@ -20,6 +20,8 @@ class FixedGridEngine(TradingEngine):
 
     ORDERS_PER_SIDE = 10
     REBALANCE_BELOW = 5
+    REBALANCE_ABOVE = 15
+    MAX_WINDOW_CANCELS_PER_TICK = 10
 
     def initialize(self) -> None:
         raw_exchange = getattr(self.exchange, "exchange", self.exchange)
@@ -251,11 +253,14 @@ class FixedGridEngine(TradingEngine):
             and self._order_is_ready(OrderSide.SELL, cell.sell_price)
             for cell in exits
         )
-        # A boundary crossing can leave old orders resting at Binance. Count
-        # them toward the five-order threshold, but rebuild if a price gap
-        # leaves an entire side outside the executable price band.
+        # Rebuild when one side is sparse, an old window has grown too large,
+        # or a price gap leaves an entire side outside the executable band.
+        # A bounded cleanup can span several ticks and must finish even if
+        # its first batch brings the count below the upper threshold.
         if (not getattr(self, "_window_initialized", False)
                 or min(len(active_entries), len(active_exits)) < self.REBALANCE_BELOW
+                or max(len(active_entries), len(active_exits)) > self.REBALANCE_ABOVE
+                or getattr(self, "_window_cleanup_pending", False)
                 or min(ready_entries, ready_exits) == 0):
             self._window_entry_ids = {
                 cell.cell_id for cell in sorted(
@@ -267,7 +272,10 @@ class FixedGridEngine(TradingEngine):
                     exits, key=lambda cell: (abs(cell.sell_price - mark), cell.index)
                 )[:self.ORDERS_PER_SIDE]
             }
-            self._defer_far_orders(mark, self._window_entry_ids, self._window_exit_ids)
+            self._window_cleanup_pending = True
+            self._window_cleanup_pending = not self._defer_far_orders(
+                mark, self._window_entry_ids, self._window_exit_ids
+            )
             signature = (
                 frozenset(self._window_entry_ids), frozenset(self._window_exit_ids),
                 frozenset(active_entries), frozenset(active_exits),
@@ -315,10 +323,11 @@ class FixedGridEngine(TradingEngine):
             for cell in sorted(new_exits, key=lambda item: abs(item.sell_price - mark)):
                 self._window_exit_ids.add(cell.cell_id)
 
-    def _defer_far_orders(self, mark: Decimal, entry_ids: set[str], exit_ids: set[str]) -> None:
-        """Cancel limits outside the chosen window only during a rebalance."""
+    def _defer_far_orders(self, mark: Decimal, entry_ids: set[str], exit_ids: set[str]) -> bool:
+        """Cancel far limits in bounded batches; return whether cleanup finished."""
         assert self.filters is not None
         config = self._config()
+        cancellations = 0
         for cell in self.store.list_cells(self.strategy_id):
             if cell.stage == CellStage.PENDING_ENTRY and cell.entry_order_id is not None:
                 if cell.cell_id in entry_ids and self._order_is_ready(OrderSide.BUY, cell.buy_price):
@@ -332,10 +341,13 @@ class FixedGridEngine(TradingEngine):
                 side = "exit"
             else:
                 continue
+            if cancellations >= self.MAX_WINDOW_CANCELS_PER_TICK:
+                return False
             order = self.exchange.get_order(config.symbol, order_id)
             if order.status not in {OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED}:
                 continue
             final = self.exchange.cancel_order(config.symbol, order_id)
+            cancellations += 1
             if final.status not in {OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.FILLED}:
                 raise RuntimeError(f"far {side} order cancellation is not confirmed")
             if side == "entry" or final.status == OrderStatus.FILLED:
@@ -369,6 +381,7 @@ class FixedGridEngine(TradingEngine):
                     "remaining_open_qty": str(cell.open_qty),
                 }, cell.cell_id, self.run_id,
             )
+        return True
 
     def _reinvest_closed_cells(self) -> None:
         config = self._config()
@@ -644,6 +657,8 @@ class FixedGridEngine(TradingEngine):
         config = self._config()
         for cell in self.store.list_cells(self.strategy_id):
             if cell.stage == CellStage.PENDING_ENTRY and cell.entry_order_id is not None:
+                if self._window_entry_ids is not None and cell.cell_id not in self._window_entry_ids:
+                    continue
                 order = self.exchange.get_order(config.symbol, cell.entry_order_id)
                 expected = self._quantity(cell.buy_price, cell)
                 if order.status in {OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED} and order.original_qty != expected:
@@ -660,6 +675,8 @@ class FixedGridEngine(TradingEngine):
                     else:
                         self._place_entry(cell)
             elif cell.stage == CellStage.PENDING_EXIT and cell.exit_order_id is not None:
+                if self._window_exit_ids is not None and cell.cell_id not in self._window_exit_ids:
+                    continue
                 order = self.exchange.get_order(config.symbol, cell.exit_order_id)
                 remaining = order.original_qty - order.executed_qty
                 if order.status in {OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED} and remaining != cell.open_qty:
