@@ -170,6 +170,18 @@ def run_app(*, timeout: float = 8) -> AppTest:
 
 
 class StreamlitAbnormalTests(unittest.TestCase):
+    def test_okx_sidebar_shows_venue_without_magic_object_output(self):
+        state = StubState(status_overrides={
+            ("GET", "/health"): (200, {"status": "ok", "environment": "live", "venue": "okx"}),
+        })
+        with stub_api(state):
+            app = run_app()
+
+        self.assertEqual(list(app.exception), [])
+        self.assertEqual([item.value for item in app.error], ["OKX 实盘"])
+        self.assertEqual(len(app.table), 0)
+        self.assertIn("当前 OKX 策略列表为空", " ".join(item.value for item in app.info))
+
     def test_fixed_grid_large_table_defaults_to_near_price_and_can_show_all(self):
         item = strategy_payload(symbol="SOXLUSDT", status="running", has_started=True)
         item.update({

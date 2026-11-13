@@ -567,7 +567,10 @@ def remove_grid_dialog(grid: dict) -> None:
 def render_sidebar(strategies: list[dict], environment: str = "", venue: str = "binance") -> str:
     st.sidebar.title("交易管理")
     if venue == "okx":
-        st.sidebar.error("OKX 实盘") if environment == "live" else st.sidebar.info("OKX 模拟盘")
+        if environment == "live":
+            st.sidebar.error("OKX 实盘")
+        else:
+            st.sidebar.info("OKX 模拟盘")
     elif environment == "live":
         st.sidebar.error("币安实盘")
     elif environment == "testnet":
@@ -633,7 +636,10 @@ def render_overview(strategies: list[dict]) -> None:
         if strategies:
             st.info("当前没有运行中的网格策略。")
         else:
-            st.info("当前策略数据库为空。点击下方「＋」，选择「固定区间等 U」创建网格。")
+            if st.session_state.get("exchange_venue") == "okx":
+                st.info("当前 OKX 策略列表为空。点击下方「＋」创建固定区间等 U 网格。")
+            else:
+                st.info("当前策略数据库为空。点击下方「＋」，选择「固定区间等 U」创建网格。")
         render_add_button()
         return
 
