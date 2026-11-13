@@ -579,6 +579,41 @@ class FixedEqualUGridTests(unittest.TestCase):
         self.assertEqual(sum(cell.entry_order_id is not None for cell in cells), 10)
         self.assertEqual(window_events(), initial_rebalances + 1)
 
+    def test_order_window_trims_excess_orders_in_bounded_batches(self) -> None:
+        self.exchange.mark = Decimal("60.23")
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            step_size=Decimal("0.01"), min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"), contract_type="TRADIFI_PERPETUAL",
+        )
+        service = GridService(self.store, SimpleNamespace())
+        config = service.create_fixed(
+            "SOXLUSDT", Decimal("30"), Decimal("150"), 323,
+            Decimal("5000"), Decimal("0.01"),
+        )
+        self.store.mark_started(config.strategy_id)
+        engine = FixedGridEngine(self.store, self.exchange, config.strategy_id)
+        engine.tick()
+        extra = [
+            cell for cell in self.store.list_cells(config.strategy_id)
+            if cell.stage == CellStage.PENDING_ENTRY and cell.entry_order_id is None
+        ][:20]
+        for cell in extra:
+            engine._place_entry(cell)
+        self.assertEqual(sum(c.entry_order_id is not None for c in self.store.list_cells(config.strategy_id)), 30)
+
+        before = self.exchange.calls.get("cancel_order", 0)
+        engine.tick()
+        after_first = self.exchange.calls.get("cancel_order", 0)
+        self.assertEqual(after_first - before, engine.MAX_WINDOW_CANCELS_PER_TICK)
+        self.assertTrue(engine._window_cleanup_pending)
+
+        engine.tick()
+        after_second = self.exchange.calls.get("cancel_order", 0)
+        self.assertLessEqual(after_second - after_first, engine.MAX_WINDOW_CANCELS_PER_TICK)
+        self.assertFalse(engine._window_cleanup_pending)
+        self.assertEqual(sum(c.entry_order_id is not None for c in self.store.list_cells(config.strategy_id)), 10)
+
     def test_small_price_move_keeps_existing_window(self) -> None:
         self.exchange.mark = Decimal("60.23")
         self.exchange.filters = replace(
