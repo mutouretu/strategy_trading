@@ -140,6 +140,7 @@ def updated_text(value: str | None, has_started: bool) -> str:
 def normalize_strategy(item: dict) -> dict:
     mode = "做多" if item["mode"] == "long" else "做空"
     market_type = item.get("market_type", "usdm")
+    venue = item.get("venue", "binance")
     price_precision = infer_price_precision(
         item.get("anchor_price"),
         item.get("lower_price"),
@@ -149,11 +150,12 @@ def normalize_strategy(item: dict) -> dict:
         "id": item["strategy_id"],
         "symbol": item["symbol"],
         "market_type": market_type,
+        "venue": venue,
         "grid_kind": item.get("grid_kind", "triggered"),
         "grid_budget_usdt": None if item.get("grid_budget_usdt") is None else decimal_number(item["grid_budget_usdt"]),
         "auto_reinvest_enabled": bool(item.get("auto_reinvest_enabled", False)),
         "market_label": (
-            "固定等 U · U 本位永续"
+            f"{'OKX' if venue == 'okx' else '币安'} · 固定等 U · U 本位永续"
             if item.get("grid_kind") == "fixed_equal_usdt"
             else ("币本位永续" if market_type == "coinm" else "U 本位永续")
         ),
@@ -242,9 +244,10 @@ def display_flash() -> None:
 
 
 def render_fixed_grid_create() -> None:
-    st.caption("币安 U 本位 · 固定天地网格 · 1 倍做多 · 每格等 U")
+    venue = st.session_state.get("exchange_venue", "binance")
+    st.caption(f"{'OKX' if venue == 'okx' else '币安'} U 本位 · 固定天地网格 · 1 倍做多 · 每格等 U")
     with st.form("fixed_grid_preview_form"):
-        symbol = st.text_input("交易对", placeholder="例如 SOLUSDT", key="fixed_symbol")
+        symbol = st.text_input("交易对", placeholder="例如 SOXL-USDT-SWAP" if venue == "okx" else "例如 SOLUSDT", key="fixed_symbol")
         lower = st.number_input("区间下界", min_value=0.0, value=None, step=0.01, format="%.8f")
         upper = st.number_input("区间上界", min_value=0.0, value=None, step=0.01, format="%.8f")
         count = st.number_input("网格数量", min_value=1, max_value=500, value=20, step=1)
@@ -285,7 +288,7 @@ def render_fixed_grid_create() -> None:
     )
     st.caption(
         "数量按每格预算 ÷ 该格买价计算；完整循环的卖出目标金额理论上约为"
-        "单格预算 × (1 + 等比间距)。受币安数量与价格精度影响，"
+        "单格预算 × (1 + 等比间距)。受交易所数量与价格精度影响，"
         f"本次各格预计卖出金额为 {float(allocation['minimum_sell_order_notional_usdt']):.2f}–"
         f"{float(allocation['maximum_sell_order_notional_usdt']):.2f} U。"
     )
@@ -341,6 +344,9 @@ def render_fixed_grid_create() -> None:
 
 @st.dialog("新增币对网格")
 def create_grid_dialog() -> None:
+    if st.session_state.get("exchange_venue") == "okx":
+        render_fixed_grid_create()
+        return
     kind = st.segmented_control(
         "策略类型", ["触发式网格", "固定区间等 U"],
         default="触发式网格", selection_mode="single", key="create_grid_kind",
@@ -558,9 +564,11 @@ def remove_grid_dialog(grid: dict) -> None:
             st.rerun()
 
 
-def render_sidebar(strategies: list[dict], environment: str = "") -> str:
+def render_sidebar(strategies: list[dict], environment: str = "", venue: str = "binance") -> str:
     st.sidebar.title("交易管理")
-    if environment == "live":
+    if venue == "okx":
+        st.sidebar.error("OKX 实盘") if environment == "live" else st.sidebar.info("OKX 模拟盘")
+    elif environment == "live":
         st.sidebar.error("币安实盘")
     elif environment == "testnet":
         st.sidebar.info("币安测试网")
@@ -1325,6 +1333,7 @@ apply_styles()
 display_flash()
 try:
     health = backend().health()
+    st.session_state["exchange_venue"] = health.get("venue", "binance")
     strategies = load_strategies()
 except GridApiError as exc:
     st.sidebar.title("交易管理")
@@ -1333,7 +1342,7 @@ except GridApiError as exc:
     st.info("请先启动 FastAPI：.venv/bin/uvicorn grid_server.api:create_app --factory --port 8100 --workers 1")
     st.stop()
 
-current_page = render_sidebar(strategies, health.get("environment", ""))
+current_page = render_sidebar(strategies, health.get("environment", ""), health.get("venue", "binance"))
 if current_page == "详情":
     render_detail(strategies)
 else:

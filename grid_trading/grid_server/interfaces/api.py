@@ -13,14 +13,20 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from ..infrastructure.binance import BinanceCoinMExchange, BinanceFuturesExchange
+from ..infrastructure.okx import OkxSwapExchange
 from ..shared.config import (
     binance_base_url,
     binance_coinm_base_url,
     binance_credentials,
+    exchange_venue,
     fixed_grid_endpoint_allowed,
     load_environment,
+    okx_base_url,
+    okx_credentials,
+    okx_fixed_grid_endpoint_allowed,
+    okx_simulated,
 )
-from ..domain import FuturesMarket, GridKind, Mode, StrategyConfig
+from ..domain import ExchangeVenue, FuturesMarket, GridKind, Mode, StrategyConfig
 from ..domain.grid import fixed_cell_budgets, round_down
 from ..application.service import GridService
 from ..application.grid_performance import strategy_performance, sync_strategy_trades
@@ -78,6 +84,7 @@ def strategy_payload(config: StrategyConfig, store: SQLiteStore) -> dict:
     return {
         "strategy_id": config.strategy_id,
         "symbol": config.symbol,
+        "venue": config.venue.value,
         "market_type": config.market_type.value,
         "grid_kind": config.grid_kind.value,
         "grid_budget_usdt": None if config.grid_budget_usdt is None else str(config.grid_budget_usdt),
@@ -284,9 +291,10 @@ def create_app(
     exchange_factory: Callable[[], object] | None = None,
 ) -> FastAPI:
     load_environment()
+    venue = exchange_venue()
     if db_path is None:
         db_path = os.getenv("GRID_DB_PATH", "grid_trading.sqlite3")
-    store = SQLiteStore(db_path)
+    store = SQLiteStore(db_path, venue=venue)
     runtime_dir = os.getenv("GRID_RUNTIME_DIR", "").strip()
     supervisor = (
         StrategySupervisor(
@@ -298,23 +306,26 @@ def create_app(
     service = GridService(store, supervisor)
 
     if exchange_factory is None:
-        api_key, api_secret = binance_credentials()
-        usdm_base_url = binance_base_url()
-        coinm_base_url = binance_coinm_base_url()
+        if venue == ExchangeVenue.OKX:
+            api_key, api_secret, passphrase = okx_credentials()
 
-        def exchange_factory(market_type=FuturesMarket.USDM):
-            market = FuturesMarket(market_type)
-            if market == FuturesMarket.COINM:
-                return BinanceCoinMExchange(
-                    api_key,
-                    api_secret,
-                    coinm_base_url,
+            def exchange_factory(market_type=FuturesMarket.USDM):
+                if FuturesMarket(market_type) != FuturesMarket.USDM:
+                    raise ValueError("OKX instance supports USDT perpetuals only")
+                return OkxSwapExchange(
+                    api_key, api_secret, passphrase,
+                    okx_base_url(), simulated=okx_simulated(),
                 )
-            return BinanceFuturesExchange(
-                api_key,
-                api_secret,
-                usdm_base_url,
-            )
+        else:
+            api_key, api_secret = binance_credentials()
+            usdm_base_url = binance_base_url()
+            coinm_base_url = binance_coinm_base_url()
+
+            def exchange_factory(market_type=FuturesMarket.USDM):
+                market = FuturesMarket(market_type)
+                if market == FuturesMarket.COINM:
+                    return BinanceCoinMExchange(api_key, api_secret, coinm_base_url)
+                return BinanceFuturesExchange(api_key, api_secret, usdm_base_url)
 
     assert exchange_factory is not None
     factory_signature = inspect.signature(exchange_factory)
@@ -335,6 +346,13 @@ def create_app(
 
     @app.get("/health")
     def health() -> dict:
+        if venue == ExchangeVenue.OKX:
+            key, secret, passphrase = okx_credentials()
+            return {
+                "status": "ok", "venue": venue.value,
+                "okx_configured": bool(key and secret and passphrase),
+                "environment": "demo" if okx_simulated() else "live",
+            }
         api_key, api_secret = binance_credentials()
         host = urlparse(binance_base_url()).hostname
         environment = (
@@ -344,6 +362,7 @@ def create_app(
         )
         return {
             "status": "ok",
+            "venue": venue.value,
             "binance_configured": bool(api_key and api_secret),
             "environment": environment,
         }
@@ -418,6 +437,8 @@ def create_app(
     @app.post("/strategies/preview")
     def preview(data: StrategyInput) -> dict:
         try:
+            if venue == ExchangeVenue.OKX:
+                raise ValueError("OKX instance supports fixed equal-USDT grids only")
             filters = exchange_for(data.market_type).get_symbol_filters(data.symbol.strip().upper())
             _validate_market_contract(data.market_type, filters)
             order_usdt, order_coin_qty = _strategy_amounts(data, filters.contract_size)
@@ -451,7 +472,7 @@ def create_app(
             config, cells = service.preview_fixed(
                 symbol, data.lower_price, data.upper_price,
                 data.grid_count, data.grid_budget_usdt, filters.tick_size,
-                poll_interval_sec=data.poll_interval_sec,
+                poll_interval_sec=data.poll_interval_sec, venue=venue,
             )
             maker_rate, taker_rate = exchange.get_commission_rates(symbol)
             details = fixed_grid_preview_details(
@@ -476,7 +497,7 @@ def create_app(
             _, preview_cells = service.preview_fixed(
                 symbol, data.lower_price, data.upper_price,
                 data.grid_count, data.grid_budget_usdt, filters.tick_size,
-                poll_interval_sec=data.poll_interval_sec,
+                poll_interval_sec=data.poll_interval_sec, venue=venue,
             )
             maker_rate, taker_rate = exchange.get_commission_rates(symbol)
             fixed_grid_preview_details(
@@ -485,7 +506,7 @@ def create_app(
             config = service.create_fixed(
                 symbol, data.lower_price, data.upper_price,
                 data.grid_count, data.grid_budget_usdt, filters.tick_size,
-                poll_interval_sec=data.poll_interval_sec,
+                poll_interval_sec=data.poll_interval_sec, venue=venue,
             )
             return strategy_payload(config, store)
         except Exception as exc:
@@ -494,6 +515,8 @@ def create_app(
     @app.post("/strategies", status_code=201)
     def create_strategy(data: StrategyInput) -> dict:
         try:
+            if venue == ExchangeVenue.OKX:
+                raise ValueError("OKX instance supports fixed equal-USDT grids only")
             filters = exchange_for(data.market_type).get_symbol_filters(data.symbol.strip().upper())
             _validate_market_contract(data.market_type, filters)
             order_usdt, order_coin_qty = _strategy_amounts(data, filters.contract_size)
@@ -519,6 +542,8 @@ def create_app(
     @app.put("/strategies/{strategy_id}")
     def update_strategy(strategy_id: str, data: StrategyInput) -> dict:
         try:
+            if venue == ExchangeVenue.OKX:
+                raise ValueError("OKX instance supports fixed equal-USDT grids only")
             existing = store.get_strategy(strategy_id)
             if existing is not None and existing.grid_kind == GridKind.FIXED_EQUAL_USDT:
                 raise ValueError("fixed grid parameters cannot be edited through the triggered-grid endpoint")
@@ -702,6 +727,9 @@ def create_app(
                 if isinstance(exchange, BinanceFuturesExchange):
                     if not fixed_grid_endpoint_allowed(exchange.base_url):
                         raise ValueError("fixed equal-USDT grid requires an approved Binance endpoint")
+                elif isinstance(exchange, OkxSwapExchange):
+                    if not okx_fixed_grid_endpoint_allowed(exchange.base_url, simulated=exchange.simulated):
+                        raise ValueError("fixed equal-USDT grid requires explicit OKX live opt-in")
                 if config.lower_price is not None and config.upper_price is not None:
                     mark = exchange.get_mark_price(config.symbol)
                     if not config.lower_price <= mark <= config.upper_price:

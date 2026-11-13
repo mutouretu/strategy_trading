@@ -5,7 +5,7 @@ import uuid
 from dataclasses import replace
 from decimal import Decimal
 
-from ..domain import FuturesMarket, GridKind, Mode, StrategyConfig, StrategyStatus
+from ..domain import ExchangeVenue, FuturesMarket, GridKind, Mode, StrategyConfig, StrategyStatus
 from ..ports.exchange import Exchange
 from ..domain.grid import build_cells, fixed_cell_budgets, fixed_grid_ratio
 from ..infrastructure.sqlite_store import SQLiteStore
@@ -102,6 +102,7 @@ class GridService:
         *,
         strategy_id: str = "preview-fixed",
         poll_interval_sec: float = 1.0,
+        venue: ExchangeVenue = ExchangeVenue.BINANCE,
     ) -> tuple[StrategyConfig, list]:
         budgets = fixed_cell_budgets(grid_budget_usdt, grid_count)
         config = StrategyConfig(
@@ -113,6 +114,7 @@ class GridService:
             grid_count=grid_count,
             order_usdt=budgets[0],
             market_type=FuturesMarket.USDM,
+            venue=venue,
             leverage=1,
             poll_interval_sec=poll_interval_sec,
             move_grid=False,
@@ -133,6 +135,7 @@ class GridService:
         tick_size: Decimal,
         *,
         poll_interval_sec: float = 1.0,
+        venue: ExchangeVenue = ExchangeVenue.BINANCE,
     ) -> StrategyConfig:
         clean_symbol = symbol.strip().upper()
         slug = re.sub(r"[^a-z0-9]+", "-", clean_symbol.lower()).strip("-")
@@ -146,6 +149,7 @@ class GridService:
             tick_size,
             strategy_id=strategy_id,
             poll_interval_sec=poll_interval_sec,
+            venue=venue,
         )
         self.store.create_strategy(config)
         self.store.replace_cells(strategy_id, cells)

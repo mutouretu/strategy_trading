@@ -10,6 +10,11 @@ class Mode(StrEnum):
     SHORT = "short"
 
 
+class ExchangeVenue(StrEnum):
+    BINANCE = "binance"
+    OKX = "okx"
+
+
 class FuturesMarket(StrEnum):
     """Binance futures product family.
 
@@ -66,6 +71,7 @@ class StrategyConfig:
     grid_count: int
     order_usdt: Decimal
     market_type: FuturesMarket = FuturesMarket.USDM
+    venue: ExchangeVenue = ExchangeVenue.BINANCE
     leverage: int = 3
     poll_interval_sec: float = 1.0
     move_grid: bool = True
@@ -88,6 +94,11 @@ class StrategyConfig:
             raise ValueError("strategy_id must not be empty")
         if not self.symbol.strip():
             raise ValueError("symbol must not be empty")
+        if self.venue == ExchangeVenue.OKX:
+            if self.market_type != FuturesMarket.USDM or self.grid_kind != GridKind.FIXED_EQUAL_USDT:
+                raise ValueError("OKX currently supports fixed USDT perpetual grids only")
+            if not self.symbol.endswith("-USDT-SWAP"):
+                raise ValueError("OKX fixed grid symbol must end in -USDT-SWAP")
         if self.anchor_price <= 0:
             raise ValueError("anchor_price must be > 0")
         if self.grid_ratio <= 0:

@@ -25,11 +25,13 @@ class SnapshotExchange:
         self._open_orders: dict[str, dict[int, OrderSnapshot]] = {}
         self._positions: list[PositionSnapshot] | None = None
         self._filters: dict[str, SymbolFilters] = {}
+        self._price_limits: dict[str, tuple[Decimal | None, Decimal | None]] = {}
         self._hedge_mode: bool | None = None
         self._leverages: dict[str, int] = {}
 
     def begin_cycle(self) -> None:
         self._mark_prices.clear()
+        self._price_limits.clear()
         self._open_orders.clear()
         self._positions = None
 
@@ -42,6 +44,12 @@ class SnapshotExchange:
         if symbol not in self._filters:
             self._filters[symbol] = self.exchange.get_symbol_filters(symbol)
         return self._filters[symbol]
+
+    def get_price_limits(self, symbol: str) -> tuple[Decimal | None, Decimal | None]:
+        if symbol not in self._price_limits:
+            getter = getattr(self.exchange, "get_price_limits", None)
+            self._price_limits[symbol] = getter(symbol) if getter else (None, None)
+        return self._price_limits[symbol]
 
     def set_hedge_mode(self, enabled: bool) -> None:
         if self._hedge_mode is None:

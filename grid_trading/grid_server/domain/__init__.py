@@ -1,6 +1,7 @@
 """Domain models and pure grid rules."""
 
 from .models import (
+    ExchangeVenue,
     CellStage,
     FuturesMarket,
     GridKind,
@@ -16,6 +17,7 @@ from .models import (
 )
 
 __all__ = [
+    "ExchangeVenue",
     "CellStage",
     "FuturesMarket",
     "GridKind",

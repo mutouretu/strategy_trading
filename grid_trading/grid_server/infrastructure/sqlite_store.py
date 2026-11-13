@@ -10,6 +10,7 @@ from typing import Iterator
 
 from ..domain import (
     CellStage,
+    ExchangeVenue,
     FuturesMarket,
     GridKind,
     GridCell,
@@ -24,10 +25,11 @@ def utc_now() -> str:
 
 
 class SQLiteStore:
-    def __init__(self, path: str | Path = "grid_trading.sqlite3") -> None:
+    def __init__(self, path: str | Path = "grid_trading.sqlite3", *, venue: ExchangeVenue = ExchangeVenue.BINANCE) -> None:
         # Connections are opened on demand.  Resolve once so a later cwd
         # change cannot silently open a second, empty database.
         self.path = Path(path).expanduser().resolve()
+        self.venue = ExchangeVenue(venue)
         self.init_schema()
 
     @contextmanager
@@ -49,6 +51,16 @@ class SQLiteStore:
     def init_schema(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connection() as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS deployment_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            bound = conn.execute("SELECT value FROM deployment_meta WHERE key='venue'").fetchone()
+            if bound is not None and bound["value"] != self.venue.value:
+                raise ValueError(f"database is bound to {bound['value']}, not {self.venue.value}")
+            if bound is None:
+                has_strategies = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='strategies'").fetchone()
+                if has_strategies and self.venue != ExchangeVenue.BINANCE:
+                    if conn.execute("SELECT 1 FROM strategies LIMIT 1").fetchone():
+                        raise ValueError("existing strategy database is not bound to OKX")
+                conn.execute("INSERT INTO deployment_meta(key, value) VALUES('venue', ?)", (self.venue.value,))
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS strategies (
@@ -56,6 +68,8 @@ class SQLiteStore:
                     symbol TEXT NOT NULL,
                     market_type TEXT NOT NULL DEFAULT 'usdm'
                         CHECK(market_type IN ('usdm', 'coinm')),
+                    venue TEXT NOT NULL DEFAULT 'binance'
+                        CHECK(venue IN ('binance', 'okx')),
                     mode TEXT NOT NULL CHECK(mode IN ('long', 'short')),
                     anchor_price TEXT NOT NULL,
                     grid_ratio TEXT NOT NULL,
@@ -324,6 +338,11 @@ class SQLiteStore:
                 conn.execute(
                     "ALTER TABLE strategies ADD COLUMN market_type TEXT NOT NULL DEFAULT 'usdm'"
                 )
+            if "venue" not in strategy_columns:
+                conn.execute("ALTER TABLE strategies ADD COLUMN venue TEXT NOT NULL DEFAULT 'binance'")
+            mismatched = conn.execute("SELECT 1 FROM strategies WHERE venue != ? LIMIT 1", (self.venue.value,)).fetchone()
+            if mismatched:
+                raise ValueError("strategy venue does not match the database binding")
             if "order_coin_qty" not in strategy_columns:
                 conn.execute("ALTER TABLE strategies ADD COLUMN order_coin_qty TEXT")
             if "contract_size" not in strategy_columns:
@@ -419,23 +438,26 @@ class SQLiteStore:
 
     def create_strategy(self, config: StrategyConfig) -> None:
         config.validate()
+        if config.venue != self.venue:
+            raise ValueError("strategy venue does not match the database binding")
         now = utc_now()
         with self.connection() as conn:
             conn.execute(
                 """
                 INSERT INTO strategies (
-                    strategy_id, symbol, market_type, mode, anchor_price, grid_ratio, grid_count,
+                    strategy_id, symbol, market_type, venue, mode, anchor_price, grid_ratio, grid_count,
                     order_usdt, grid_kind, lower_price, upper_price, grid_budget_usdt,
                     auto_reinvest_enabled,
                     order_coin_qty, contract_size, leverage,
                     poll_interval_sec, move_grid, status,
                     has_started, archived, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     config.strategy_id,
                     config.symbol.strip().upper(),
                     config.market_type.value,
+                    config.venue.value,
                     config.mode.value,
                     str(config.anchor_price),
                     str(config.grid_ratio),
@@ -483,6 +505,8 @@ class SQLiteStore:
 
     def update_draft(self, config: StrategyConfig) -> None:
         config.validate()
+        if config.venue != self.venue:
+            raise ValueError("strategy venue does not match the database binding")
         with self.connection() as conn:
             current = conn.execute(
                 "SELECT has_started, archived FROM strategies WHERE strategy_id = ? AND deleted_at IS NULL",
@@ -494,7 +518,7 @@ class SQLiteStore:
                 raise ValueError("configuration is immutable after first start or archive")
             conn.execute(
                 """
-                UPDATE strategies SET symbol=?, market_type=?, mode=?, anchor_price=?, grid_ratio=?, grid_count=?,
+                UPDATE strategies SET symbol=?, market_type=?, venue=?, mode=?, anchor_price=?, grid_ratio=?, grid_count=?,
                     order_usdt=?, grid_kind=?, lower_price=?, upper_price=?, grid_budget_usdt=?,
                     auto_reinvest_enabled=?,
                     order_coin_qty=?, contract_size=?, leverage=?,
@@ -504,6 +528,7 @@ class SQLiteStore:
                 (
                     config.symbol.strip().upper(),
                     config.market_type.value,
+                    config.venue.value,
                     config.mode.value,
                     str(config.anchor_price),
                     str(config.grid_ratio),
@@ -1676,6 +1701,7 @@ class SQLiteStore:
             strategy_id=row["strategy_id"],
             symbol=row["symbol"],
             market_type=market_type,
+            venue=ExchangeVenue(row["venue"]) if "venue" in row.keys() else ExchangeVenue.BINANCE,
             mode=Mode(row["mode"]),
             anchor_price=Decimal(row["anchor_price"]),
             grid_ratio=Decimal(row["grid_ratio"]),

@@ -6,6 +6,8 @@ from urllib.parse import urlparse
 
 from dotenv import dotenv_values, load_dotenv
 
+from ..domain import ExchangeVenue
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
@@ -26,6 +28,36 @@ def binance_credentials(*, required: bool = False) -> tuple[str, str]:
     if required and (not api_key or not api_secret):
         raise RuntimeError("BINANCE_API_KEY/BINANCE_API_SECRET are required")
     return api_key, api_secret
+
+
+def exchange_venue() -> ExchangeVenue:
+    return ExchangeVenue(os.getenv("GRID_EXCHANGE", "binance").strip().lower())
+
+
+def okx_credentials(*, required: bool = False) -> tuple[str, str, str]:
+    values = tuple(os.getenv(name, "").strip() for name in (
+        "OKX_API_KEY", "OKX_API_SECRET", "OKX_API_PASSPHRASE"
+    ))
+    if required and not all(values):
+        raise RuntimeError("OKX_API_KEY/OKX_API_SECRET/OKX_API_PASSPHRASE are required")
+    return values
+
+
+def okx_base_url() -> str:
+    return os.getenv("OKX_BASE_URL", "https://openapi.okx.com").rstrip("/")
+
+
+def okx_simulated() -> bool:
+    return os.getenv("OKX_SIMULATED", "0") == "1"
+
+
+def okx_fixed_grid_endpoint_allowed(base_url: str, *, simulated: bool) -> bool:
+    parsed = urlparse(base_url)
+    if parsed.scheme != "https" or parsed.port not in {None, 443}:
+        return False
+    if parsed.hostname not in {"openapi.okx.com", "us.okx.com", "eea.okx.com"}:
+        return False
+    return simulated or os.getenv("GRID_ENABLE_OKX_LIVE_FIXED_GRID") == "1"
 
 
 def binance_base_url() -> str:

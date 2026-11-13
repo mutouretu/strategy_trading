@@ -12,13 +12,18 @@ from decimal import Decimal
 from pathlib import Path
 
 from ..infrastructure.binance import BinanceCoinMExchange, BinanceFuturesExchange, BinanceRateLimitError
+from ..infrastructure.okx import OkxRateLimitError, OkxSwapExchange
 from ..shared.config import (
     binance_base_url,
     binance_coinm_base_url,
     binance_credentials,
+    exchange_venue,
     load_environment,
+    okx_base_url,
+    okx_credentials,
+    okx_simulated,
 )
-from ..domain import FuturesMarket, GridKind, Mode, StrategyStatus
+from ..domain import ExchangeVenue, FuturesMarket, GridKind, Mode, StrategyStatus
 from ..application.engine import TradingEngine
 from ..application.fixed_engine import FixedGridEngine
 from ..ports.exchange import Exchange
@@ -175,7 +180,7 @@ class StrategyScheduler:
                     strategy_remains_active = False
                     continue
                 cycle_had_errors = True
-                if isinstance(exc, BinanceRateLimitError):
+                if isinstance(exc, (BinanceRateLimitError, OkxRateLimitError)):
                     retry_delay = max(retry_delay, exc.retry_at - float(self.wall_clock()))
                     self.rate_limited_until[config.strategy_id] = current_time + retry_delay
                 self._record_strategy_failure(config, exc)
@@ -433,9 +438,13 @@ def main() -> int:
     parser.add_argument("--pid-file", default="runtime/scheduler.pid")
     parser.add_argument("--base-url", default=binance_base_url())
     parser.add_argument("--coinm-base-url", default=binance_coinm_base_url())
+    parser.add_argument("--okx-base-url", default=okx_base_url())
     args = parser.parse_args()
-
-    api_key, api_secret = binance_credentials(required=True)
+    venue = exchange_venue()
+    if venue == ExchangeVenue.OKX:
+        okx_key, okx_secret, okx_passphrase = okx_credentials(required=True)
+    else:
+        api_key, api_secret = binance_credentials(required=True)
 
     stopping = False
 
@@ -458,19 +467,17 @@ def main() -> int:
         pid_file.write(str(os.getpid()))
         pid_file.flush()
 
-        store = SQLiteStore(args.db)
-        exchanges = {
-            FuturesMarket.USDM: BinanceFuturesExchange(
-                api_key,
-                api_secret,
-                args.base_url,
-            ),
-            FuturesMarket.COINM: BinanceCoinMExchange(
-                api_key,
-                api_secret,
-                args.coinm_base_url,
-            ),
-        }
+        store = SQLiteStore(args.db, venue=venue)
+        if venue == ExchangeVenue.OKX:
+            exchanges = {FuturesMarket.USDM: OkxSwapExchange(
+                okx_key, okx_secret, okx_passphrase,
+                args.okx_base_url, simulated=okx_simulated(),
+            )}
+        else:
+            exchanges = {
+                FuturesMarket.USDM: BinanceFuturesExchange(api_key, api_secret, args.base_url),
+                FuturesMarket.COINM: BinanceCoinMExchange(api_key, api_secret, args.coinm_base_url),
+            }
         scheduler = StrategyScheduler(
             store,
             exchanges,

@@ -9,8 +9,9 @@ from decimal import Decimal, ROUND_CEILING
 from ..domain import CellStage, GridCell, OrderSide, OrderStatus, StrategyStatus
 from ..domain.grid import fixed_cell_budgets, round_down
 from ..infrastructure.binance import BinanceAPIError, BinanceFuturesExchange
+from ..infrastructure.okx import OkxSwapExchange
 from ..ports.exchange import ExchangeExecutionUnknownError, OrderNotFoundError
-from ..shared.config import fixed_grid_endpoint_allowed
+from ..shared.config import fixed_grid_endpoint_allowed, okx_fixed_grid_endpoint_allowed
 from .engine import TradingEngine
 from .grid_performance import strategy_performance, sync_strategy_trades
 
@@ -26,6 +27,9 @@ class FixedGridEngine(TradingEngine):
         if isinstance(raw_exchange, BinanceFuturesExchange):
             if not fixed_grid_endpoint_allowed(raw_exchange.base_url):
                 raise ValueError("fixed equal-USDT grid requires an approved Binance endpoint")
+        elif isinstance(raw_exchange, OkxSwapExchange):
+            if not okx_fixed_grid_endpoint_allowed(raw_exchange.base_url, simulated=raw_exchange.simulated):
+                raise ValueError("fixed equal-USDT grid requires explicit OKX live opt-in")
         super().initialize()
         assert self.filters is not None
         if self.filters.contract_type not in {"", "PERPETUAL", "TRADIFI_PERPETUAL"}:
@@ -58,6 +62,14 @@ class FixedGridEngine(TradingEngine):
             # Keep the catch-up limit on the favorable side of the grid target
             # while moving it inside Binance's current percent-price band.
             submitted_price = price
+            if isinstance(getattr(self.exchange, "exchange", self.exchange), OkxSwapExchange):
+                buy_limit, sell_limit = self.exchange.get_price_limits(symbol)
+                if side == OrderSide.BUY and buy_limit is not None:
+                    submitted_price = min(submitted_price, round_down(buy_limit, self.filters.tick_size))
+                elif side == OrderSide.SELL and sell_limit is not None:
+                    tick = self.filters.tick_size
+                    legal_minimum = (sell_limit / tick).to_integral_value(rounding=ROUND_CEILING) * tick
+                    submitted_price = max(submitted_price, legal_minimum)
             if side == OrderSide.BUY and self.filters.percent_price_up > 0:
                 submitted_price = min(
                     price, round_down(mark * self.filters.percent_price_up, self.filters.tick_size)
@@ -101,6 +113,11 @@ class FixedGridEngine(TradingEngine):
             side == OrderSide.SELL and mark >= price
         ):
             return True
+        if isinstance(getattr(self.exchange, "exchange", self.exchange), OkxSwapExchange):
+            buy_limit, sell_limit = self.exchange.get_price_limits(self._config().symbol)
+            if side == OrderSide.BUY:
+                return buy_limit is None or price <= buy_limit
+            return sell_limit is None or price >= sell_limit
         # Binance's futures PERCENT_PRICE rule is side-specific: a passive
         # BUY can rest far below mark and a passive SELL far above mark.
         if side == OrderSide.BUY:
