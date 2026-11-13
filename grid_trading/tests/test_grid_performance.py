@@ -135,6 +135,33 @@ class GridPerformanceTests(unittest.TestCase):
         self.assertEqual(Decimal(summary["net_grid_profit_usdt"]), Decimal("-0.03564480"))
         self.assertEqual(Decimal(summary["gross_realized_pnl_usdt"]), Decimal("0.20894230"))
 
+    def test_favorable_catchup_fill_does_not_inflate_grid_profit(self) -> None:
+        buy_price = self.cell.buy_price
+        sell_price = self.cell.sell_price
+        improved_sell = sell_price + Decimal("2")
+        self.store.save_strategy_trades(self.config.strategy_id, [
+            self._trade(1, 101, "0", "0.02", side="BUY", price=str(buy_price)),
+            self._trade(2, 102, "3", "0.03", price=str(improved_sell)),
+        ])
+
+        summary = strategy_performance(
+            self.store, self.config, coverage_complete=True,
+            now=self.started + timedelta(days=1),
+        )
+
+        planned_spread = sell_price - buy_price
+        self.assertEqual(Decimal(summary["gross_grid_profit_usdt"]), planned_spread)
+        self.assertEqual(
+            Decimal(summary["net_grid_profit_usdt"]), planned_spread - Decimal("0.05")
+        )
+        self.assertEqual(
+            Decimal(summary["trend_and_execution_pnl_usdt"]), Decimal("3") - planned_spread
+        )
+        self.assertEqual(
+            Decimal(summary["grid_profit_pct"]),
+            (planned_spread - Decimal("0.05")) / Decimal("400") * 100,
+        )
+
     def test_other_fee_asset_does_not_claim_net_profit(self) -> None:
         self.store.save_strategy_trades(
             self.config.strategy_id, [

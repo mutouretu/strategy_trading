@@ -226,7 +226,12 @@ def strategy_performance(
                 accounting_error = f"buy fill is missing for cell {cell_id}"
                 continue
             sold_quantity += qty
-            gross = qty * fill_price - matched_buy_cost
+            # A catch-up fill may improve on a grid line. Keep the actual
+            # paired spread when it is worse, but do not count any excess
+            # above the cell's planned spread as pure grid profit.
+            actual_spread = qty * fill_price - matched_buy_cost
+            planned_spread = qty * (levels[cell_id][1] - levels[cell_id][0])
+            gross = min(actual_spread, planned_spread)
             fees = matched_fee + fee
             grid_gross += gross
             grid_fees += fees

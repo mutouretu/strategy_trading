@@ -1143,10 +1143,15 @@ def _render_detail_live(strategy_id: str) -> None:
                 and performance["accounting_complete"]
                 and performance["net_grid_profit_usdt"] is not None):
             metrics[1].metric("纯网格盈利", f"{Decimal(performance['net_grid_profit_usdt']):,.4f} U")
-            metrics[2].metric("网格收益率", f"{Decimal(performance['grid_profit_pct']):,.3f}%")
+            budget = Decimal(performance["grid_budget_usdt"])
+            metrics[2].metric(
+                "网格收益率", f"{Decimal(performance['grid_profit_pct']):,.3f}%",
+                help=f"纯网格盈利 ÷ 当前网格总预算 {budget:,.2f} U；分母不是当前持仓。",
+            )
             annualized = performance["simple_annualized_pct"]
             metrics[3].metric(
-                "简单年化", "—" if annualized is None else f"{Decimal(annualized):,.2f}%"
+                "简单年化", "—" if annualized is None else f"{Decimal(annualized):,.2f}%",
+                help="网格收益率按策略首次启动后的实际运行时长线性折算。短期数值不代表全年可持续收益。",
             )
         elif performance is not None:
             st.warning("成交历史或买卖配对尚未完整，或手续费币种不是 USDT；暂不显示网格收益。")
