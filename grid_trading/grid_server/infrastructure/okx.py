@@ -10,6 +10,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -90,6 +91,9 @@ class OkxSwapExchange:
         if code != "0":
             if code == "50011":
                 raise OkxRateLimitError(time.time() + 2)
+            rejected = result.get("data", [])
+            if isinstance(rejected, list) and rejected and str(rejected[0].get("sCode", "0")) != "0":
+                raise OkxAPIError(str(rejected[0]["sCode"]), str(rejected[0].get("sMsg") or result.get("msg", "")))
             raise OkxAPIError(code or str(response.status_code), str(result.get("msg", "")))
         data = result.get("data", [])
         if not isinstance(data, list):
@@ -102,6 +106,23 @@ class OkxSwapExchange:
     def _require_symbol(symbol: str) -> None:
         if not symbol.endswith("-USDT-SWAP"):
             raise ValueError("OKX grid supports USDT-settled perpetuals only")
+
+    @staticmethod
+    def _wire_client_id(client_order_id: str) -> str:
+        # The shared grid uses hyphens for readable IDs; OKX accepts only
+        # letters and digits. The mapping is deterministic for recovery.
+        wire_id = client_order_id.replace("-", "")
+        if not re.fullmatch(r"[A-Za-z0-9]{1,32}", wire_id):
+            raise ValueError("OKX client order ID must be 1–32 letters or digits")
+        return wire_id
+
+    @staticmethod
+    def _grid_client_id(wire_id: str) -> str:
+        if re.fullmatch(r"fg[0-9a-f]{18}", wire_id):
+            return f"fg-{wire_id[2:]}"
+        if re.fullmatch(r"wg[0-9a-f]{16}[ex](?:[0-9a-f]{6})?", wire_id):
+            return f"wg-{wire_id[2:10]}-{wire_id[10:18]}-{wire_id[18:]}"
+        return wire_id
 
     def get_mark_price(self, symbol: str) -> Decimal:
         self._require_symbol(symbol)
@@ -168,7 +189,7 @@ class OkxSwapExchange:
         if position_side not in {"LONG", "SHORT"}:
             raise ValueError("OKX hedge position side must be LONG or SHORT")
         body = {
-            "instId": symbol, "tdMode": "cross", "clOrdId": client_order_id,
+            "instId": symbol, "tdMode": "cross", "clOrdId": self._wire_client_id(client_order_id),
             "side": side.value.lower(), "posSide": position_side.lower(),
             "ordType": order_type, "sz": self._contracts(symbol, quantity),
         }
@@ -205,7 +226,7 @@ class OkxSwapExchange:
             raise OkxAPIError("order", f"unrecognized order state {row.get('state')}")
         factor = self.get_symbol_filters(symbol).contract_size
         return OrderSnapshot(
-            order_id=int(row["ordId"]), client_order_id=str(row.get("clOrdId", "")),
+            order_id=int(row["ordId"]), client_order_id=self._grid_client_id(str(row.get("clOrdId", ""))),
             status=status, side=OrderSide(str(row["side"]).upper()),
             price=Decimal(str(row.get("px") or "0")),
             original_qty=Decimal(str(row.get("sz") or "0")) * factor,
@@ -229,7 +250,7 @@ class OkxSwapExchange:
     def get_order_by_client_id(self, symbol: str, client_order_id: str) -> OrderSnapshot:
         self._require_symbol(symbol)
         try:
-            rows = self._request("GET", "/api/v5/trade/order", {"instId": symbol, "clOrdId": client_order_id})
+            rows = self._request("GET", "/api/v5/trade/order", {"instId": symbol, "clOrdId": self._wire_client_id(client_order_id)})
         except OkxAPIError as exc:
             if exc.code == "51603":
                 raise OrderNotFoundError(f"{symbol} client order {client_order_id} not found") from exc

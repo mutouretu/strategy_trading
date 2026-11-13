@@ -25,6 +25,8 @@ class Response:
         self.data = data
 
     def json(self):
+        if isinstance(self.data, dict) and "code" in self.data:
+            return self.data
         return {"code": "0", "msg": "", "data": self.data}
 
 
@@ -77,6 +79,31 @@ class OkxSwapTests(unittest.TestCase):
         self.assertEqual(exchange.get_commission_rates("ABC-USDT-SWAP"), (Decimal("0.0002"), Decimal("0.0005")))
         fills = exchange.get_user_trades("ABC-USDT-SWAP")
         self.assertEqual((fills[0]["qty"], fills[0]["commission"], fills[0]["realizedPnl"]), ("0.005", "0.002", "-0.1"))
+
+    def test_grid_client_ids_are_okx_safe_and_recoverable(self):
+        seed_id = "fg-b6a2b790df8f98d6ec"
+        cell_id = "wg-e1a97c4b-0123abcd-e45a3f1"
+        self.assertEqual(OkxSwapExchange._wire_client_id(seed_id), "fgb6a2b790df8f98d6ec")
+        self.assertEqual(OkxSwapExchange._grid_client_id("fgb6a2b790df8f98d6ec"), seed_id)
+        self.assertEqual(OkxSwapExchange._grid_client_id(OkxSwapExchange._wire_client_id(cell_id)), cell_id)
+        session = QueueSession([{"sCode": "0", "ordId": "123"}], [{
+            "ordId": "123", "clOrdId": "fgb6a2b790df8f98d6ec", "state": "filled",
+            "side": "buy", "posSide": "long", "px": "", "sz": "0.12",
+            "accFillSz": "0.12", "avgPx": "10.00",
+        }])
+        exchange = OkxSwapExchange("key", "secret", "phrase", session=session)
+        exchange._filters["ABC-USDT-SWAP"] = SymbolFilters(Decimal("0.01"), Decimal("0.01"), contract_size=Decimal("1"))
+        self.assertEqual(exchange.place_market_order("ABC-USDT-SWAP", OrderSide.BUY, "LONG", Decimal("0.12"), seed_id), 123)
+        self.assertEqual(json.loads(session.calls[0][2]["data"])["clOrdId"], "fgb6a2b790df8f98d6ec")
+        self.assertEqual(exchange.get_order_by_client_id("ABC-USDT-SWAP", seed_id).client_order_id, seed_id)
+        self.assertIn("clOrdId=fgb6a2b790df8f98d6ec", session.calls[1][1])
+
+    def test_order_rejection_reports_per_order_code(self):
+        session = QueueSession({"code": "1", "msg": "All operations failed", "data": [{"sCode": "51000", "sMsg": "Invalid clOrdId"}]})
+        exchange = OkxSwapExchange("key", "secret", "phrase", session=session)
+        exchange._filters["ABC-USDT-SWAP"] = SymbolFilters(Decimal("0.01"), Decimal("0.01"), contract_size=Decimal("1"))
+        with self.assertRaisesRegex(Exception, "OKX 51000: Invalid clOrdId"):
+            exchange.place_market_order("ABC-USDT-SWAP", OrderSide.BUY, "LONG", Decimal("0.12"), "fg-123")
 
     def test_pending_orders_read_all_pages(self):
         def order(number):
