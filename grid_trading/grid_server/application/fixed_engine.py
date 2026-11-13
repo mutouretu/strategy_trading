@@ -173,6 +173,20 @@ class FixedGridEngine(TradingEngine):
             )
         ]
 
+    def sync_orders_only(self) -> list[GridCell]:
+        # The scheduler also calls this during its separate position patrol.
+        # That patrol may reconcile fills, but only tick() may choose which
+        # cells can receive new orders in the managed ten-per-side window.
+        if getattr(self, "_window_entry_ids", None) is not None:
+            return super().sync_orders_only()
+        self._window_entry_ids = set()
+        self._window_exit_ids = set()
+        try:
+            return super().sync_orders_only()
+        finally:
+            self._window_entry_ids = None
+            self._window_exit_ids = None
+
     def tick(self) -> Decimal:
         if not self.initialized:
             self.initialize()
