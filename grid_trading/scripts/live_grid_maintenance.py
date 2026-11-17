@@ -20,9 +20,10 @@ from dotenv import dotenv_values
 
 
 PROJECT = Path(__file__).resolve().parents[2]
-OKX_PACKAGE = PROJECT.parent / "strategy_trading_okx_swap_grid/grid_trading"
-if str(OKX_PACKAGE) not in sys.path:
-    sys.path.insert(0, str(OKX_PACKAGE))
+GRID_PACKAGE = PROJECT / "grid_trading"
+GRID_RUNTIME = GRID_PACKAGE / "runtime"
+if str(GRID_PACKAGE) not in sys.path:
+    sys.path.insert(0, str(GRID_PACKAGE))
 
 from grid_server.application.reliability import append_jsonl, read_database  # noqa: E402
 from grid_server.infrastructure.binance import BinanceFuturesExchange  # noqa: E402
@@ -39,16 +40,16 @@ class Target:
 TARGETS = (
     Target(
         "binance", "soxlusdt-fixed-c6ce0449",
-        PROJECT.parent / "strategy_trading_fixed_equal_usdt_grid/grid_trading/runtime/fixed-grid-live.sqlite3",
-        PROJECT / "grid_trading/.env",
+        GRID_RUNTIME / "binance/grid.sqlite3",
+        GRID_PACKAGE / ".env",
     ),
     Target(
         "okx", "soxl-usdt-swap-fixed-197a79bf",
-        PROJECT.parent / "strategy_trading_okx_swap_grid/grid_trading/runtime/okx/grid.sqlite3",
-        PROJECT / "grid_trading/okx.env",
+        GRID_RUNTIME / "okx/grid.sqlite3",
+        GRID_PACKAGE / "okx.env",
     ),
 )
-RUNTIME = PROJECT / "grid_trading/runtime/live-maintenance"
+RUNTIME = GRID_RUNTIME / "live-maintenance"
 
 
 def utc_now() -> str:
@@ -70,9 +71,6 @@ def exchange_for(target: Target):
             or str(values.get("OKX_SIMULATED") or "0") == "1"
             or base_url.rstrip("/") != "https://openapi.okx.com"):
         raise RuntimeError("OKX live order read is not configured")
-    # Import only when an OKX patrol actually runs. The standalone script
-    # selects the OKX worktree above; tests may already have loaded the
-    # ledger worktree's grid_server package in the same interpreter.
     from grid_server.infrastructure.okx import OkxSwapExchange
     return OkxSwapExchange(key, secret, passphrase, base_url, simulated=False)
 

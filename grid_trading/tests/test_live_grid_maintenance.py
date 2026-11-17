@@ -72,6 +72,11 @@ def test_recheck_observes_scheduler_replenishment_without_placing_order():
 def test_okx_patrol_targets_current_live_grid():
     okx = next(target for target in maintenance.TARGETS if target.venue == "okx")
     assert okx.strategy_id == "soxl-usdt-swap-fixed-197a79bf"
+    assert okx.db == maintenance.GRID_RUNTIME / "okx/grid.sqlite3"
+    assert okx.env_file == maintenance.GRID_PACKAGE / "okx.env"
+    binance = next(target for target in maintenance.TARGETS if target.venue == "binance")
+    assert binance.db == maintenance.GRID_RUNTIME / "binance/grid.sqlite3"
+    assert binance.env_file == maintenance.GRID_PACKAGE / ".env"
 
 
 def test_scan_selects_target_among_other_strategies():
