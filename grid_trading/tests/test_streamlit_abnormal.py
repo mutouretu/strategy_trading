@@ -99,6 +99,9 @@ def stub_api(state: StubState):
             if override is not None:
                 self._reply(*override)
                 return
+            if method == "GET" and path == "/health":
+                self._reply(200, {"status": "ok", "environment": "testnet", "binance_configured": True})
+                return
             if method == "GET" and path == "/strategies":
                 self._reply(200, state.strategies)
                 return
@@ -242,6 +245,7 @@ class StreamlitAbnormalTests(unittest.TestCase):
                     {"cell_id": "cell-2", "cycle_count": 1, "quantity_step": "0.01", "amount_usdt": "1"},
                 ]),
                 ("GET", f"/strategies/{item['strategy_id']}/performance"): (200, {
+                    "grid_budget_usdt": "400",
                     "position_entry_price": "100",
                     "initial_entry_price": "105",
                     "position_break_even_price": "101",

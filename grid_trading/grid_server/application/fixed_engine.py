@@ -28,6 +28,7 @@ class FixedGridEngine(TradingEngine):
         if isinstance(raw_exchange, BinanceFuturesExchange):
             if not fixed_grid_endpoint_allowed(raw_exchange.base_url):
                 raise ValueError("fixed equal-USDT grid requires an approved Binance endpoint")
+        self.store.ensure_reinvest_cutover(self.strategy_id)
         super().initialize()
         assert self.filters is not None
         if self.filters.contract_type not in {"", "PERPETUAL", "TRADIFI_PERPETUAL"}:
@@ -257,35 +258,70 @@ class FixedGridEngine(TradingEngine):
         exits = [cell for cell in cells if cell.stage == CellStage.PENDING_EXIT and cell.open_qty > 0]
         active_entries = {cell.cell_id for cell in entries if cell.entry_order_id is not None}
         active_exits = {cell.cell_id for cell in exits if cell.exit_order_id is not None}
-        ready_entries = sum(
-            cell.entry_order_id is not None
-            and self._order_is_ready(OrderSide.BUY, cell.buy_price)
-            for cell in entries
+        ready_entry_cells = [
+            cell for cell in entries if self._order_is_ready(OrderSide.BUY, cell.buy_price)
+        ]
+        ready_exit_cells = [
+            cell for cell in exits if self._order_is_ready(OrderSide.SELL, cell.sell_price)
+        ]
+        ready_entries = sum(cell.cell_id in active_entries for cell in ready_entry_cells)
+        ready_exits = sum(cell.cell_id in active_exits for cell in ready_exit_cells)
+        preferred_entry_cells = sorted(
+            ready_entry_cells, key=lambda cell: (abs(cell.buy_price - mark), cell.index)
+        )[:self.ORDERS_PER_SIDE]
+        preferred_exit_cells = sorted(
+            ready_exit_cells, key=lambda cell: (abs(cell.sell_price - mark), cell.index)
+        )[:self.ORDERS_PER_SIDE]
+        preferred_entries = {cell.cell_id for cell in preferred_entry_cells}
+        preferred_exits = {cell.cell_id for cell in preferred_exit_cells}
+        paired_entries = {
+            cell.cell_id for cell in entries
+            if cell.entry_order_id is None and cell.cell_id in prior_exits
+        }
+        paired_exits = {
+            cell.cell_id for cell in exits
+            if cell.exit_order_id is None and cell.cell_id in prior_entries
+        }
+        price_priority_changed = (
+            bool((preferred_entries - active_entries - paired_entries)
+                 and (active_entries - preferred_entries))
+            or bool((preferred_exits - active_exits - paired_exits)
+                    and (active_exits - preferred_exits))
         )
-        ready_exits = sum(
-            cell.exit_order_id is not None
-            and self._order_is_ready(OrderSide.SELL, cell.sell_price)
-            for cell in exits
-        )
+        def has_interior_gap(
+            preferred: list[GridCell], active: set[str], paired: set[str]
+        ) -> bool:
+            farthest_active = max(
+                (i for i, cell in enumerate(preferred) if cell.cell_id in active),
+                default=-1,
+            )
+            return any(
+                i < farthest_active
+                and cell.cell_id not in active
+                and cell.cell_id not in paired
+                for i, cell in enumerate(preferred)
+            )
+
+        entry_gap = has_interior_gap(preferred_entry_cells, active_entries, paired_entries)
+        exit_gap = has_interior_gap(preferred_exit_cells, active_exits, paired_exits)
         # Rebuild when one side is sparse, an old window has grown too large,
-        # or a price gap leaves an entire side outside the executable band.
+        # a price gap leaves an entire side outside the executable band, or a
+        # closer executable cell is waiting while a farther order uses its slot.
+        # Refill a missing cell inside the active window even while 5-9 orders
+        # remain; a missing cell only at the far edge keeps the usual threshold.
         # A bounded cleanup can span several ticks and must finish even if
         # its first batch brings the count below the upper threshold.
         if (not getattr(self, "_window_initialized", False)
                 or min(len(active_entries), len(active_exits)) < self.REBALANCE_BELOW
                 or max(len(active_entries), len(active_exits)) > self.REBALANCE_ABOVE
                 or getattr(self, "_window_cleanup_pending", False)
-                or min(ready_entries, ready_exits) == 0):
-            self._window_entry_ids = {
-                cell.cell_id for cell in sorted(
-                    entries, key=lambda cell: (abs(cell.buy_price - mark), cell.index)
-                )[:self.ORDERS_PER_SIDE]
-            }
-            self._window_exit_ids = {
-                cell.cell_id for cell in sorted(
-                    exits, key=lambda cell: (abs(cell.sell_price - mark), cell.index)
-                )[:self.ORDERS_PER_SIDE]
-            }
+                or min(ready_entries, ready_exits) == 0
+                or price_priority_changed
+                or entry_gap or exit_gap):
+            # Paired orders caused by this tick's fills are allowed above the
+            # ten-order target so a completed grid leg is not stranded.
+            self._window_entry_ids = preferred_entries | paired_entries
+            self._window_exit_ids = preferred_exits | paired_exits
             self._window_cleanup_pending = True
             self._window_cleanup_pending = not self._defer_far_orders(
                 mark, self._window_entry_ids, self._window_exit_ids
@@ -302,6 +338,9 @@ class FixedGridEngine(TradingEngine):
                         "exits_before": len(active_exits),
                         "entry_target": self.ORDERS_PER_SIDE,
                         "exit_target": self.ORDERS_PER_SIDE,
+                        "price_priority": price_priority_changed,
+                        "entry_gap": entry_gap,
+                        "exit_gap": exit_gap,
                     }, run_id=self.run_id,
                 )
                 self._last_window_signature = signature
@@ -399,23 +438,83 @@ class FixedGridEngine(TradingEngine):
 
     def _reinvest_closed_cells(self) -> None:
         config = self._config()
-        if not config.auto_reinvest_enabled:
-            return
+        # A first upgraded scheduler pass freezes the old ledger. Only cycles
+        # closed after this checkpoint can contribute to the new policy.
+        self.store.ensure_reinvest_cutover(self.strategy_id)
         assert self.filters is not None
         step = self.filters.step_size
         if step <= 0:
             return
+        checkpoints = self.store.list_cell_reinvest_checkpoints(self.strategy_id)
+        booked = {
+            (row["cell_id"], int(row["cycle_count"]))
+            for row in self.store.list_cell_reinvest_earnings(self.strategy_id)
+        }
+        closing_events: dict[tuple[str, int], dict] = {}
+        order_ids_by_cycle: dict[tuple[str, int], dict[str, set[int]]] = {}
+        executed_by_cycle: dict[tuple[str, int], dict[int, Decimal]] = {}
+        closing_counts: dict[str, int] = {}
+        latest_closing: dict[str, dict] = {}
+        current_order_ids: dict[str, dict[str, set[int]]] = {}
+        current_executed: dict[str, dict[int, Decimal]] = {}
+        for event in self.store.list_events(self.strategy_id):
+            cell_id = event["cell_id"]
+            if cell_id is None:
+                continue
+            payload = event["payload"]
+            order_id = payload.get("order_id")
+            role = None
+            if event["event_type"] in {
+                "ENTRY_PLACED", "ENTRY_FILLED", "ENTRY_PARTIAL_FINALIZED", "ENTRY_ENDED",
+            }:
+                role = "entry"
+            elif event["event_type"] in {
+                "EXIT_PLACED", "EXIT_TARGET_FILLED", "EXIT_ENDED", "CYCLE_CLOSED",
+                "FAR_EXIT_DEFERRED",
+            }:
+                role = "exit"
+            elif event["event_type"] in {
+                "ORDER_SUBMISSION_CONFIRMED", "OPEN_ORDER_RECOVERED",
+                "MANUAL_REVIEW_ORDER_RECOVERED",
+            }:
+                role = payload.get("role")
+            if order_id is not None and role in {"entry", "exit"}:
+                current_order_ids.setdefault(cell_id, {"entry": set(), "exit": set()})[role].add(int(order_id))
+            if order_id is not None and event["event_type"] in {
+                "ENTRY_FILLED", "ENTRY_PARTIAL_FINALIZED", "ENTRY_ENDED",
+                "EXIT_TARGET_FILLED", "EXIT_ENDED", "CYCLE_CLOSED", "FAR_EXIT_DEFERRED",
+            }:
+                executed_qty = payload.get("qty") if event["event_type"] in {
+                    "ENTRY_FILLED", "EXIT_TARGET_FILLED", "CYCLE_CLOSED",
+                } else payload.get("executed_qty")
+                if executed_qty is not None:
+                    current_executed.setdefault(cell_id, {})[int(order_id)] = Decimal(str(executed_qty))
+            if not (
+                event["event_type"] == "CYCLE_CLOSED"
+                or (event["event_type"] == "EXIT_ENDED"
+                    and event["payload"].get("action") == "cycle_closed")
+            ):
+                continue
+            cycle_count = int(event["payload"].get("cycle_count") or closing_counts.get(cell_id, 0) + 1)
+            closing_counts[cell_id] = cycle_count
+            latest_closing[cell_id] = event
+            orders = current_order_ids.pop(cell_id, {"entry": set(), "exit": set()})
+            executed = current_executed.pop(cell_id, {})
+            if order_id is not None:
+                orders["exit"].add(int(order_id))
+            checkpoint = checkpoints.get(cell_id)
+            if cycle_count <= (int(checkpoint["last_old_cycle_count"]) if checkpoint else 0):
+                continue
+            if (cell_id, cycle_count) not in booked:
+                closing_events[(cell_id, cycle_count)] = event
+                order_ids_by_cycle[(cell_id, cycle_count)] = orders
+                executed_by_cycle[(cell_id, cycle_count)] = executed
         cells = [
             cell for cell in self.store.list_cells(self.strategy_id)
             if cell.stage == CellStage.UNTRIGGERED and cell.cycle_count > 0
             and cell.open_qty == 0 and cell.entry_order_id is None
         ]
-        if not cells:
-            return
-        if any(
-            action["status"] in {"requested", "planned", "submitted", "manual_review"}
-            for action in self.store.list_capital_actions(self.strategy_id)
-        ):
+        if not closing_events and (not config.auto_reinvest_enabled or not cells):
             return
         try:
             raw_exchange = getattr(self.exchange, "exchange", self.exchange)
@@ -424,33 +523,76 @@ class FixedGridEngine(TradingEngine):
                 return
             performance = strategy_performance(self.store, config, coverage_complete=True)
             profits = performance["cell_net_grid_profit_usdt"]
-            if not performance["accounting_complete"] or profits is None:
+            cycle_profits = performance["cell_cycle_net_grid_profit_usdt"]
+            if not performance["accounting_complete"] or profits is None or cycle_profits is None:
                 return
             # A filled order may become visible before its user-trade fees do.
             # Wait for the complete closing fill before spending its profit.
-            closing_events = {
-                event["cell_id"]: event
-                for event in self.store.list_events(self.strategy_id)
-                if event["event_type"] == "CYCLE_CLOSED"
-                or (event["event_type"] == "EXIT_ENDED"
-                    and event["payload"].get("action") == "cycle_closed")
-            }
             sell_qty_by_order: dict[int, Decimal] = {}
+            buy_qty_by_order: dict[int, Decimal] = {}
             for trade in self.store.list_strategy_trades(self.strategy_id):
-                if trade["side"] == "SELL":
-                    order_id = int(trade["order_id"])
-                    sell_qty_by_order[order_id] = (
-                        sell_qty_by_order.get(order_id, Decimal("0")) + Decimal(trade["quantity"])
-                    )
+                order_id = int(trade["order_id"])
+                quantities = sell_qty_by_order if trade["side"] == "SELL" else buy_qty_by_order
+                quantities[order_id] = quantities.get(order_id, Decimal("0")) + Decimal(trade["quantity"])
+            for (cell_id, cycle_count), closing in closing_events.items():
+                payload = closing["payload"]
+                order_id = payload.get("order_id")
+                expected_qty = Decimal(str(payload.get("qty", payload.get("executed_qty", "0"))))
+                if (order_id is None or expected_qty < 0
+                        or sell_qty_by_order.get(int(order_id), Decimal("0")) < expected_qty):
+                    continue
+                # A completed cycle can include canceled, partly filled entry
+                # and exit orders. Verify every exchange fill before freezing
+                # its fee-adjusted profit, not only the final closing sell.
+                complete = True
+                for role, ids in order_ids_by_cycle[(cell_id, cycle_count)].items():
+                    quantities = buy_qty_by_order if role == "entry" else sell_qty_by_order
+                    for cycle_order_id in ids:
+                        expected = executed_by_cycle[(cell_id, cycle_count)].get(cycle_order_id)
+                        if expected is None:
+                            # A resize cancel may lack a terminal event. Read
+                            # only that ambiguous order while it is still recent.
+                            try:
+                                order = self.exchange.get_order(config.symbol, cycle_order_id)
+                                if order.status not in {OrderStatus.FILLED, OrderStatus.CANCELED,
+                                                       OrderStatus.EXPIRED, OrderStatus.REJECTED}:
+                                    complete = False
+                                    break
+                                expected = order.executed_qty
+                            except Exception:
+                                complete = False
+                                break
+                        if quantities.get(cycle_order_id, Decimal("0")) != expected:
+                            complete = False
+                            break
+                    if not complete:
+                        break
+                if not complete:
+                    continue
+                net_profit = cycle_profits.get(cell_id, {}).get(str(cycle_count))
+                if net_profit is None:
+                    continue
+                percent = Decimal(str(payload.get("auto_reinvest_percent", "100")))
+                if self.store.record_cell_reinvest_earning(
+                    self.strategy_id, cell_id, cycle_count, Decimal(net_profit), percent
+                ):
+                    booked.add((cell_id, cycle_count))
+            if not config.auto_reinvest_enabled or not cells:
+                return
+            if any(
+                action["status"] in {"requested", "planned", "submitted", "manual_review"}
+                for action in self.store.list_capital_actions(self.strategy_id)
+            ):
+                return
             available = self.exchange.get_available_balance("USDT")
             for cell in cells:
-                closing = closing_events.get(cell.cell_id)
-                if closing is None:
+                closing = latest_closing.get(cell.cell_id)
+                if closing is None or (cell.cell_id, cell.cycle_count) not in booked:
                     continue
                 payload = closing["payload"]
                 order_id = payload.get("order_id")
                 expected_qty = Decimal(str(payload.get("qty", payload.get("executed_qty", "0"))))
-                if (order_id is None or expected_qty <= 0
+                if (order_id is None or expected_qty < 0
                         or sell_qty_by_order.get(int(order_id), Decimal("0")) < expected_qty):
                     continue
                 amount = cell.buy_price * step

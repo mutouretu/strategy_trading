@@ -102,6 +102,8 @@ class GridService:
         *,
         strategy_id: str = "preview-fixed",
         poll_interval_sec: float = 1.0,
+        auto_reinvest_enabled: bool = False,
+        auto_reinvest_percent: Decimal = Decimal("100"),
     ) -> tuple[StrategyConfig, list]:
         budgets = fixed_cell_budgets(grid_budget_usdt, grid_count)
         config = StrategyConfig(
@@ -120,6 +122,8 @@ class GridService:
             lower_price=lower_price,
             upper_price=upper_price,
             grid_budget_usdt=grid_budget_usdt,
+            auto_reinvest_enabled=auto_reinvest_enabled,
+            auto_reinvest_percent=auto_reinvest_percent,
         )
         return config, build_cells(config, tick_size)
 
@@ -133,6 +137,8 @@ class GridService:
         tick_size: Decimal,
         *,
         poll_interval_sec: float = 1.0,
+        auto_reinvest_enabled: bool = False,
+        auto_reinvest_percent: Decimal = Decimal("100"),
     ) -> StrategyConfig:
         clean_symbol = symbol.strip().upper()
         slug = re.sub(r"[^a-z0-9]+", "-", clean_symbol.lower()).strip("-")
@@ -146,6 +152,8 @@ class GridService:
             tick_size,
             strategy_id=strategy_id,
             poll_interval_sec=poll_interval_sec,
+            auto_reinvest_enabled=auto_reinvest_enabled,
+            auto_reinvest_percent=auto_reinvest_percent,
         )
         self.store.create_strategy(config)
         self.store.replace_cells(strategy_id, cells)

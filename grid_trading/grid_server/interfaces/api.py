@@ -54,6 +54,8 @@ class FixedGridInput(BaseModel):
     grid_count: int = Field(ge=1, le=500)
     grid_budget_usdt: Decimal = Field(gt=0)
     poll_interval_sec: float = Field(default=1.0, ge=0.2)
+    auto_reinvest_enabled: bool = False
+    auto_reinvest_percent: Decimal = Field(default=Decimal("100"), ge=0, le=100)
 
 
 class TopupInput(BaseModel):
@@ -68,6 +70,7 @@ class TopupPreviewInput(BaseModel):
 
 class AutoReinvestInput(BaseModel):
     enabled: bool
+    auto_reinvest_percent: Decimal | None = Field(default=None, ge=0, le=100)
 
 
 def strategy_payload(config: StrategyConfig, store: SQLiteStore) -> dict:
@@ -82,6 +85,7 @@ def strategy_payload(config: StrategyConfig, store: SQLiteStore) -> dict:
         "grid_kind": config.grid_kind.value,
         "grid_budget_usdt": None if config.grid_budget_usdt is None else str(config.grid_budget_usdt),
         "auto_reinvest_enabled": config.auto_reinvest_enabled,
+        "auto_reinvest_percent": str(config.auto_reinvest_percent),
         "quantity_unit": "base_asset",
         "mode": config.mode.value,
         "anchor_price": str(config.anchor_price),
@@ -452,6 +456,8 @@ def create_app(
                 symbol, data.lower_price, data.upper_price,
                 data.grid_count, data.grid_budget_usdt, filters.tick_size,
                 poll_interval_sec=data.poll_interval_sec,
+                auto_reinvest_enabled=data.auto_reinvest_enabled,
+                auto_reinvest_percent=data.auto_reinvest_percent,
             )
             maker_rate, taker_rate = exchange.get_commission_rates(symbol)
             details = fixed_grid_preview_details(
@@ -477,6 +483,8 @@ def create_app(
                 symbol, data.lower_price, data.upper_price,
                 data.grid_count, data.grid_budget_usdt, filters.tick_size,
                 poll_interval_sec=data.poll_interval_sec,
+                auto_reinvest_enabled=data.auto_reinvest_enabled,
+                auto_reinvest_percent=data.auto_reinvest_percent,
             )
             maker_rate, taker_rate = exchange.get_commission_rates(symbol)
             fixed_grid_preview_details(
@@ -486,6 +494,8 @@ def create_app(
                 symbol, data.lower_price, data.upper_price,
                 data.grid_count, data.grid_budget_usdt, filters.tick_size,
                 poll_interval_sec=data.poll_interval_sec,
+                auto_reinvest_enabled=data.auto_reinvest_enabled,
+                auto_reinvest_percent=data.auto_reinvest_percent,
             )
             return strategy_payload(config, store)
         except Exception as exc:
@@ -589,8 +599,12 @@ def create_app(
     @app.post("/strategies/{strategy_id}/auto-reinvest")
     def set_auto_reinvest(strategy_id: str, data: AutoReinvestInput) -> dict:
         try:
-            store.set_auto_reinvest_enabled(strategy_id, data.enabled)
-            return {"strategy_id": strategy_id, "auto_reinvest_enabled": data.enabled}
+            percent = store.set_auto_reinvest_settings(
+                strategy_id, enabled=data.enabled,
+                auto_reinvest_percent=data.auto_reinvest_percent,
+            )
+            return {"strategy_id": strategy_id, "auto_reinvest_enabled": data.enabled,
+                    "auto_reinvest_percent": str(percent)}
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

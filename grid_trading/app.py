@@ -152,6 +152,7 @@ def normalize_strategy(item: dict) -> dict:
         "grid_kind": item.get("grid_kind", "triggered"),
         "grid_budget_usdt": None if item.get("grid_budget_usdt") is None else decimal_number(item["grid_budget_usdt"]),
         "auto_reinvest_enabled": bool(item.get("auto_reinvest_enabled", False)),
+        "auto_reinvest_percent": decimal_number(item.get("auto_reinvest_percent"), 100.0),
         "market_label": (
             "固定等 U · U 本位永续"
             if item.get("grid_kind") == "fixed_equal_usdt"
@@ -249,6 +250,12 @@ def render_fixed_grid_create() -> None:
         upper = st.number_input("区间上界", min_value=0.0, value=None, step=0.01, format="%.8f")
         count = st.number_input("网格数量", min_value=1, max_value=500, value=20, step=1)
         budget = st.number_input("网格交易预算 (USDT)", min_value=0.01, value=None, step=100.0, format="%.2f")
+        auto_reinvest = st.checkbox("创建后开启自动复投", value=False)
+        reinvest_percent = st.number_input(
+            "每格净利复投比例（%）", min_value=0.0, max_value=100.0,
+            value=100.0, step=0.01, format="%.2f",
+            help="全策略使用同一比例；每格分别按实际买卖手续费计算净利，其余留在账户余额。",
+        )
         preview_clicked = st.form_submit_button("生成预览", type="primary")
     if preview_clicked:
         if not symbol.strip() or lower is None or upper is None or budget is None:
@@ -260,6 +267,8 @@ def render_fixed_grid_create() -> None:
                 "upper_price": str(upper),
                 "grid_count": int(count),
                 "grid_budget_usdt": str(budget),
+                "auto_reinvest_enabled": bool(auto_reinvest),
+                "auto_reinvest_percent": str(Decimal(str(reinvest_percent))),
             }
             try:
                 preview = backend().preview_fixed_grid(payload)
@@ -789,9 +798,9 @@ def build_cell_rows(
             buy_order = exit_text
         if grid["grid_kind"] == "fixed_equal_usdt":
             if stage == "pending_entry" and cell.get("entry_order_id") is None:
-                buy_order = "订单确认中" if cell.get("entry_client_id") else "等待价格带"
+                buy_order = "订单确认中" if cell.get("entry_client_id") else "待挂单"
             if stage == "pending_exit" and cell.get("exit_order_id") is None:
-                sell_order = "订单确认中" if cell.get("exit_client_id") else "等待价格带"
+                sell_order = "订单确认中" if cell.get("exit_client_id") else "待挂单"
         stage_text = (
             f"{int(cell.get('cycle_count', 0))} / "
             f"{reinvest_counts.get(cell['cell_id'], 0) if reinvest_counts is not None else '—'}"
@@ -1040,9 +1049,26 @@ def render_fixed_reinvestment(grid: dict, cells: list[dict]) -> dict[str, int] |
         counts[entry["cell_id"]] = counts.get(entry["cell_id"], 0) + 1
     invested = sum((Decimal(entry["amount_usdt"]) for entry in entries), Decimal("0"))
     enabled = grid["auto_reinvest_enabled"]
+    percent = grid["auto_reinvest_percent"]
     label = "开启" if enabled else "关闭"
-    with st.expander(f"自动复投 · {label} · {len(entries)} 次 / {invested:.4f} U", expanded=False):
-        st.caption("每格完成卖出后，若该格累计净利扣除已复投金额仍足够，下一轮买入数量增加一个交易所数量步长；已有卖单不单独补买。")
+    with st.expander(f"自动复投 · {label} {percent:g}% · {len(entries)} 次 / {invested:.4f} U", expanded=False):
+        st.caption("全策略共用该比例；每格买卖成交扣除实际手续费后独立累计。达到最小增投金额后，下一轮买单增加一个数量步长；其余净利留在账户余额，资金费不分摊到格子。")
+        with st.form(f"reinvest_percent_form_{strategy_id}"):
+            selected_percent = st.number_input(
+                "每格净利复投比例（%）", min_value=0.0, max_value=100.0,
+                value=float(percent), step=0.01, format="%.2f",
+                key=f"reinvest_percent_{strategy_id}",
+            )
+            save_percent = st.form_submit_button("保存比例")
+        if save_percent:
+            try:
+                backend().set_auto_reinvest(
+                    strategy_id, enabled, str(Decimal(str(selected_percent)))
+                )
+            except GridApiError as exc:
+                st.error(str(exc))
+            else:
+                st.rerun()
         if st.button("关闭自动复投" if enabled else "开启自动复投", key=f"reinvest_toggle_{strategy_id}"):
             try:
                 backend().set_auto_reinvest(strategy_id, not enabled)

@@ -121,6 +121,36 @@ def strategy_performance(
         cell_id = event["cell_id"]
         if order_id is not None and cell_id is not None:
             order_to_cell[int(order_id)] = cell_id
+    closing_orders: dict[str, list[tuple[int, int, Decimal, tuple[int, ...]]]] = defaultdict(list)
+    pending_exit_order_ids: dict[str, set[int]] = defaultdict(set)
+    for event in strategy_events:
+        cell_id = event["cell_id"]
+        if cell_id is None:
+            continue
+        order_id = event["payload"].get("order_id")
+        if order_id is not None and (
+            event["event_type"] in {"EXIT_PLACED", "EXIT_TARGET_FILLED", "FAR_EXIT_DEFERRED"}
+            or (event["event_type"] in {"OPEN_ORDER_RECOVERED", "ORDER_SUBMISSION_CONFIRMED",
+                                         "MANUAL_REVIEW_ORDER_RECOVERED"}
+                and event["payload"].get("role") == "exit")
+        ):
+            pending_exit_order_ids[cell_id].add(int(order_id))
+        if not (
+            event["event_type"] == "CYCLE_CLOSED"
+            or (event["event_type"] == "EXIT_ENDED"
+                and event["payload"].get("action") == "cycle_closed")
+        ):
+            continue
+        if order_id is None:
+            continue
+        previous = closing_orders[cell_id]
+        cycle_count = int(event["payload"].get("cycle_count", len(previous) + 1))
+        exit_ids = pending_exit_order_ids.pop(cell_id, set())
+        exit_ids.add(int(order_id))
+        executed_qty = Decimal(str(event["payload"].get(
+            "qty", event["payload"].get("executed_qty", "0")
+        )))
+        previous.append((cycle_count, int(order_id), executed_qty, tuple(exit_ids)))
     for cell in cells:
         for order_id in (cell.entry_order_id, cell.exit_order_id):
             if order_id is not None:
@@ -149,7 +179,7 @@ def strategy_performance(
     # Match each cell's actual fills. Aggregate seed/top-up buys use the cell's
     # grid buy line as their virtual basis so their initial trend PnL stays out.
     # Binance realizedPnl uses the whole position's average cost instead.
-    by_cell: dict[str, list[tuple[int, int, str, Decimal, Decimal, Decimal]]] = defaultdict(list)
+    by_cell: dict[str, list[tuple[int, int, str, Decimal, Decimal, Decimal, int]]] = defaultdict(list)
     accounting_error: str | None = None
     for action in actions:
         if action["status"] != "applied" or action["order_id"] is None:
@@ -179,6 +209,7 @@ def strategy_performance(
                 by_cell[cell_id].append((
                     last_fill["traded_at_ms"], last_fill["trade_id"],
                     "BUY", qty, total_fee * qty / executed, levels[cell_id][0],
+                    int(action["order_id"]),
                 ))
 
     for trade in trades:
@@ -190,24 +221,54 @@ def strategy_performance(
             Decimal(trade["quantity"]),
             Decimal(trade["commission"]) if trade["commission_asset"] == "USDT" else Decimal("0"),
             Decimal(trade["price"]),
+            int(trade["order_id"]),
         ))
 
     grid_gross = Decimal("0")
     grid_fees = Decimal("0")
     sold_quantity = Decimal("0")
     cell_grid_profit = {cell_id: Decimal("0") for cell_id in levels}
+    cell_cycle_profit: dict[str, dict[int, Decimal]] = defaultdict(dict)
     for cell_id, events in by_cell.items():
         if cell_id not in levels:
             accounting_error = f"grid level is missing for cell {cell_id}"
             continue
         open_lots: deque[list[Decimal]] = deque()
-        for _, _, side, qty, fee, fill_price in sorted(events, key=lambda event: (event[0], event[1])):
+        sorted_events = sorted(events, key=lambda event: (event[0], event[1]))
+        sell_events = [event for event in sorted_events if event[2] == "SELL"]
+        last_sell_index_by_order = {
+            order_id: index for index, (*_, order_id) in enumerate(sell_events)
+        }
+        cycle_by_sell_index: dict[int, int] = {}
+        previous_end = -1
+        for cycle_count, closing_order_id, executed_qty, exit_order_ids in closing_orders.get(cell_id, []):
+            end = last_sell_index_by_order.get(closing_order_id)
+            if end is None and executed_qty == 0:
+                # A zero-fill replacement can formally end a cycle after an
+                # earlier partial sell already disposed of its position.
+                end = max(
+                    (last_sell_index_by_order[order_id] for order_id in exit_order_ids
+                     if order_id in last_sell_index_by_order),
+                    default=None,
+                )
+            if end is None or end <= previous_end:
+                if executed_qty > 0:
+                    accounting_error = f"closing sell fills are incomplete for cell {cell_id}"
+                continue
+            for index in range(previous_end + 1, end + 1):
+                cycle_by_sell_index[index] = cycle_count
+            cell_cycle_profit[cell_id][cycle_count] = Decimal("0")
+            previous_end = end
+        sell_index = 0
+        for _, _, side, qty, fee, fill_price, _ in sorted_events:
             if side == "BUY":
                 open_lots.append([qty, fee, fill_price])
                 continue
             if side != "SELL":
                 accounting_error = f"unexpected trade side {side}"
                 continue
+            cycle_count = cycle_by_sell_index.get(sell_index)
+            sell_index += 1
             remaining = qty
             matched_fee = Decimal("0")
             matched_buy_cost = Decimal("0")
@@ -236,11 +297,20 @@ def strategy_performance(
             grid_gross += gross
             grid_fees += fees
             cell_grid_profit[cell_id] += gross - fees
+            if cycle_count is not None:
+                cell_cycle_profit[cell_id][cycle_count] += gross - fees
 
     net = None if other_fee_assets or accounting_error else grid_gross - grid_fees
     cell_net = (
         None if net is None or not coverage_complete
         else {cell_id: str(profit) for cell_id, profit in cell_grid_profit.items()}
+    )
+    cell_cycle_net = (
+        None if net is None or not coverage_complete
+        else {
+            cell_id: {str(cycle): str(profit) for cycle, profit in cycles.items()}
+            for cell_id, cycles in cell_cycle_profit.items()
+        }
     )
     budget = config.grid_budget_usdt
     roi = None if net is None else net / budget * Decimal("100")
@@ -263,6 +333,7 @@ def strategy_performance(
         "trend_and_execution_pnl_usdt": str(account_gross - grid_gross),
         "net_grid_profit_usdt": None if net is None else str(net),
         "cell_net_grid_profit_usdt": cell_net,
+        "cell_cycle_net_grid_profit_usdt": cell_cycle_net,
         "grid_profit_pct": None if roi is None else str(roi),
         "simple_annualized_pct": None if annualized is None else str(annualized),
         "elapsed_seconds": elapsed_seconds,
