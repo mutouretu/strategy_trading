@@ -104,6 +104,10 @@ class StrategyConfig:
             raise ValueError("anchor_price must be > 0")
         if self.grid_ratio <= 0:
             raise ValueError("grid_ratio must be > 0")
+        if not self.auto_reinvest_percent.is_finite() or not (
+            Decimal("0") <= self.auto_reinvest_percent <= Decimal("100")
+        ):
+            raise ValueError("auto_reinvest_percent must be between 0 and 100")
         if self.grid_count < 1:
             raise ValueError("grid_count must be >= 1")
         if not self.auto_reinvest_percent.is_finite() or not (Decimal("0") <= self.auto_reinvest_percent <= Decimal("100")):

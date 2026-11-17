@@ -1081,14 +1081,14 @@ class SQLiteStore:
     def set_auto_reinvest_enabled(self, strategy_id: str, enabled: bool) -> None:
         self.set_auto_reinvest_config(strategy_id, enabled=enabled)
 
-    def ensure_reinvest_cutover(self, strategy_id: str) -> None:
+    def ensure_reinvest_cutover(self, strategy_id: str) -> bool:
         """Exclude old profits/spends at the first tick of the new engine."""
         with self.connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             if conn.execute(
                 "SELECT 1 FROM reinvest_cutovers WHERE strategy_id=?", (strategy_id,)
             ).fetchone():
-                return
+                return False
             strategy = conn.execute(
                 "SELECT 1 FROM strategies WHERE strategy_id=? AND grid_kind=?",
                 (strategy_id, GridKind.FIXED_EQUAL_USDT.value),
@@ -1112,6 +1112,7 @@ class SQLiteStore:
                 "INSERT INTO reinvest_cutovers(strategy_id, created_at) VALUES (?, ?)",
                 (strategy_id, utc_now()),
             )
+            return True
 
     def reinvest_cutover_cycles(self, strategy_id: str) -> dict[str, int]:
         with self.connection() as conn:
@@ -1156,6 +1157,16 @@ class SQLiteStore:
                 raise ValueError("active fixed grid not found")
             return percent
 
+    def set_auto_reinvest_settings(
+        self, strategy_id: str, *, enabled: bool,
+        auto_reinvest_percent: Decimal | None = None,
+    ) -> Decimal:
+        """Keep the Binance branch's settings API during branch integration."""
+        return self.set_auto_reinvest_config(
+            strategy_id, enabled=enabled,
+            auto_reinvest_percent=auto_reinvest_percent,
+        )
+
     def book_cell_reinvest_earnings(
         self, strategy_id: str, cell_id: str, cycle_count: int,
         net_profit_usdt: Decimal, auto_reinvest_percent: Decimal,
@@ -1188,6 +1199,16 @@ class SQLiteStore:
                  str(eligible), str(auto_reinvest_percent), utc_now()),
             )
             return cursor.rowcount == 1
+
+    def record_cell_reinvest_earning(
+        self, strategy_id: str, cell_id: str, cycle_count: int,
+        net_profit_usdt: Decimal, auto_reinvest_percent: Decimal,
+    ) -> bool:
+        """Keep the Binance branch's earning API during branch integration."""
+        return self.book_cell_reinvest_earnings(
+            strategy_id, cell_id, cycle_count,
+            net_profit_usdt, auto_reinvest_percent,
+        )
 
     def list_cell_reinvest_earnings(self, strategy_id: str) -> list[dict]:
         with self.connection() as conn:

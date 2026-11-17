@@ -529,7 +529,9 @@ class TradingEngine:
                     self._event(
                         "CYCLE_CLOSED",
                         cell,
-                        {"order_id": order.order_id, "price": str(order.average_price or order.price), "qty": str(qty), "cycle_count": cell.cycle_count},
+                        {"order_id": order.order_id, "price": str(order.average_price or order.price),
+                         "qty": str(qty), "cycle_count": cell.cycle_count,
+                         "auto_reinvest_percent": str(self.store.get_strategy(self.strategy_id).auto_reinvest_percent)},
                     )
             elif order.status == OrderStatus.PARTIALLY_FILLED:
                 delta = max(Decimal("0"), order.executed_qty - cell.exit_executed_qty)
@@ -574,6 +576,11 @@ class TradingEngine:
                         "executed_delta": str(delta),
                         "remaining_open_qty": str(cell.open_qty),
                         "action": "manual_review" if cell.open_qty > 0 else "cycle_closed",
+                        "cycle_count": cell.cycle_count if cell.open_qty == 0 else None,
+                        "auto_reinvest_percent": (
+                            str(self.store.get_strategy(self.strategy_id).auto_reinvest_percent)
+                            if cell.open_qty == 0 else None
+                        ),
                     },
                 )
 
