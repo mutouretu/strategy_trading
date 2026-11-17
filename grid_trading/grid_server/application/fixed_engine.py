@@ -6,7 +6,7 @@ import os
 from dataclasses import replace
 from decimal import Decimal, ROUND_CEILING
 
-from ..domain import CellStage, GridCell, OrderSide, OrderStatus, StrategyStatus
+from ..domain import CellStage, FixedEntryMode, GridCell, OrderSide, OrderStatus, StrategyStatus
 from ..domain.grid import fixed_cell_budgets, round_down
 from ..infrastructure.binance import BinanceAPIError, BinanceFuturesExchange
 from ..infrastructure.okx import OkxSwapExchange
@@ -249,11 +249,13 @@ class FixedGridEngine(TradingEngine):
         seed = self.store.get_capital_action(seed_id)
         if seed is None:
             self._preflight_seed()
-            assert config.grid_budget_usdt is not None
-            self.store.create_capital_action(
-                seed_id, self.strategy_id, "seed", config.grid_budget_usdt
-            )
-            seed = self.store.get_capital_action(seed_id)
+            if config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+                seed = self.store.activate_triggered_fixed_grid(self.strategy_id)
+            else:
+                assert config.grid_budget_usdt is not None
+                seed = self.store.create_capital_action(
+                    seed_id, self.strategy_id, "seed", config.grid_budget_usdt
+                )
 
         if seed["status"] == "manual_review":
             raise RuntimeError(f"initial position needs manual review: {seed['message']}")
@@ -286,7 +288,10 @@ class FixedGridEngine(TradingEngine):
                     return mark
 
             self._reinvest_closed_cells()
-            self._arm_untriggered()
+            if config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+                self.store.arm_triggered_fixed_cells(self.strategy_id, mark)
+            else:
+                self._arm_untriggered()
             self.sync_orders_only()
             self._refresh_order_window(mark, prior_entries, before)
             self.sync_orders_only()
@@ -327,6 +332,19 @@ class FixedGridEngine(TradingEngine):
         ]
         ready_entries = sum(cell.cell_id in active_entries for cell in ready_entry_cells)
         ready_exits = sum(cell.cell_id in active_exits for cell in ready_exit_cells)
+        if self._config().fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+            # A zero-position grid has no sell orders to replenish yet. Do not
+            # rebalance every tick solely because that side is intentionally empty.
+            sparse_window = (
+                bool(ready_entry_cells) and ready_entries < self.REBALANCE_BELOW
+            ) or (
+                bool(ready_exit_cells) and ready_exits < self.REBALANCE_BELOW
+            )
+        else:
+            sparse_window = (
+                min(len(active_entries), len(active_exits)) < self.REBALANCE_BELOW
+                or min(ready_entries, ready_exits) == 0
+            )
         # ready_entry_cells has already passed the exchange price-band check.
         # A buy line crossed during the separate position patrol has priority
         # within the same ten-order target, even if mark has moved far below it.
@@ -404,10 +422,9 @@ class FixedGridEngine(TradingEngine):
         # A bounded cleanup can span several ticks and must finish even if
         # its first batch brings the count below the upper threshold.
         if (not getattr(self, "_window_initialized", False)
-                or min(len(active_entries), len(active_exits)) < self.REBALANCE_BELOW
+                or sparse_window
                 or max(len(active_entries), len(active_exits)) > self.REBALANCE_ABOVE
                 or getattr(self, "_window_cleanup_pending", False)
-                or min(ready_entries, ready_exits) == 0
                 or price_priority_changed
                 or entry_gap or exit_gap
                 or bool(audited_repair_exits)
@@ -630,8 +647,9 @@ class FixedGridEngine(TradingEngine):
             }
             cells = [
                 cell for cell in self.store.list_cells(self.strategy_id)
-                if cell.stage == CellStage.UNTRIGGERED and cell.cycle_count > 0
-                and cell.open_qty == 0 and cell.entry_order_id is None
+                if cell.stage in {CellStage.UNTRIGGERED, CellStage.PENDING_ENTRY}
+                and cell.cycle_count > 0 and cell.open_qty == 0
+                and (cell.entry_order_id is not None or not cell.entry_client_id)
                 and (cell.cell_id, cell.cycle_count) in earned_cycles
             ]
             if not cells:

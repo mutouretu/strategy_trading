@@ -5,7 +5,7 @@ import uuid
 from dataclasses import replace
 from decimal import Decimal
 
-from ..domain import ExchangeVenue, FuturesMarket, GridKind, Mode, OrderSide, OrderStatus, StrategyConfig, StrategyStatus
+from ..domain import ExchangeVenue, FixedEntryMode, FuturesMarket, GridKind, Mode, OrderSide, OrderStatus, StrategyConfig, StrategyStatus
 from ..ports.exchange import Exchange
 from ..domain.grid import build_cells, fixed_cell_budgets, fixed_grid_ratio, round_down
 from .grid_performance import strategy_performance, sync_strategy_trades
@@ -106,6 +106,7 @@ class GridService:
         venue: ExchangeVenue = ExchangeVenue.BINANCE,
         auto_reinvest_enabled: bool = False,
         auto_reinvest_percent: Decimal = Decimal("100"),
+        fixed_entry_mode: FixedEntryMode = FixedEntryMode.SEEDED,
     ) -> tuple[StrategyConfig, list]:
         budgets = fixed_cell_budgets(grid_budget_usdt, grid_count)
         config = StrategyConfig(
@@ -122,6 +123,7 @@ class GridService:
             poll_interval_sec=poll_interval_sec,
             move_grid=False,
             grid_kind=GridKind.FIXED_EQUAL_USDT,
+            fixed_entry_mode=fixed_entry_mode,
             lower_price=lower_price,
             upper_price=upper_price,
             grid_budget_usdt=grid_budget_usdt,
@@ -143,6 +145,7 @@ class GridService:
         venue: ExchangeVenue = ExchangeVenue.BINANCE,
         auto_reinvest_enabled: bool = False,
         auto_reinvest_percent: Decimal = Decimal("100"),
+        fixed_entry_mode: FixedEntryMode = FixedEntryMode.SEEDED,
     ) -> StrategyConfig:
         clean_symbol = symbol.strip().upper()
         slug = re.sub(r"[^a-z0-9]+", "-", clean_symbol.lower()).strip("-")
@@ -159,6 +162,7 @@ class GridService:
             venue=venue,
             auto_reinvest_enabled=auto_reinvest_enabled,
             auto_reinvest_percent=auto_reinvest_percent,
+            fixed_entry_mode=fixed_entry_mode,
         )
         self.store.create_strategy(config)
         self.store.replace_cells(strategy_id, cells)
@@ -183,6 +187,8 @@ class GridService:
             raise KeyError(strategy_id)
         if current.grid_kind != GridKind.FIXED_EQUAL_USDT or current.grid_budget_usdt is None:
             raise ValueError("reconfiguration requires a fixed equal-USDT grid")
+        if current.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+            raise ValueError("reconfiguration of a price-triggered grid is not yet supported")
         if not 1 <= grid_count <= 500:
             raise ValueError("fixed grid count must be between 1 and 500")
         if not current.has_started:

@@ -31,6 +31,11 @@ class GridKind(StrEnum):
     FIXED_EQUAL_USDT = "fixed_equal_usdt"
 
 
+class FixedEntryMode(StrEnum):
+    SEEDED = "seeded"
+    PRICE_TRIGGERED = "price_triggered"
+
+
 class StrategyStatus(StrEnum):
     DRAFT = "draft"
     STARTING = "starting"
@@ -84,6 +89,7 @@ class StrategyConfig:
     order_coin_qty: Decimal | None = None
     contract_size: Decimal = Decimal("0")
     grid_kind: GridKind = GridKind.TRIGGERED
+    fixed_entry_mode: FixedEntryMode = FixedEntryMode.SEEDED
     lower_price: Decimal | None = None
     upper_price: Decimal | None = None
     grid_budget_usdt: Decimal | None = None
@@ -129,6 +135,8 @@ class StrategyConfig:
                 raise ValueError("fixed grid requires 0 < lower_price < upper_price")
             if self.grid_budget_usdt is None or self.grid_budget_usdt <= 0:
                 raise ValueError("fixed grid requires positive grid_budget_usdt")
+        elif self.fixed_entry_mode != FixedEntryMode.SEEDED:
+            raise ValueError("price-triggered entry mode requires a fixed equal-USDT grid")
         if self.market_type == FuturesMarket.COINM:
             if self.order_coin_qty is None or self.order_coin_qty <= 0:
                 raise ValueError("order_coin_qty must be > 0 for COIN-M")
