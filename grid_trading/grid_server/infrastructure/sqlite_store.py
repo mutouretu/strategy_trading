@@ -16,6 +16,9 @@ from ..domain import (
     GridKind,
     GridCell,
     Mode,
+    OrderSide,
+    OrderSnapshot,
+    OrderStatus,
     StrategyConfig,
     StrategyStatus,
 )
@@ -260,6 +263,30 @@ class SQLiteStore:
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_capital_actions_one_pending
                 ON capital_actions(strategy_id)
                 WHERE status IN ('requested', 'planned', 'submitted');
+
+                CREATE TABLE IF NOT EXISTS fixed_reconfigurations (
+                    id TEXT PRIMARY KEY,
+                    strategy_id TEXT NOT NULL,
+                    expected_generation INTEGER NOT NULL,
+                    lower_price TEXT NOT NULL,
+                    upper_price TEXT NOT NULL,
+                    grid_count INTEGER NOT NULL,
+                    grid_budget_usdt TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN (
+                        'requested', 'planned', 'submitted', 'applied', 'manual_review', 'aborted'
+                    )),
+                    plan_json TEXT,
+                    client_order_id TEXT NOT NULL DEFAULT '',
+                    adjustment_order_id INTEGER,
+                    message TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(strategy_id) REFERENCES strategies(strategy_id)
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_fixed_reconfigurations_one_pending
+                ON fixed_reconfigurations(strategy_id)
+                WHERE status IN ('requested', 'planned', 'submitted', 'manual_review');
 
                 CREATE TABLE IF NOT EXISTS cell_reinvestments (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -663,11 +690,113 @@ class SQLiteStore:
                 [self._cell_values(cell, now) for cell in cells],
             )
 
+    def request_fixed_reconfiguration(
+        self, action_id: str, strategy_id: str, lower_price: Decimal,
+        upper_price: Decimal, grid_count: int, grid_budget_usdt: Decimal,
+    ) -> dict:
+        if not action_id or len(action_id) > 80 or not 1 <= grid_count <= 500:
+            raise ValueError("invalid reconfiguration request")
+        from ..domain.grid import fixed_cell_budgets, fixed_grid_ratio
+        fixed_cell_budgets(grid_budget_usdt, grid_count)
+        fixed_grid_ratio(lower_price, upper_price, grid_count)
+        now = utc_now()
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT * FROM fixed_reconfigurations WHERE id=?", (action_id,),
+            ).fetchone()
+            if existing is not None:
+                if (existing["strategy_id"] != strategy_id
+                        or Decimal(existing["lower_price"]) != lower_price
+                        or Decimal(existing["upper_price"]) != upper_price
+                        or int(existing["grid_count"]) != grid_count
+                        or Decimal(existing["grid_budget_usdt"]) != grid_budget_usdt):
+                    raise ValueError("reconfiguration request ID was reused with different parameters")
+                return dict(existing)
+            strategy = conn.execute(
+                "SELECT * FROM strategies WHERE strategy_id=? AND deleted_at IS NULL AND archived=0",
+                (strategy_id,),
+            ).fetchone()
+            if strategy is None:
+                raise KeyError(strategy_id)
+            if strategy["grid_kind"] != GridKind.FIXED_EQUAL_USDT.value or not strategy["has_started"]:
+                raise ValueError("reconfiguration requires an existing fixed grid")
+            conn.execute(
+                """INSERT INTO fixed_reconfigurations(
+                    id, strategy_id, expected_generation, lower_price, upper_price,
+                    grid_count, grid_budget_usdt, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?)""",
+                (action_id, strategy_id, int(strategy["grid_generation"]),
+                 str(lower_price), str(upper_price), grid_count, str(grid_budget_usdt), now, now),
+            )
+            return dict(conn.execute(
+                "SELECT * FROM fixed_reconfigurations WHERE id=?", (action_id,),
+            ).fetchone())
+
+    def get_fixed_reconfiguration(self, action_id: str) -> dict | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM fixed_reconfigurations WHERE id=?", (action_id,),
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def list_fixed_reconfigurations(self, strategy_id: str) -> list[dict]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM fixed_reconfigurations WHERE strategy_id=? ORDER BY created_at, id",
+                (strategy_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def plan_fixed_reconfiguration(
+        self, action_id: str, plan: dict, client_order_id: str,
+    ) -> dict:
+        with self.connection() as conn:
+            result = conn.execute(
+                """UPDATE fixed_reconfigurations SET status='planned', plan_json=?,
+                    client_order_id=?, updated_at=? WHERE id=? AND status='requested'""",
+                (json.dumps(plan, sort_keys=True), client_order_id, utc_now(), action_id),
+            )
+            if result.rowcount != 1:
+                raise ValueError("reconfiguration is not awaiting a plan")
+        return self.get_fixed_reconfiguration(action_id)
+
+    def mark_fixed_reconfiguration_submitted(self, action_id: str, order_id: int | None = None) -> dict:
+        with self.connection() as conn:
+            result = conn.execute(
+                """UPDATE fixed_reconfigurations SET status='submitted',
+                    adjustment_order_id=COALESCE(?, adjustment_order_id), updated_at=?
+                   WHERE id=? AND status IN ('planned', 'submitted')""",
+                (order_id, utc_now(), action_id),
+            )
+            if result.rowcount != 1:
+                raise ValueError("reconfiguration adjustment is not planned")
+        return self.get_fixed_reconfiguration(action_id)
+
+    def mark_fixed_reconfiguration_review(self, action_id: str, message: str) -> None:
+        with self.connection() as conn:
+            conn.execute(
+                """UPDATE fixed_reconfigurations SET status='manual_review',
+                    message=?, updated_at=? WHERE id=? AND status!='applied'""",
+                (str(message), utc_now(), action_id),
+            )
+
+    def abort_fixed_reconfiguration(self, action_id: str) -> None:
+        with self.connection() as conn:
+            result = conn.execute(
+                """UPDATE fixed_reconfigurations SET status='aborted', updated_at=?
+                   WHERE id=? AND status IN ('requested', 'planned', 'manual_review')""",
+                (utc_now(), action_id),
+            )
+            if result.rowcount != 1:
+                raise ValueError("submitted or completed reconfiguration cannot be aborted")
+
     def reconfigure_fixed_cells(
         self, config: StrategyConfig, cells: list[GridCell],
         allocations: dict[str, Decimal], opening_fees: dict[str, Decimal],
         *, expected_generation: int, mark: Decimal,
         position_delta_qty: Decimal = Decimal("0"), position_delta_order_id: int | None = None,
+        action_id: str | None = None,
     ) -> None:
         """Atomically advance one stopped strategy to a fresh cell generation."""
         config.validate()
@@ -704,9 +833,28 @@ class SQLiteStore:
                     or row["grid_kind"] != GridKind.FIXED_EQUAL_USDT.value
                     or int(row["grid_generation"]) != expected_generation
                     or row["symbol"] != config.symbol
-                    or row["venue"] != config.venue.value
-                    or Decimal(row["grid_budget_usdt"]) != config.grid_budget_usdt):
+                    or row["venue"] != config.venue.value):
                 raise ValueError("stopped strategy or expected generation changed")
+            if action_id is not None:
+                action = conn.execute(
+                    "SELECT * FROM fixed_reconfigurations WHERE id=?", (action_id,),
+                ).fetchone()
+                expected_status = "submitted" if position_delta_qty else "planned"
+                if (action is None or action["strategy_id"] != config.strategy_id
+                        or int(action["expected_generation"]) != expected_generation
+                        or action["status"] != expected_status
+                        or Decimal(action["lower_price"]) != config.lower_price
+                        or Decimal(action["upper_price"]) != config.upper_price
+                        or int(action["grid_count"]) != config.grid_count
+                        or Decimal(action["grid_budget_usdt"]) != config.grid_budget_usdt
+                        or action["adjustment_order_id"] != position_delta_order_id):
+                    raise ValueError("persisted reconfiguration action does not match the commit")
+                frozen = json.loads(action["plan_json"] or "{}")
+                if (Decimal(frozen.get("mark", "0")) != mark
+                        or Decimal(frozen.get("target_qty", "-1")) != sum(allocations.values(), Decimal("0"))
+                        or Decimal(frozen.get("delta_qty", "NaN")) != position_delta_qty
+                        or frozen.get("new_sell_cell_ids") != list(allocations)):
+                    raise ValueError("persisted reconfiguration plan changed")
             if conn.execute(
                 "SELECT 1 FROM capital_actions WHERE strategy_id=? AND status IN ('requested','planned','submitted','manual_review') LIMIT 1",
                 (config.strategy_id,),
@@ -755,8 +903,11 @@ class SQLiteStore:
                 "INSERT INTO events(strategy_id, run_id, cell_id, event_type, payload_json, created_at) VALUES (?, ?, NULL, ?, ?, ?)",
                 (config.strategy_id, None, "GRID_RECONFIGURED", json.dumps({
                     "generation": config.grid_generation,
+                    "action_id": action_id,
                     "timestamp_ms": timestamp_ms,
                     "mark_price": str(mark),
+                    "old_budget_usdt": row["grid_budget_usdt"],
+                    "new_budget_usdt": str(config.grid_budget_usdt),
                     "allocations": {key: str(value) for key, value in allocations.items()},
                     "opening_fees": {key: str(value) for key, value in opening_fees.items()},
                     "position_delta_qty": str(position_delta_qty),
@@ -765,6 +916,98 @@ class SQLiteStore:
                     "new_cell_count": len(cells),
                 }), now),
             )
+            if action_id is not None:
+                conn.execute(
+                    "UPDATE fixed_reconfigurations SET status='applied', updated_at=? WHERE id=?",
+                    (now, action_id),
+                )
+
+    def settle_reconfiguration_order(
+        self, strategy_id: str, cell_id: str, role: str, order: OrderSnapshot,
+    ) -> bool:
+        """Book a terminal old-grid order without submitting a replacement."""
+        if role not in {"entry", "exit"} or order.status not in {
+            OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED,
+        }:
+            raise ValueError("reconfiguration requires a terminal entry or exit order")
+        side = OrderSide.BUY if role == "entry" else OrderSide.SELL
+        if order.side != side or order.position_side not in {"", "LONG"}:
+            raise ValueError("old grid order side does not match its cell role")
+        now = utc_now()
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            strategy = conn.execute(
+                "SELECT status, grid_kind FROM strategies WHERE strategy_id=? AND deleted_at IS NULL",
+                (strategy_id,),
+            ).fetchone()
+            if (strategy is None or strategy["status"] != StrategyStatus.STOPPED.value
+                    or strategy["grid_kind"] != GridKind.FIXED_EQUAL_USDT.value):
+                raise ValueError("only a stopped fixed grid can settle old orders")
+            row = conn.execute(
+                "SELECT * FROM cells WHERE strategy_id=? AND cell_id=?",
+                (strategy_id, cell_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(cell_id)
+            reference = row["entry_order_id"] if role == "entry" else row["exit_order_id"]
+            if reference is None:
+                return False
+            if int(reference) != order.order_id:
+                raise ValueError("old cell order reference changed")
+            open_qty = Decimal(row["open_qty"])
+            executed = order.executed_qty
+            if executed < 0 or executed > order.original_qty:
+                raise ValueError("invalid terminal executed quantity")
+            if role == "entry":
+                # A completed (or finalized partial) entry deliberately keeps
+                # its order ID while its exit is active. Its fill is already in
+                # open_qty; settling that historical reference must not book it
+                # a second time during reconfiguration.
+                already_booked = row["stage"] == CellStage.PENDING_EXIT.value
+                if already_booked and (open_qty <= 0 or executed <= 0):
+                    raise ValueError("booked old entry does not match its open cell")
+                new_open = open_qty if already_booked else open_qty + executed
+                stage = CellStage.PENDING_EXIT if new_open > 0 else CellStage.PENDING_ENTRY
+                conn.execute(
+                    """UPDATE cells SET open_qty=?, stage=?, entry_order_id=NULL,
+                        entry_client_id='', entry_filled_at=?, updated_at=?
+                       WHERE strategy_id=? AND cell_id=?""",
+                    (str(new_open), stage.value,
+                     (row["entry_filled_at"] or now) if new_open > 0 else "",
+                     now, strategy_id, cell_id),
+                )
+                event_type = "ENTRY_ENDED"
+                payload = {"order_id": order.order_id, "status": order.status.value,
+                           "executed_qty": str(executed),
+                           "action": "reconfigure_booked" if already_booked else "reconfigure"}
+            else:
+                already = Decimal(row["exit_executed_qty"])
+                delta = executed - already
+                if delta < 0 or delta > open_qty:
+                    raise ValueError("terminal exit fill does not reconcile with cell quantity")
+                new_open = open_qty - delta
+                closed = new_open == 0
+                cycles = int(row["cycle_count"]) + int(closed)
+                stage = CellStage.PENDING_ENTRY if closed else CellStage.PENDING_EXIT
+                conn.execute(
+                    """UPDATE cells SET open_qty=?, stage=?, exit_order_id=NULL,
+                        exit_client_id='', exit_executed_qty='0', cycle_count=?,
+                        entry_filled_at=?, updated_at=?
+                       WHERE strategy_id=? AND cell_id=?""",
+                    (str(new_open), stage.value, cycles,
+                     "" if closed else row["entry_filled_at"], now, strategy_id, cell_id),
+                )
+                event_type = "EXIT_ENDED"
+                payload = {"order_id": order.order_id, "status": order.status.value,
+                           "executed_qty": str(executed), "executed_delta": str(delta),
+                           "remaining_open_qty": str(new_open),
+                           "action": "cycle_closed" if closed else "reconfigure_remainder",
+                           "cycle_count": cycles if closed else None}
+            conn.execute(
+                "INSERT INTO events(strategy_id, cell_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                (strategy_id, cell_id, event_type, json.dumps(payload), now),
+            )
+            return True
 
     def save_cell(self, cell: GridCell) -> None:
         with self.connection() as conn:

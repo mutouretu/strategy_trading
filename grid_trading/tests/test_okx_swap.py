@@ -165,6 +165,27 @@ class OkxSwapTests(unittest.TestCase):
                 self.assertEqual(client.get("/health").json()["venue"], "okx")
                 self.assertEqual(client.post("/strategies/preview", json={}).status_code, 422)
 
+                strategy_id = created.json()["strategy_id"]
+                client.app.state.store.mark_started(strategy_id)
+                change = {
+                    "lower_price": "50", "upper_price": "80",
+                    "grid_count": 5, "grid_budget_usdt": "500",
+                }
+                plan = client.post(
+                    f"/strategies/{strategy_id}/reconfigurations/preview", json=change,
+                )
+                self.assertEqual(plan.status_code, 200, plan.text)
+                self.assertEqual(plan.json()["per_cell_usdt"], "100.00000000")
+                requested = client.post(
+                    f"/strategies/{strategy_id}/reconfigurations",
+                    json={**change, "request_id": "api-reconfigure-1"},
+                )
+                self.assertEqual(requested.status_code, 202, requested.text)
+                self.assertEqual(requested.json()["status"], "requested")
+                actions = client.get(f"/strategies/{strategy_id}/reconfigurations")
+                self.assertEqual(actions.status_code, 200, actions.text)
+                self.assertEqual(actions.json()[0]["id"], "api-reconfigure-1")
+
 
 if __name__ == "__main__":
     unittest.main()

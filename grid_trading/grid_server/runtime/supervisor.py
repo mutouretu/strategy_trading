@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 from ..domain import StrategyStatus
@@ -72,6 +74,27 @@ class StrategySupervisor:
         # every other strategy remain untouched.
         self.store.mark_runtime_stopped(strategy_id)
         self.store.set_status(strategy_id, StrategyStatus.STOPPED)
+
+    def shutdown_if_idle(self, timeout_sec: float = 30.0) -> None:
+        """Drain the shared scheduler after all strategies have been stopped."""
+        active = {StrategyStatus.STARTING, StrategyStatus.RUNNING, StrategyStatus.ERROR}
+        if any(config.status in active for config in self.store.list_strategies()):
+            raise ValueError("another active strategy still needs the shared scheduler")
+        pid = self._scheduler_pid(required=False)
+        if not pid:
+            return
+        os.kill(pid, signal.SIGTERM)
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() < deadline:
+            if not self._pid_alive(pid):
+                self._scheduler = None
+                try:
+                    self.pid_path.unlink()
+                except FileNotFoundError:
+                    pass
+                return
+            time.sleep(0.1)
+        raise TimeoutError("shared scheduler did not exit before reconfiguration")
 
     def is_running(self, strategy_id: str) -> bool:
         config = self.store.get_strategy(strategy_id)

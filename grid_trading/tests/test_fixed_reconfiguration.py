@@ -182,6 +182,7 @@ def test_same_budget_reconfiguration_can_increase_position_and_carry_fees() -> N
 
         second_plan = service.preview_fixed_reconfiguration(
             config.strategy_id, Decimal("69"), Decimal("77"), 20, exchange,
+            grid_budget_usdt=Decimal("380"),
         )
         assert second_plan["delta_qty"] < 0
         exchange.adjustment = OrderSnapshot(
@@ -194,7 +195,9 @@ def test_same_budget_reconfiguration_can_increase_position_and_carry_fees() -> N
             second_plan, exchange, adjustment_order_id=201,
         )
         assert generation_two.grid_generation == 2
+        assert generation_two.grid_budget_usdt == Decimal("380")
         second_cells = store.list_cells(config.strategy_id)
+        assert all(cell.budget_usdt == Decimal("19") for cell in second_cells)
         assert {cell.cell_id for cell in second_cells}.isdisjoint(
             {cell.cell_id for cell in cells} | {cell.cell_id for cell in plan["cells"]}
         )

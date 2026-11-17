@@ -1207,6 +1207,92 @@ def render_fixed_topup_form(strategy_id: str) -> None:
             st.rerun()
 
 
+def render_fixed_reconfiguration(grid: dict) -> None:
+    if grid["venue"] != "okx" or not grid["has_started"]:
+        return
+    strategy_id = grid["id"]
+    with st.expander("调整网格范围与单元格", expanded=False):
+        try:
+            actions = backend().reconfigurations(strategy_id)
+        except GridApiError as exc:
+            st.error(str(exc))
+            return
+        pending = next(
+            (action for action in reversed(actions)
+             if action["status"] in {"requested", "planned", "submitted", "manual_review"}),
+            None,
+        )
+        if pending is not None:
+            if pending["status"] == "manual_review":
+                st.error(pending.get("message") or "调仓结果需要人工核对")
+            else:
+                st.info(f"重配任务 {pending['id']}：{pending['status']}")
+                if st.button("继续重配任务", key=f"resume_reconfig_{strategy_id}"):
+                    try:
+                        result = backend().execute_reconfiguration(strategy_id, pending["id"])
+                    except GridApiError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.success(f"任务状态：{result['status']}；策略状态：{result.get('strategy_status', '待确认')}")
+                        st.rerun()
+            if pending["status"] in {"requested", "planned", "manual_review"}:
+                if st.button("撤销重配任务", key=f"abort_reconfig_{strategy_id}"):
+                    try:
+                        result = backend().abort_reconfiguration(strategy_id, pending["id"])
+                    except GridApiError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.success(f"任务已撤销；策略状态：{result['strategy_status']}")
+                        st.rerun()
+            return
+        with st.form(f"reconfig_form_{strategy_id}"):
+            cols = st.columns(4)
+            lower = cols[0].number_input("下限", min_value=0.01, value=float(grid["lower_price"]), format="%.2f")
+            upper = cols[1].number_input("上限", min_value=0.01, value=float(grid["upper_price"]), format="%.2f")
+            count = cols[2].number_input("单元格数", min_value=1, max_value=500, value=grid["grid_count"], step=1)
+            budget = cols[3].number_input("总预算 (U)", min_value=0.01, value=float(grid["grid_budget_usdt"]), format="%.8f")
+            preview_clicked = st.form_submit_button("预览重配")
+        state_key = f"reconfig_preview_{strategy_id}"
+        if preview_clicked:
+            payload = {
+                "lower_price": str(lower), "upper_price": str(upper),
+                "grid_count": int(count), "grid_budget_usdt": str(budget),
+            }
+            try:
+                details = backend().preview_reconfiguration(strategy_id, payload)
+            except GridApiError as exc:
+                st.error(str(exc))
+                st.session_state.pop(state_key, None)
+            else:
+                st.session_state[state_key] = {
+                    "payload": payload, "details": details,
+                    "request_id": uuid.uuid4().hex,
+                }
+        planned = st.session_state.get(state_key)
+        if not planned:
+            return
+        details = planned["details"]
+        st.info(
+            f"每格 {details['per_cell_usdt']} U · 间距 {Decimal(details['grid_ratio_pct']):.4f}% · "
+            f"卖侧 {details['sell_cell_count']} 格 / 买侧 {details['buy_cell_count']} 格 · "
+            f"当前仓位 {details['actual_qty']} → 目标 {details['target_qty']} "
+            f"{base_asset(grid['symbol'])}（按预览价调仓约 {Decimal(details['delta_notional_usdt']):+.2f} U）"
+        )
+        st.caption("确认后会暂时停止该交易所调度、撤销并结算旧挂单，按冻结后的实际仓位调仓，再恢复同一策略。")
+        if st.button("确认并执行重配", type="primary", key=f"apply_reconfig_{strategy_id}"):
+            try:
+                action = backend().request_reconfiguration(
+                    strategy_id, {**planned["payload"], "request_id": planned["request_id"]},
+                )
+                result = backend().execute_reconfiguration(strategy_id, action["id"])
+            except GridApiError as exc:
+                st.error(str(exc))
+            else:
+                st.session_state.pop(state_key, None)
+                st.success(f"重配任务：{result['status']}；策略状态：{result.get('strategy_status', '待确认')}")
+                st.rerun()
+
+
 def render_fixed_reinvestment(grid: dict, cells: list[dict]) -> dict[str, int] | None:
     strategy_id = grid["id"]
     try:
@@ -1365,6 +1451,7 @@ def _render_detail_live(strategy_id: str) -> None:
     reinvest_counts = None
     if grid["grid_kind"] == "fixed_equal_usdt":
         render_fixed_topup(grid, cells)
+        render_fixed_reconfiguration(grid)
         reinvest_counts = render_fixed_reinvestment(grid, cells)
     try:
         actions = backend().cell_actions(grid["id"])

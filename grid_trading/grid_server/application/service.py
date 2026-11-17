@@ -172,7 +172,11 @@ class GridService:
 
     def preview_fixed_reconfiguration(
         self, strategy_id: str, lower_price: Decimal, upper_price: Decimal,
-        grid_count: int, exchange: Exchange, *, allow_adjusted_position: bool = False,
+        grid_count: int, exchange: Exchange, *,
+        grid_budget_usdt: Decimal | None = None,
+        allow_adjusted_position: bool = False,
+        require_quiesced: bool = True,
+        mark_override: Decimal | None = None,
     ) -> dict:
         current = self.store.get_strategy(strategy_id)
         if current is None:
@@ -181,17 +185,23 @@ class GridService:
             raise ValueError("reconfiguration requires a fixed equal-USDT grid")
         if not 1 <= grid_count <= 500:
             raise ValueError("fixed grid count must be between 1 and 500")
-        if current.status != StrategyStatus.STOPPED or not current.has_started:
-            raise ValueError("stop the started strategy before reconfiguration")
+        if not current.has_started:
+            raise ValueError("strategy must have started before reconfiguration")
+        budget = current.grid_budget_usdt if grid_budget_usdt is None else grid_budget_usdt
+        fixed_cell_budgets(budget, grid_count)
+        if require_quiesced and current.status != StrategyStatus.STOPPED:
+            raise ValueError("stop the strategy before reconfiguration")
         filters = exchange.get_symbol_filters(current.symbol)
-        mark = exchange.get_mark_price(current.symbol)
+        mark = exchange.get_mark_price(current.symbol) if mark_override is None else mark_override
         if not lower_price <= mark <= upper_price:
             raise ValueError("current price is outside new grid boundaries")
-        if exchange.get_open_orders(current.symbol):
+        if require_quiesced and exchange.get_open_orders(current.symbol):
             raise ValueError("cancel and reconcile all symbol orders before reconfiguration")
         old_cells = self.store.list_cells(strategy_id)
-        if any(cell.entry_order_id is not None or cell.exit_order_id is not None
-               or cell.stage.value == "manual_review" for cell in old_cells):
+        if require_quiesced and any(
+            cell.entry_order_id is not None or cell.exit_order_id is not None
+            or cell.stage.value == "manual_review" for cell in old_cells
+        ):
             raise ValueError("old cell orders must be reconciled before reconfiguration")
         old_qty = sum((cell.open_qty for cell in old_cells), Decimal("0"))
         actual_qty = sum(
@@ -199,7 +209,7 @@ class GridService:
              if position.symbol == current.symbol and position.position_side == "LONG"),
             Decimal("0"),
         )
-        if not allow_adjusted_position and actual_qty != old_qty:
+        if require_quiesced and not allow_adjusted_position and actual_qty != old_qty:
             raise ValueError("actual and logical long positions differ before adjustment")
         config = replace(
             current,
@@ -208,7 +218,8 @@ class GridService:
             upper_price=upper_price,
             grid_count=grid_count,
             grid_ratio=fixed_grid_ratio(lower_price, upper_price, grid_count),
-            order_usdt=fixed_cell_budgets(current.grid_budget_usdt, grid_count)[0],
+            order_usdt=fixed_cell_budgets(budget, grid_count)[0],
+            grid_budget_usdt=budget,
             grid_generation=current.grid_generation + 1,
         )
         cells = build_cells(config, filters.tick_size)
@@ -223,23 +234,28 @@ class GridService:
         return {
             "config": config, "cells": cells, "allocations": allocations,
             "mark": mark, "old_qty": old_qty, "target_qty": target_qty,
+            "actual_qty": actual_qty,
+            "old_budget_usdt": current.grid_budget_usdt,
             "delta_qty": target_qty - old_qty,
             "new_sell_cell_ids": list(allocations),
         }
 
     def apply_fixed_reconfiguration(
         self, plan: dict, exchange: Exchange, *, adjustment_order_id: int | None = None,
+        action_id: str | None = None,
     ) -> StrategyConfig:
         """Commit a preview after any required market adjustment is confirmed."""
         config: StrategyConfig = plan["config"]
         fresh = self.preview_fixed_reconfiguration(
             config.strategy_id, config.lower_price, config.upper_price,
-            config.grid_count, exchange, allow_adjusted_position=True,
+            config.grid_count, exchange,
+            grid_budget_usdt=config.grid_budget_usdt,
+            allow_adjusted_position=True, mark_override=plan["mark"],
         )
-        if (fresh["mark"] != plan["mark"]
-                and fresh["new_sell_cell_ids"] != plan["new_sell_cell_ids"]):
-            raise ValueError("price crossed a new cell boundary; preview again")
-        if fresh["old_qty"] != plan["old_qty"] or fresh["target_qty"] != plan["target_qty"]:
+        if (fresh["old_qty"] != plan["old_qty"]
+                or fresh["target_qty"] != plan["target_qty"]
+                or fresh["new_sell_cell_ids"] != plan["new_sell_cell_ids"]
+                or fresh["config"].grid_generation != config.grid_generation):
             raise ValueError("reconfiguration preview is stale")
         delta = plan["delta_qty"]
         if (delta != 0) != (adjustment_order_id is not None):
@@ -294,6 +310,7 @@ class GridService:
             config, plan["cells"], plan["allocations"], opening_fees,
             expected_generation=old_config.grid_generation, mark=plan["mark"],
             position_delta_qty=delta, position_delta_order_id=adjustment_order_id,
+            action_id=action_id,
         )
         return self.store.get_strategy(config.strategy_id)
 
@@ -301,6 +318,13 @@ class GridService:
         config = self.store.get_strategy(strategy_id)
         if config is None:
             raise KeyError(strategy_id)
+        pending_reconfiguration = next(
+            (item for item in self.store.list_fixed_reconfigurations(strategy_id)
+             if item["status"] in {"requested", "planned", "submitted", "manual_review"}),
+            None,
+        )
+        if pending_reconfiguration is not None:
+            raise ValueError("finish or abort the pending grid reconfiguration before starting")
         if config.grid_kind == GridKind.FIXED_EQUAL_USDT:
             seed = self.store.get_capital_action(f"seed:{strategy_id}")
             if seed is not None and seed["status"] == "manual_review":

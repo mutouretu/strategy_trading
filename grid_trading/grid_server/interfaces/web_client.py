@@ -65,6 +65,30 @@ class GridApiClient:
     def topups(self, strategy_id: str) -> list[dict]:
         return self._request("GET", f"/strategies/{strategy_id}/topups")
 
+    def preview_reconfiguration(self, strategy_id: str, payload: dict) -> dict:
+        return self._request(
+            "POST", f"/strategies/{strategy_id}/reconfigurations/preview", json=payload,
+        )
+
+    def reconfigurations(self, strategy_id: str) -> list[dict]:
+        return self._request("GET", f"/strategies/{strategy_id}/reconfigurations")
+
+    def request_reconfiguration(self, strategy_id: str, payload: dict) -> dict:
+        return self._request(
+            "POST", f"/strategies/{strategy_id}/reconfigurations", json=payload,
+        )
+
+    def execute_reconfiguration(self, strategy_id: str, action_id: str) -> dict:
+        return self._request(
+            "POST", f"/strategies/{strategy_id}/reconfigurations/{action_id}/execute",
+            timeout=(2.0, 180.0),
+        )
+
+    def abort_reconfiguration(self, strategy_id: str, action_id: str) -> dict:
+        return self._request(
+            "POST", f"/strategies/{strategy_id}/reconfigurations/{action_id}/abort",
+        )
+
     def reinvestments(self, strategy_id: str) -> list[dict]:
         return self._request("GET", f"/strategies/{strategy_id}/reinvestments")
 
@@ -117,11 +141,12 @@ class GridApiClient:
         return self._request("DELETE", f"/strategies/{strategy_id}")
 
     def _request(self, method: str, path: str, **kwargs: Any):
+        timeout = kwargs.pop("timeout", self.timeout)
         try:
             response = self.session.request(
                 method,
                 f"{self.base_url}{path}",
-                timeout=self.timeout,
+                timeout=timeout,
                 **kwargs,
             )
         except requests.RequestException as exc:

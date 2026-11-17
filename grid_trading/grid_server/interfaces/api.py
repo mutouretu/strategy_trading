@@ -29,6 +29,7 @@ from ..shared.config import (
 from ..domain import ExchangeVenue, FuturesMarket, GridKind, Mode, StrategyConfig
 from ..domain.grid import fixed_cell_budgets, round_down
 from ..application.service import GridService
+from ..application.fixed_reconfiguration import FixedReconfigurationWorkflow
 from ..application.grid_performance import strategy_performance, sync_strategy_trades
 from ..infrastructure.sqlite_store import SQLiteStore
 from ..runtime.supervisor import StrategySupervisor
@@ -74,6 +75,17 @@ class TopupPreviewInput(BaseModel):
     amount_usdt: Decimal = Field(gt=0)
 
 
+class FixedReconfigurationInput(BaseModel):
+    lower_price: Decimal = Field(gt=0)
+    upper_price: Decimal = Field(gt=0)
+    grid_count: int = Field(ge=1, le=500)
+    grid_budget_usdt: Decimal = Field(gt=0)
+
+
+class FixedReconfigurationRequest(FixedReconfigurationInput):
+    request_id: str = Field(min_length=8, max_length=80)
+
+
 class AutoReinvestInput(BaseModel):
     enabled: bool
     auto_reinvest_percent: Decimal | None = Field(default=None, ge=0, le=100)
@@ -98,6 +110,7 @@ def strategy_payload(config: StrategyConfig, store: SQLiteStore) -> dict:
         "anchor_price": str(config.anchor_price),
         "grid_ratio": str(config.grid_ratio),
         "grid_count": config.grid_count,
+        "grid_generation": config.grid_generation,
         "order_usdt": str(config.order_usdt),
         "order_coin_qty": (
             None if config.order_coin_qty is None else str(config.order_coin_qty)
@@ -614,6 +627,76 @@ def create_app(
         if store.get_strategy(strategy_id) is None:
             raise HTTPException(status_code=404, detail="strategy not found")
         return store.list_capital_actions(strategy_id)
+
+    @app.get("/strategies/{strategy_id}/reconfigurations")
+    def strategy_reconfigurations(strategy_id: str) -> list[dict]:
+        if store.get_strategy(strategy_id) is None:
+            raise HTTPException(status_code=404, detail="strategy not found")
+        return store.list_fixed_reconfigurations(strategy_id)
+
+    @app.post("/strategies/{strategy_id}/reconfigurations/preview")
+    def preview_reconfiguration(strategy_id: str, data: FixedReconfigurationInput) -> dict:
+        try:
+            if venue != ExchangeVenue.OKX:
+                raise ValueError("reconfiguration workflow currently supports OKX only")
+            return FixedReconfigurationWorkflow(
+                store, service, exchange_for(FuturesMarket.USDM)
+            ).preview(
+                strategy_id, data.lower_price, data.upper_price,
+                data.grid_count, data.grid_budget_usdt,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="strategy not found") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/strategies/{strategy_id}/reconfigurations", status_code=202)
+    def request_reconfiguration(strategy_id: str, data: FixedReconfigurationRequest) -> dict:
+        try:
+            if venue != ExchangeVenue.OKX:
+                raise ValueError("reconfiguration workflow currently supports OKX only")
+            return FixedReconfigurationWorkflow(
+                store, service, exchange_for(FuturesMarket.USDM)
+            ).request(
+                data.request_id, strategy_id, data.lower_price, data.upper_price,
+                data.grid_count, data.grid_budget_usdt,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="strategy not found") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/strategies/{strategy_id}/reconfigurations/{action_id}/execute")
+    def execute_reconfiguration(strategy_id: str, action_id: str) -> dict:
+        try:
+            if venue != ExchangeVenue.OKX:
+                raise ValueError("reconfiguration workflow currently supports OKX only")
+            action = store.get_fixed_reconfiguration(action_id)
+            if action is None or action["strategy_id"] != strategy_id:
+                raise KeyError(action_id)
+            return FixedReconfigurationWorkflow(
+                store, service, exchange_for(FuturesMarket.USDM)
+            ).execute(action_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="reconfiguration not found") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/strategies/{strategy_id}/reconfigurations/{action_id}/abort")
+    def abort_reconfiguration(strategy_id: str, action_id: str) -> dict:
+        try:
+            if venue != ExchangeVenue.OKX:
+                raise ValueError("reconfiguration workflow currently supports OKX only")
+            action = store.get_fixed_reconfiguration(action_id)
+            if action is None or action["strategy_id"] != strategy_id:
+                raise KeyError(action_id)
+            return FixedReconfigurationWorkflow(
+                store, service, exchange_for(FuturesMarket.USDM)
+            ).abort(action_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="reconfiguration not found") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/strategies/{strategy_id}/reinvestments")
     def strategy_reinvestments(strategy_id: str) -> list[dict]:
