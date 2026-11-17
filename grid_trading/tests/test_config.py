@@ -12,9 +12,13 @@ from grid_server.config import (
     binance_credentials,
     load_environment,
 )
+from grid_server.shared.config import DEFAULT_ENV_FILE
 
 
 class ConfigTests(unittest.TestCase):
+    def test_default_env_file_is_at_project_root(self):
+        self.assertEqual(DEFAULT_ENV_FILE, Path(__file__).resolve().parents[1] / ".env")
+
     def test_env_file_is_loaded_without_overwriting_exported_values(self):
         with tempfile.TemporaryDirectory() as tempdir:
             env_file = Path(tempdir) / ".env"

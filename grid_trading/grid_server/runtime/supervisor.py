@@ -51,7 +51,7 @@ class StrategySupervisor:
         command = [
             sys.executable,
             "-m",
-            "gridtrader.runtime.scheduler",
+            "grid_server.runtime.scheduler",
             "--db",
             str(self.db_path),
             "--pid-file",
