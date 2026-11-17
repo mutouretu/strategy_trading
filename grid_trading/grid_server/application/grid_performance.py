@@ -170,10 +170,29 @@ def strategy_performance(
         int(action["order_id"])
         for action in actions if action["order_id"] is not None
     }
+    reconfiguration_order_ids = {
+        int(event["payload"]["position_delta_order_id"])
+        for event in strategy_events
+        if event["event_type"] == "GRID_RECONFIGURED"
+        and event["payload"].get("position_delta_order_id") is not None
+    }
     trades = [
         trade for trade in store.list_strategy_trades(config.strategy_id)
-        if trade["order_id"] in order_to_cell or trade["order_id"] in capital_order_ids
+        if trade["order_id"] in order_to_cell
+        or trade["order_id"] in capital_order_ids
+        or trade["order_id"] in reconfiguration_order_ids
     ]
+    reconfiguration_fees = sum(
+        (Decimal(trade["commission"]) for trade in trades
+         if trade["order_id"] in reconfiguration_order_ids
+         and trade["commission_asset"] == "USDT"),
+        Decimal("0"),
+    )
+    reconfiguration_realized_pnl = sum(
+        (Decimal(trade["realized_pnl"]) for trade in trades
+         if trade["order_id"] in reconfiguration_order_ids),
+        Decimal("0"),
+    )
     other_fee_assets = sorted({
         trade["commission_asset"] for trade in trades
         if trade["commission_asset"] != "USDT" and Decimal(trade["commission"]) != 0
@@ -221,6 +240,21 @@ def strategy_performance(
                     int(action["order_id"]),
                 ))
 
+    for event in strategy_events:
+        if event["event_type"] != "GRID_RECONFIGURED":
+            continue
+        payload = event["payload"]
+        allocations = payload["allocations"]
+        fees = payload["opening_fees"]
+        for cell_id, quantity in allocations.items():
+            if cell_id not in levels:
+                accounting_error = f"reconfigured grid level is missing for cell {cell_id}"
+                continue
+            by_cell[cell_id].append((
+                int(payload["timestamp_ms"]), -1, "BUY", Decimal(quantity),
+                Decimal(fees[cell_id]), levels[cell_id][0], 0,
+            ))
+
     for trade in trades:
         cell_id = order_to_cell.get(trade["order_id"])
         if cell_id is None:
@@ -238,6 +272,9 @@ def strategy_performance(
     sold_quantity = Decimal("0")
     cell_grid_profit = {cell_id: Decimal("0") for cell_id in levels}
     cell_cycle_profit: dict[str, dict[int, Decimal]] = defaultdict(lambda: defaultdict(lambda: Decimal("0")))
+    current_cell_ids = {cell.cell_id for cell in cells}
+    current_open_qty: dict[str, Decimal] = {}
+    current_open_fees: dict[str, Decimal] = {}
     cycle_accounting_complete = True
     for cell_id, events in by_cell.items():
         if cell_id not in levels:
@@ -285,6 +322,10 @@ def strategy_performance(
             else:
                 cell_cycle_profit[cell_id][cycle] += gross - fees
 
+        if cell_id in current_cell_ids:
+            current_open_qty[cell_id] = sum((lot[0] for lot in open_lots), Decimal("0"))
+            current_open_fees[cell_id] = sum((lot[1] for lot in open_lots), Decimal("0"))
+
     net = None if other_fee_assets or accounting_error else grid_gross - grid_fees
     cell_net = (
         None if net is None or not coverage_complete
@@ -315,10 +356,14 @@ def strategy_performance(
         "sold_grid_quantity": str(sold_quantity),
         "gross_realized_pnl_usdt": str(account_gross),
         "trading_fees_usdt": str(account_fees),
+        "reconfiguration_trading_fees_usdt": str(reconfiguration_fees),
+        "reconfiguration_realized_pnl_usdt": str(reconfiguration_realized_pnl),
         "trend_and_execution_pnl_usdt": str(account_gross - grid_gross),
         "net_grid_profit_usdt": None if net is None else str(net),
         "cell_net_grid_profit_usdt": cell_net,
         "cell_cycle_net_grid_profit_usdt": cell_cycle_net,
+        "open_buy_qty_by_cell": {key: str(value) for key, value in current_open_qty.items()},
+        "open_buy_fees_by_cell_usdt": {key: str(value) for key, value in current_open_fees.items()},
         "cycle_accounting_complete": cycle_accounting_complete,
         "grid_profit_pct": None if roi is None else str(roi),
         "simple_annualized_pct": None if annualized is None else str(annualized),

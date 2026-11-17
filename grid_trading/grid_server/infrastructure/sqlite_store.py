@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -79,6 +80,7 @@ class SQLiteStore:
                     lower_price TEXT,
                     upper_price TEXT,
                     grid_budget_usdt TEXT,
+                    grid_generation INTEGER NOT NULL DEFAULT 0,
                     auto_reinvest_enabled INTEGER NOT NULL DEFAULT 0,
                     auto_reinvest_percent TEXT NOT NULL DEFAULT '100',
                     order_coin_qty TEXT,
@@ -382,6 +384,7 @@ class SQLiteStore:
                 ("lower_price", "TEXT"),
                 ("upper_price", "TEXT"),
                 ("grid_budget_usdt", "TEXT"),
+                ("grid_generation", "INTEGER NOT NULL DEFAULT 0"),
                 ("auto_reinvest_enabled", "INTEGER NOT NULL DEFAULT 0"),
                 ("auto_reinvest_percent", "TEXT NOT NULL DEFAULT '100'"),
             ):
@@ -658,6 +661,109 @@ class SQLiteStore:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [self._cell_values(cell, now) for cell in cells],
+            )
+
+    def reconfigure_fixed_cells(
+        self, config: StrategyConfig, cells: list[GridCell],
+        allocations: dict[str, Decimal], opening_fees: dict[str, Decimal],
+        *, expected_generation: int, mark: Decimal,
+        position_delta_qty: Decimal = Decimal("0"), position_delta_order_id: int | None = None,
+    ) -> None:
+        """Atomically advance one stopped strategy to a fresh cell generation."""
+        config.validate()
+        if config.venue != self.venue or config.grid_kind != GridKind.FIXED_EQUAL_USDT:
+            raise ValueError("fixed grid venue mismatch")
+        if config.grid_generation != expected_generation + 1:
+            raise ValueError("grid generation must advance exactly once")
+        if (len(cells) != config.grid_count
+                or len({cell.cell_id for cell in cells}) != len(cells)
+                or any(cell.strategy_id != config.strategy_id or cell.open_qty != 0
+                       or cell.cycle_count != 0 for cell in cells)
+                or sum((cell.budget_usdt for cell in cells), Decimal("0")) != config.grid_budget_usdt):
+            raise ValueError("invalid replacement cells")
+        if not set(allocations).issubset({cell.cell_id for cell in cells}):
+            raise ValueError("allocation refers to an unknown new cell")
+        if set(opening_fees) != set(allocations):
+            raise ValueError("opening fee allocation does not match position allocation")
+        if any(qty <= 0 for qty in allocations.values()) or any(fee < 0 for fee in opening_fees.values()):
+            raise ValueError("invalid position or opening fee allocation")
+        if (position_delta_qty != 0) != (position_delta_order_id is not None):
+            raise ValueError("nonzero position adjustment requires a confirmed order")
+        now = utc_now()
+        timestamp_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM strategies WHERE strategy_id=? AND deleted_at IS NULL AND archived=0",
+                (config.strategy_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(config.strategy_id)
+            if (row["status"] != StrategyStatus.STOPPED.value
+                    or not row["has_started"]
+                    or row["grid_kind"] != GridKind.FIXED_EQUAL_USDT.value
+                    or int(row["grid_generation"]) != expected_generation
+                    or row["symbol"] != config.symbol
+                    or row["venue"] != config.venue.value
+                    or Decimal(row["grid_budget_usdt"]) != config.grid_budget_usdt):
+                raise ValueError("stopped strategy or expected generation changed")
+            if conn.execute(
+                "SELECT 1 FROM capital_actions WHERE strategy_id=? AND status IN ('requested','planned','submitted','manual_review') LIMIT 1",
+                (config.strategy_id,),
+            ).fetchone():
+                raise ValueError("capital action is still pending or needs review")
+            if conn.execute(
+                "SELECT 1 FROM cell_actions WHERE strategy_id=? AND status='pending' LIMIT 1",
+                (config.strategy_id,),
+            ).fetchone():
+                raise ValueError("cell action is still pending")
+            old_cells = conn.execute("SELECT * FROM cells WHERE strategy_id=?", (config.strategy_id,)).fetchall()
+            if any(row["entry_order_id"] is not None or row["exit_order_id"] is not None
+                   or row["stage"] == CellStage.MANUAL_REVIEW.value for row in old_cells):
+                raise ValueError("old cells still own orders or need review")
+            old_qty = sum((Decimal(row["open_qty"]) for row in old_cells), Decimal("0"))
+            new_qty = sum(allocations.values(), Decimal("0"))
+            if old_qty + position_delta_qty != new_qty:
+                raise ValueError("position adjustment does not reconcile old and new cells")
+            conn.execute("DELETE FROM cells WHERE strategy_id=?", (config.strategy_id,))
+            allocated_cells = [
+                replace(
+                    cell,
+                    open_qty=allocations.get(cell.cell_id, Decimal("0")),
+                    stage=(CellStage.PENDING_EXIT if allocations.get(cell.cell_id, Decimal("0")) > 0
+                           else CellStage.PENDING_ENTRY),
+                )
+                for cell in cells
+            ]
+            conn.executemany(
+                """INSERT INTO cells (
+                    strategy_id, cell_id, cell_index, buy_price, sell_price, stage,
+                    entry_order_id, exit_order_id, entry_client_id, exit_client_id,
+                    open_qty, exit_executed_qty, entry_filled_at, cycle_count, budget_usdt, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [self._cell_values(cell, now) for cell in allocated_cells],
+            )
+            conn.execute(
+                """UPDATE strategies SET anchor_price=?, grid_ratio=?, grid_count=?, order_usdt=?,
+                    lower_price=?, upper_price=?, grid_budget_usdt=?, grid_generation=?, updated_at=?
+                   WHERE strategy_id=?""",
+                (str(config.anchor_price), str(config.grid_ratio), config.grid_count,
+                 str(config.order_usdt), str(config.lower_price), str(config.upper_price),
+                 str(config.grid_budget_usdt), config.grid_generation, now, config.strategy_id),
+            )
+            conn.execute(
+                "INSERT INTO events(strategy_id, run_id, cell_id, event_type, payload_json, created_at) VALUES (?, ?, NULL, ?, ?, ?)",
+                (config.strategy_id, None, "GRID_RECONFIGURED", json.dumps({
+                    "generation": config.grid_generation,
+                    "timestamp_ms": timestamp_ms,
+                    "mark_price": str(mark),
+                    "allocations": {key: str(value) for key, value in allocations.items()},
+                    "opening_fees": {key: str(value) for key, value in opening_fees.items()},
+                    "position_delta_qty": str(position_delta_qty),
+                    "position_delta_order_id": position_delta_order_id,
+                    "old_cell_count": len(old_cells),
+                    "new_cell_count": len(cells),
+                }), now),
             )
 
     def save_cell(self, cell: GridCell) -> None:
@@ -1921,6 +2027,7 @@ class SQLiteStore:
             grid_budget_usdt=Decimal(row["grid_budget_usdt"]) if "grid_budget_usdt" in row.keys() and row["grid_budget_usdt"] is not None else None,
             auto_reinvest_enabled=bool(row["auto_reinvest_enabled"]) if "auto_reinvest_enabled" in row.keys() else False,
             auto_reinvest_percent=Decimal(row["auto_reinvest_percent"]) if "auto_reinvest_percent" in row.keys() else Decimal("100"),
+            grid_generation=int(row["grid_generation"]) if "grid_generation" in row.keys() else 0,
         )
 
     @staticmethod

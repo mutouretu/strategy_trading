@@ -21,6 +21,16 @@ def stable_cell_id(strategy_id: str, buy_price: Decimal, sell_price: Decimal) ->
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
+def fixed_cell_id(config: StrategyConfig, buy_price: Decimal, sell_price: Decimal) -> str:
+    # Keep existing IDs stable; a reconfigured generation must never inherit
+    # an old cell's fills, reinvestment or cycle counters at the same prices.
+    namespace = (
+        config.strategy_id if config.grid_generation == 0
+        else f"{config.strategy_id}:generation:{config.grid_generation}"
+    )
+    return stable_cell_id(namespace, buy_price, sell_price)
+
+
 def build_cells(config: StrategyConfig, tick_size: Decimal) -> list[GridCell]:
     """Build cells using the Web anchor semantics.
 
@@ -108,7 +118,7 @@ def build_fixed_cells(config: StrategyConfig, tick_size: Decimal) -> list[GridCe
     return [
         GridCell(
             strategy_id=config.strategy_id,
-            cell_id=stable_cell_id(config.strategy_id, buy, sell),
+            cell_id=fixed_cell_id(config, buy, sell),
             index=index,
             buy_price=buy,
             sell_price=sell,

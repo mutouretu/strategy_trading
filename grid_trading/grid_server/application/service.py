@@ -5,9 +5,10 @@ import uuid
 from dataclasses import replace
 from decimal import Decimal
 
-from ..domain import ExchangeVenue, FuturesMarket, GridKind, Mode, StrategyConfig, StrategyStatus
+from ..domain import ExchangeVenue, FuturesMarket, GridKind, Mode, OrderSide, OrderStatus, StrategyConfig, StrategyStatus
 from ..ports.exchange import Exchange
-from ..domain.grid import build_cells, fixed_cell_budgets, fixed_grid_ratio
+from ..domain.grid import build_cells, fixed_cell_budgets, fixed_grid_ratio, round_down
+from .grid_performance import strategy_performance, sync_strategy_trades
 from ..infrastructure.sqlite_store import SQLiteStore
 from ..runtime.supervisor import StrategySupervisor
 
@@ -168,6 +169,133 @@ class GridService:
         self.store.update_draft(config)
         self.store.replace_cells(config.strategy_id, build_cells(config, tick_size))
         self.store.append_event(config.strategy_id, "STRATEGY_UPDATED", {})
+
+    def preview_fixed_reconfiguration(
+        self, strategy_id: str, lower_price: Decimal, upper_price: Decimal,
+        grid_count: int, exchange: Exchange, *, allow_adjusted_position: bool = False,
+    ) -> dict:
+        current = self.store.get_strategy(strategy_id)
+        if current is None:
+            raise KeyError(strategy_id)
+        if current.grid_kind != GridKind.FIXED_EQUAL_USDT or current.grid_budget_usdt is None:
+            raise ValueError("reconfiguration requires a fixed equal-USDT grid")
+        if not 1 <= grid_count <= 500:
+            raise ValueError("fixed grid count must be between 1 and 500")
+        if current.status != StrategyStatus.STOPPED or not current.has_started:
+            raise ValueError("stop the started strategy before reconfiguration")
+        filters = exchange.get_symbol_filters(current.symbol)
+        mark = exchange.get_mark_price(current.symbol)
+        if not lower_price <= mark <= upper_price:
+            raise ValueError("current price is outside new grid boundaries")
+        if exchange.get_open_orders(current.symbol):
+            raise ValueError("cancel and reconcile all symbol orders before reconfiguration")
+        old_cells = self.store.list_cells(strategy_id)
+        if any(cell.entry_order_id is not None or cell.exit_order_id is not None
+               or cell.stage.value == "manual_review" for cell in old_cells):
+            raise ValueError("old cell orders must be reconciled before reconfiguration")
+        old_qty = sum((cell.open_qty for cell in old_cells), Decimal("0"))
+        actual_qty = sum(
+            (position.quantity for position in exchange.get_positions()
+             if position.symbol == current.symbol and position.position_side == "LONG"),
+            Decimal("0"),
+        )
+        if not allow_adjusted_position and actual_qty != old_qty:
+            raise ValueError("actual and logical long positions differ before adjustment")
+        config = replace(
+            current,
+            anchor_price=upper_price,
+            lower_price=lower_price,
+            upper_price=upper_price,
+            grid_count=grid_count,
+            grid_ratio=fixed_grid_ratio(lower_price, upper_price, grid_count),
+            order_usdt=fixed_cell_budgets(current.grid_budget_usdt, grid_count)[0],
+            grid_generation=current.grid_generation + 1,
+        )
+        cells = build_cells(config, filters.tick_size)
+        allocations = {
+            cell.cell_id: round_down(cell.budget_usdt / cell.buy_price, filters.step_size)
+            for cell in cells if cell.sell_price > mark
+        }
+        if any(qty < filters.min_qty or qty * cell.buy_price < filters.min_notional
+               for cell in cells if (qty := allocations.get(cell.cell_id)) is not None):
+            raise ValueError("a new sell-side cell is below the exchange minimum")
+        target_qty = sum(allocations.values(), Decimal("0"))
+        return {
+            "config": config, "cells": cells, "allocations": allocations,
+            "mark": mark, "old_qty": old_qty, "target_qty": target_qty,
+            "delta_qty": target_qty - old_qty,
+            "new_sell_cell_ids": list(allocations),
+        }
+
+    def apply_fixed_reconfiguration(
+        self, plan: dict, exchange: Exchange, *, adjustment_order_id: int | None = None,
+    ) -> StrategyConfig:
+        """Commit a preview after any required market adjustment is confirmed."""
+        config: StrategyConfig = plan["config"]
+        fresh = self.preview_fixed_reconfiguration(
+            config.strategy_id, config.lower_price, config.upper_price,
+            config.grid_count, exchange, allow_adjusted_position=True,
+        )
+        if (fresh["mark"] != plan["mark"]
+                and fresh["new_sell_cell_ids"] != plan["new_sell_cell_ids"]):
+            raise ValueError("price crossed a new cell boundary; preview again")
+        if fresh["old_qty"] != plan["old_qty"] or fresh["target_qty"] != plan["target_qty"]:
+            raise ValueError("reconfiguration preview is stale")
+        delta = plan["delta_qty"]
+        if (delta != 0) != (adjustment_order_id is not None):
+            raise ValueError("position delta requires one confirmed adjustment order")
+        if adjustment_order_id is not None:
+            order = exchange.get_order(config.symbol, adjustment_order_id)
+            expected_side = OrderSide.BUY if delta > 0 else OrderSide.SELL
+            if (order.status != OrderStatus.FILLED or order.side != expected_side
+                    or order.position_side != "LONG" or order.executed_qty != abs(delta)):
+                raise ValueError("position adjustment order is not fully confirmed")
+        actual_qty = sum(
+            (position.quantity for position in exchange.get_positions()
+             if position.symbol == config.symbol and position.position_side == "LONG"),
+            Decimal("0"),
+        )
+        if actual_qty != plan["target_qty"]:
+            raise ValueError("exchange position does not match new sell-side quantity")
+        old_config = self.store.get_strategy(config.strategy_id)
+        assert old_config is not None
+        coverage = sync_strategy_trades(self.store, exchange, old_config)
+        performance = strategy_performance(self.store, old_config, coverage_complete=coverage)
+        if not coverage or not performance["accounting_complete"]:
+            raise ValueError("old trade history or fee accounting is incomplete")
+        remaining_qty = sum(
+            (Decimal(value) for value in performance["open_buy_qty_by_cell"].values()),
+            Decimal("0"),
+        )
+        if remaining_qty != plan["old_qty"]:
+            raise ValueError("old open fill quantity does not match logical cells")
+        old_fees = sum(
+            (Decimal(value) for value in performance["open_buy_fees_by_cell_usdt"].values()),
+            Decimal("0"),
+        )
+        retained_old = min(plan["old_qty"], plan["target_qty"])
+        transferred_fees = old_fees * retained_old / plan["old_qty"] if plan["old_qty"] else Decimal("0")
+        if delta > 0:
+            fills = [trade for trade in self.store.list_strategy_trades(config.strategy_id)
+                     if trade["order_id"] == adjustment_order_id]
+            if (sum((Decimal(fill["quantity"]) for fill in fills), Decimal("0")) != delta
+                    or any(fill["side"] != "BUY" or fill["commission_asset"] != "USDT" for fill in fills)):
+                raise ValueError("adjustment opening fills or fees are incomplete")
+            transferred_fees += sum((Decimal(fill["commission"]) for fill in fills), Decimal("0"))
+        opening_fees: dict[str, Decimal] = {}
+        allocation_items = list(plan["allocations"].items())
+        for cell_id, qty in allocation_items[:-1]:
+            opening_fees[cell_id] = transferred_fees * qty / plan["target_qty"]
+        if allocation_items:
+            opening_fees[allocation_items[-1][0]] = transferred_fees - sum(
+                opening_fees.values(), Decimal("0")
+            )
+        self.store.reconfigure_fixed_cells(
+            config, plan["cells"], plan["allocations"], opening_fees,
+            expected_generation=old_config.grid_generation, mark=plan["mark"],
+            position_delta_qty=delta, position_delta_order_id=adjustment_order_id,
+        )
+        return self.store.get_strategy(config.strategy_id)
 
     def start(self, strategy_id: str) -> int:
         config = self.store.get_strategy(strategy_id)
