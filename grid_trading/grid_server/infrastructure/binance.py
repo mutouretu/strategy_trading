@@ -83,7 +83,11 @@ class BinanceFuturesExchange:
                 params=payload,
                 timeout=10,
             )
-        except (requests.Timeout, requests.ConnectionError) as exc:
+        except (
+            requests.Timeout,
+            requests.ConnectionError,
+            requests.exceptions.ChunkedEncodingError,
+        ) as exc:
             raise ExchangeExecutionUnknownError(
                 f"{method} {path}: transport result unknown: {exc}"
             ) from exc

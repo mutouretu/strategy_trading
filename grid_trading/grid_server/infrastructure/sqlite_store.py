@@ -1360,7 +1360,11 @@ class SQLiteStore:
                 (strategy_id,),
             ).fetchone()
             if (config is None or config["fixed_entry_mode"] != FixedEntryMode.PRICE_TRIGGERED.value
-                    or config["status"] not in {StrategyStatus.STARTING.value, StrategyStatus.RUNNING.value}):
+                    or config["status"] not in {
+                        StrategyStatus.STARTING.value,
+                        StrategyStatus.RUNNING.value,
+                        StrategyStatus.ERROR.value,
+                    }):
                 raise ValueError("price-triggered fixed grid is not active")
             cells = conn.execute(
                 "SELECT cell_id, buy_price FROM cells WHERE strategy_id=? AND stage=?",

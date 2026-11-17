@@ -4,6 +4,8 @@ import unittest
 from decimal import Decimal
 from unittest.mock import Mock
 
+import requests
+
 from grid_server.binance import BinanceAPIError, BinanceFuturesExchange
 from grid_server.infrastructure.binance import BinanceRateLimitError
 from grid_server.domain import OrderSide
@@ -78,6 +80,17 @@ class BinanceFuturesExchangeTests(unittest.TestCase):
         response.status_code = 408
         response.text = '{"code":-1007,"msg":"execution status unknown"}'
         exchange.session.request = Mock(return_value=response)
+
+        with self.assertRaises(ExchangeExecutionUnknownError):
+            exchange._request("POST", "/fapi/v1/order", signed=True)
+
+    def test_truncated_order_response_is_unknown_execution(self):
+        exchange = BinanceFuturesExchange("key", "secret")
+        exchange.session.request = Mock(
+            side_effect=requests.exceptions.ChunkedEncodingError(
+                "response ended prematurely"
+            )
+        )
 
         with self.assertRaises(ExchangeExecutionUnknownError):
             exchange._request("POST", "/fapi/v1/order", signed=True)

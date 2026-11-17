@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from grid_server.application.fixed_engine import FixedGridEngine
 from grid_server.application.grid_performance import strategy_performance
 from grid_server.application.service import GridService
-from grid_server.domain import CellStage, FixedEntryMode, OrderSide
+from grid_server.domain import CellStage, FixedEntryMode, OrderSide, StrategyStatus
 from grid_server.infrastructure.sqlite_store import SQLiteStore
 from grid_server.interfaces.api import create_app
 from tests.fakes import FakeExchange
@@ -140,6 +140,36 @@ def test_triggered_cells_stay_armed_with_only_ten_live_buy_orders() -> None:
         assert all(store.get_cell(config.strategy_id, cell.cell_id).stage == CellStage.PENDING_ENTRY
                    for cell in armed)
         assert len(exchange.get_open_orders(config.symbol)) <= 10
+
+
+def test_triggered_grid_recovers_from_error_and_pairs_buy_filled_during_outage() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = SQLiteStore(Path(directory) / "recovery.sqlite3")
+        exchange = FakeExchange(Decimal("100"))
+        config = GridService(store).create_fixed(
+            "SOXLUSDT", Decimal("80"), Decimal("120"), 40,
+            Decimal("4000"), Decimal("0.01"),
+            fixed_entry_mode=FixedEntryMode.PRICE_TRIGGERED,
+        )
+        store.mark_started(config.strategy_id)
+        engine = FixedGridEngine(store, exchange, config.strategy_id)
+        engine.tick()
+        pending = next(
+            cell for cell in store.list_cells(config.strategy_id)
+            if cell.entry_order_id is not None
+        )
+        exchange.fill(pending.entry_order_id, pending.buy_price)
+        # A transient exchange failure leaves the scheduler retrying an ERROR
+        # strategy. The fill must still be paired on the next successful tick.
+        store.set_status(config.strategy_id, StrategyStatus.ERROR)
+
+        engine.tick()
+
+        recovered = store.get_cell(config.strategy_id, pending.cell_id)
+        assert recovered is not None and recovered.stage == CellStage.PENDING_EXIT
+        assert recovered.exit_order_id is not None
+        assert exchange.orders[recovered.exit_order_id].side == OrderSide.SELL
+        assert store.get_strategy(config.strategy_id).status == StrategyStatus.RUNNING
 
 
 def test_late_fee_history_reinvests_into_already_rearmed_buy() -> None:
