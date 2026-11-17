@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 import hashlib
-from decimal import Decimal, ROUND_DOWN, localcontext
+from decimal import Decimal, ROUND_DOWN
+
+from grid_rule.fixed_equal_usdt import (
+    FixedGridSpec,
+    build_fixed_cells as rule_build_fixed_cells,
+    fixed_cell_budgets as rule_fixed_cell_budgets,
+    fixed_grid_ratio as rule_fixed_grid_ratio,
+)
 
 from .models import GridCell, GridKind, Mode, StrategyConfig
 
@@ -78,21 +85,11 @@ def build_cells(config: StrategyConfig, tick_size: Decimal) -> list[GridCell]:
 
 
 def fixed_grid_ratio(lower: Decimal, upper: Decimal, count: int) -> Decimal:
-    if lower <= 0 or upper <= lower or count < 1:
-        raise ValueError("fixed grid requires 0 < lower < upper and count >= 1")
-    with localcontext() as context:
-        context.prec = 40
-        return +(((upper / lower).ln() / Decimal(count)).exp() - Decimal("1"))
+    return rule_fixed_grid_ratio(lower, upper, count)
 
 
 def fixed_cell_budgets(total: Decimal, count: int) -> list[Decimal]:
-    quantum = Decimal("0.00000001")
-    if total <= 0 or count < 1 or total != total.quantize(quantum):
-        raise ValueError("grid budget must be positive with at most 8 decimals")
-    per_cell = (total / Decimal(count)).quantize(quantum, rounding=ROUND_DOWN)
-    if per_cell <= 0:
-        raise ValueError("grid budget is too small for the grid count")
-    return [per_cell] * (count - 1) + [total - per_cell * (count - 1)]
+    return list(rule_fixed_cell_budgets(total, count))
 
 
 def build_fixed_cells(config: StrategyConfig, tick_size: Decimal) -> list[GridCell]:
@@ -100,31 +97,25 @@ def build_fixed_cells(config: StrategyConfig, tick_size: Decimal) -> list[GridCe
     assert config.lower_price is not None
     assert config.upper_price is not None
     assert config.grid_budget_usdt is not None
-    lower, upper = config.lower_price, config.upper_price
-    if tick_size <= 0 or round_down(lower, tick_size) != lower or round_down(upper, tick_size) != upper:
-        raise ValueError("fixed grid boundaries must align with the symbol price tick")
-    growth = Decimal("1") + fixed_grid_ratio(lower, upper, config.grid_count)
-    with localcontext() as context:
-        context.prec = 40
-        boundaries = [lower]
-        boundaries.extend(
-            round_down(lower * growth**index, tick_size)
-            for index in range(1, config.grid_count)
-        )
-    boundaries.append(upper)
-    if any(left >= right for left, right in zip(boundaries, boundaries[1:])):
-        raise ValueError("grid interval is too narrow for the symbol price tick")
-    budgets = fixed_cell_budgets(config.grid_budget_usdt, config.grid_count)
+    specs = rule_build_fixed_cells(FixedGridSpec(
+        grid_id=config.strategy_id,
+        lower_price=config.lower_price,
+        upper_price=config.upper_price,
+        grid_count=config.grid_count,
+        grid_budget_usdt=config.grid_budget_usdt,
+        tick_size=tick_size,
+        generation=config.grid_generation,
+    ))
     return [
         GridCell(
             strategy_id=config.strategy_id,
-            cell_id=fixed_cell_id(config, buy, sell),
-            index=index,
-            buy_price=buy,
-            sell_price=sell,
-            budget_usdt=budgets[index - 1],
+            cell_id=cell.cell_id,
+            index=cell.index,
+            buy_price=cell.buy_price,
+            sell_price=cell.sell_price,
+            budget_usdt=cell.budget_usdt,
         )
-        for index, (buy, sell) in enumerate(zip(boundaries, boundaries[1:]), start=1)
+        for cell in specs
     ]
 
 

@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Callable, Literal
 from urllib.parse import urlparse
 
+from grid_rule.fixed_equal_usdt import order_quantity
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
@@ -235,8 +237,11 @@ def fixed_grid_preview_details(
     taker_returns = []
     quantities = {}
     for cell in cells:
-        qty = round_down(cell.budget_usdt / cell.buy_price, filters.step_size)
-        if qty < filters.min_qty or qty * cell.buy_price < filters.min_notional:
+        qty = order_quantity(
+            cell, step_size=filters.step_size,
+            min_qty=filters.min_qty, min_notional=filters.min_notional,
+        )
+        if qty == 0:
             raise ValueError(f"Cell #{cell.index} is below exchange minimum order size")
         quantities[cell.cell_id] = qty
         net = qty * (
