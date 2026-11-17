@@ -24,6 +24,7 @@ class FakeExchange:
         self.hedge_mode = None
         self.leverage = None
         self.calls: dict[str, int] = {}
+        self.available_balance = Decimal("100000")
 
     def _called(self, name: str) -> None:
         self.calls[name] = self.calls.get(name, 0) + 1
@@ -44,7 +45,7 @@ class FakeExchange:
         self._called("set_leverage")
         self.leverage = leverage
 
-    def place_limit_order(self, symbol, side, position_side, quantity, price, client_order_id):
+    def place_limit_order(self, symbol, side, position_side, quantity, price, client_order_id, post_only=False):
         self._called("place_limit_order")
         order_id = self.next_order_id
         self.next_order_id += 1
@@ -69,9 +70,24 @@ class FakeExchange:
                 "quantity": Decimal(quantity),
                 "price": Decimal(price),
                 "client_order_id": client_order_id,
+                "post_only": post_only,
             }
         )
         return order_id
+
+    def place_market_order(self, symbol, side, position_side, quantity, client_order_id):
+        self._called("place_market_order")
+        order_id = self.place_limit_order(symbol, side, position_side, quantity, self.mark, client_order_id)
+        self.fill(order_id, self.mark)
+        return order_id
+
+    def get_available_balance(self, asset: str = "USDT") -> Decimal:
+        self._called("get_available_balance")
+        return self.available_balance
+
+    def get_commission_rates(self, symbol: str) -> tuple[Decimal, Decimal]:
+        self._called("get_commission_rates")
+        return Decimal("0.0002"), Decimal("0.0004")
 
     def get_order(self, symbol: str, order_id: int) -> OrderSnapshot:
         self._called("get_order")

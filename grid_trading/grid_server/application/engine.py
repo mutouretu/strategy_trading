@@ -252,7 +252,7 @@ class TradingEngine:
         tag = hashlib.sha1(self.strategy_id.encode("utf-8")).hexdigest()[:8]
         return f"wg-{tag}-"
 
-    def _quantity(self, price: Decimal) -> Decimal:
+    def _quantity(self, price: Decimal, cell: GridCell | None = None) -> Decimal:
         assert self.filters is not None
         config = self._config()
         if config.market_type == FuturesMarket.COINM:
@@ -283,10 +283,23 @@ class TradingEngine:
             return Decimal("0")
         return qty
 
+    def _submit_limit_order(
+        self,
+        symbol: str,
+        side: OrderSide,
+        position_side: str,
+        quantity: Decimal,
+        price: Decimal,
+        client_order_id: str,
+    ) -> int:
+        return self.exchange.place_limit_order(
+            symbol, side, position_side, quantity, price, client_order_id
+        )
+
     def _place_entry(self, cell: GridCell) -> None:
         config = self._config()
         price = self._entry_price(cell)
-        qty = self._quantity(price)
+        qty = self._quantity(price, cell)
         if qty <= 0:
             self._event("ENTRY_SKIPPED", cell, {"reason": "min_qty_or_notional", "price": str(price)})
             return
@@ -297,7 +310,7 @@ class TradingEngine:
         cell.entry_client_id = client_id
         self.store.save_cell(cell)
         try:
-            order_id = self.exchange.place_limit_order(
+            order_id = self._submit_limit_order(
                 config.symbol,
                 self._entry_side(),
                 self._position_side(),
@@ -345,7 +358,7 @@ class TradingEngine:
         cell.exit_executed_qty = Decimal("0")
         self.store.save_cell(cell)
         try:
-            order_id = self.exchange.place_limit_order(
+            order_id = self._submit_limit_order(
                 config.symbol,
                 self._exit_side(),
                 self._position_side(),
@@ -516,7 +529,9 @@ class TradingEngine:
                     self._event(
                         "CYCLE_CLOSED",
                         cell,
-                        {"order_id": order.order_id, "price": str(order.average_price or order.price), "qty": str(qty), "cycle_count": cell.cycle_count},
+                        {"order_id": order.order_id, "price": str(order.average_price or order.price),
+                         "qty": str(qty), "cycle_count": cell.cycle_count,
+                         "auto_reinvest_percent": str(self.store.get_strategy(self.strategy_id).auto_reinvest_percent)},
                     )
             elif order.status == OrderStatus.PARTIALLY_FILLED:
                 delta = max(Decimal("0"), order.executed_qty - cell.exit_executed_qty)
@@ -561,6 +576,11 @@ class TradingEngine:
                         "executed_delta": str(delta),
                         "remaining_open_qty": str(cell.open_qty),
                         "action": "manual_review" if cell.open_qty > 0 else "cycle_closed",
+                        "cycle_count": cell.cycle_count if cell.open_qty == 0 else None,
+                        "auto_reinvest_percent": (
+                            str(self.store.get_strategy(self.strategy_id).auto_reinvest_percent)
+                            if cell.open_qty == 0 else None
+                        ),
                     },
                 )
 
@@ -795,7 +815,7 @@ class TradingEngine:
         if order.price != expected_price:
             mismatches.append(f"price:{order.price}!={expected_price}")
         if role == "entry":
-            expected_qty = self._quantity(expected_price)
+            expected_qty = self._quantity(expected_price, cell)
             if order.original_qty != expected_qty:
                 mismatches.append(f"qty:{order.original_qty}!={expected_qty}")
         elif cell.open_qty > 0:
@@ -978,14 +998,7 @@ class TradingEngine:
         return True
 
     def _stored_cell(self, cell_id: str) -> GridCell | None:
-        return next(
-            (
-                item
-                for item in self.store.list_cells(self.strategy_id)
-                if item.cell_id == cell_id
-            ),
-            None,
-        )
+        return self.store.get_cell(self.strategy_id, cell_id)
 
     def _retry_ready(self, cell: GridCell, operation: str) -> bool:
         return time.monotonic() >= self._retry_not_before.get(

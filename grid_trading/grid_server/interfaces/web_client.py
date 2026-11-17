@@ -37,11 +37,59 @@ class GridApiClient:
     def create_strategy(self, payload: dict) -> dict:
         return self._request("POST", "/strategies", json=payload)
 
+    def preview_fixed_grid(self, payload: dict) -> dict:
+        return self._request("POST", "/fixed-grids/preview", json=payload)
+
+    def create_fixed_grid(self, payload: dict) -> dict:
+        return self._request("POST", "/fixed-grids", json=payload)
+
+    def preview_topup(self, strategy_id: str, amount_usdt: str) -> dict:
+        return self._request(
+            "POST", f"/strategies/{strategy_id}/topups/preview",
+            json={"amount_usdt": amount_usdt},
+        )
+
+    def request_topup(
+        self, strategy_id: str, request_id: str, amount_usdt: str,
+        expected_sell_cell_ids: list[str],
+    ) -> dict:
+        return self._request(
+            "POST", f"/strategies/{strategy_id}/topups",
+            json={
+                "request_id": request_id,
+                "amount_usdt": amount_usdt,
+                "expected_sell_cell_ids": expected_sell_cell_ids,
+            },
+        )
+
+    def topups(self, strategy_id: str) -> list[dict]:
+        return self._request("GET", f"/strategies/{strategy_id}/topups")
+
+    def reinvestments(self, strategy_id: str) -> list[dict]:
+        return self._request("GET", f"/strategies/{strategy_id}/reinvestments")
+
+    def set_auto_reinvest(
+        self, strategy_id: str, enabled: bool, percent: str | None = None,
+    ) -> dict:
+        payload: dict[str, bool | str] = {"enabled": enabled}
+        if percent is not None:
+            payload["auto_reinvest_percent"] = percent
+        return self._request(
+            "POST", f"/strategies/{strategy_id}/auto-reinvest",
+            json=payload,
+        )
+
     def update_strategy(self, strategy_id: str, payload: dict) -> dict:
         return self._request("PUT", f"/strategies/{strategy_id}", json=payload)
 
     def cells(self, strategy_id: str) -> list[dict]:
         return self._request("GET", f"/strategies/{strategy_id}/cells")
+
+    def performance(self, strategy_id: str) -> dict:
+        return self._request("GET", f"/strategies/{strategy_id}/performance")
+
+    def position(self, strategy_id: str) -> dict:
+        return self._request("GET", f"/strategies/{strategy_id}/position")
 
     def cell_actions(self, strategy_id: str) -> list[dict]:
         return self._request("GET", f"/strategies/{strategy_id}/cell-actions")

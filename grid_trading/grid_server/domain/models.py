@@ -10,6 +10,11 @@ class Mode(StrEnum):
     SHORT = "short"
 
 
+class ExchangeVenue(StrEnum):
+    BINANCE = "binance"
+    OKX = "okx"
+
+
 class FuturesMarket(StrEnum):
     """Binance futures product family.
 
@@ -19,6 +24,11 @@ class FuturesMarket(StrEnum):
 
     USDM = "usdm"
     COINM = "coinm"
+
+
+class GridKind(StrEnum):
+    TRIGGERED = "triggered"
+    FIXED_EQUAL_USDT = "fixed_equal_usdt"
 
 
 class StrategyStatus(StrEnum):
@@ -61,6 +71,7 @@ class StrategyConfig:
     grid_count: int
     order_usdt: Decimal
     market_type: FuturesMarket = FuturesMarket.USDM
+    venue: ExchangeVenue = ExchangeVenue.BINANCE
     leverage: int = 3
     poll_interval_sec: float = 1.0
     move_grid: bool = True
@@ -72,18 +83,49 @@ class StrategyConfig:
     # at the order price.
     order_coin_qty: Decimal | None = None
     contract_size: Decimal = Decimal("0")
+    grid_kind: GridKind = GridKind.TRIGGERED
+    lower_price: Decimal | None = None
+    upper_price: Decimal | None = None
+    grid_budget_usdt: Decimal | None = None
+    auto_reinvest_enabled: bool = False
+    auto_reinvest_percent: Decimal = Decimal("100")
 
     def validate(self) -> None:
         if not self.strategy_id.strip():
             raise ValueError("strategy_id must not be empty")
         if not self.symbol.strip():
             raise ValueError("symbol must not be empty")
+        if self.venue == ExchangeVenue.OKX:
+            if self.market_type != FuturesMarket.USDM or self.grid_kind != GridKind.FIXED_EQUAL_USDT:
+                raise ValueError("OKX currently supports fixed USDT perpetual grids only")
+            if not self.symbol.endswith("-USDT-SWAP"):
+                raise ValueError("OKX fixed grid symbol must end in -USDT-SWAP")
         if self.anchor_price <= 0:
             raise ValueError("anchor_price must be > 0")
         if self.grid_ratio <= 0:
             raise ValueError("grid_ratio must be > 0")
+        if not self.auto_reinvest_percent.is_finite() or not (
+            Decimal("0") <= self.auto_reinvest_percent <= Decimal("100")
+        ):
+            raise ValueError("auto_reinvest_percent must be between 0 and 100")
         if self.grid_count < 1:
             raise ValueError("grid_count must be >= 1")
+        if not self.auto_reinvest_percent.is_finite() or not (Decimal("0") <= self.auto_reinvest_percent <= Decimal("100")):
+            raise ValueError("auto_reinvest_percent must be between 0 and 100")
+        if self.grid_kind == GridKind.FIXED_EQUAL_USDT:
+            if self.market_type != FuturesMarket.USDM or self.mode != Mode.LONG:
+                raise ValueError("fixed equal-USDT grid supports USD-M long only")
+            if self.leverage != 1 or self.move_grid:
+                raise ValueError("fixed equal-USDT grid requires 1x and fixed boundaries")
+            if (
+                self.lower_price is None
+                or self.upper_price is None
+                or self.lower_price <= 0
+                or self.upper_price <= self.lower_price
+            ):
+                raise ValueError("fixed grid requires 0 < lower_price < upper_price")
+            if self.grid_budget_usdt is None or self.grid_budget_usdt <= 0:
+                raise ValueError("fixed grid requires positive grid_budget_usdt")
         if self.market_type == FuturesMarket.COINM:
             if self.order_coin_qty is None or self.order_coin_qty <= 0:
                 raise ValueError("order_coin_qty must be > 0 for COIN-M")
@@ -125,6 +167,7 @@ class GridCell:
     exit_executed_qty: Decimal = Decimal("0")
     entry_filled_at: str = ""
     cycle_count: int = 0
+    budget_usdt: Decimal = Decimal("0")
 
     def validate(self) -> None:
         if self.buy_price <= 0 or self.sell_price <= 0:
@@ -143,6 +186,8 @@ class SymbolFilters:
     base_asset: str = ""
     margin_asset: str = ""
     contract_type: str = ""
+    percent_price_up: Decimal = Decimal("0")
+    percent_price_down: Decimal = Decimal("0")
 
 
 @dataclass(frozen=True)

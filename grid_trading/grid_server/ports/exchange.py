@@ -31,7 +31,21 @@ class Exchange(Protocol):
         quantity: Decimal,
         price: Decimal,
         client_order_id: str,
+        post_only: bool = False,
     ) -> int: ...
+
+    def place_market_order(
+        self,
+        symbol: str,
+        side: OrderSide,
+        position_side: str,
+        quantity: Decimal,
+        client_order_id: str,
+    ) -> int: ...
+
+    def get_available_balance(self, asset: str = "USDT") -> Decimal: ...
+
+    def get_commission_rates(self, symbol: str) -> tuple[Decimal, Decimal]: ...
 
     def get_order(self, symbol: str, order_id: int) -> OrderSnapshot: ...
 

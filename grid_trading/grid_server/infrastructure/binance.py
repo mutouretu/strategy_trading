@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
+import threading
 import time
 from decimal import Decimal
 from typing import Any
@@ -24,11 +26,20 @@ class BinanceAPIError(RuntimeError):
     pass
 
 
+class BinanceRateLimitError(BinanceAPIError):
+    def __init__(self, retry_at: float) -> None:
+        self.retry_at = retry_at
+        super().__init__(f"Binance rate limit active until {int(retry_at * 1000)}")
+
+
 def decimal_text(value: Decimal) -> str:
     return format(value.normalize(), "f")
 
 
 class BinanceFuturesExchange:
+    _rate_limit_until: dict[str, float] = {}
+    _rate_limit_lock = threading.Lock()
+
     def __init__(
         self,
         api_key: str,
@@ -54,6 +65,10 @@ class BinanceFuturesExchange:
         return f"/{self.api_prefix}/{version}/{suffix.lstrip('/')}"
 
     def _request(self, method: str, path: str, params: dict[str, str] | None = None, signed: bool = False) -> Any:
+        with self._rate_limit_lock:
+            retry_at = self._rate_limit_until.get(self.base_url, 0.0)
+        if time.time() < retry_at:
+            raise BinanceRateLimitError(retry_at)
         payload = dict(params or {})
         if signed:
             payload["timestamp"] = str(int(time.time() * 1000))
@@ -72,6 +87,23 @@ class BinanceFuturesExchange:
             raise ExchangeExecutionUnknownError(
                 f"{method} {path}: transport result unknown: {exc}"
             ) from exc
+        if response.status_code in {418, 429}:
+            retry_after = response.headers.get("Retry-After", "")
+            try:
+                delay = max(0.0, float(retry_after))
+            except ValueError:
+                delay = 120.0 if response.status_code == 418 else 60.0
+            ban_match = re.search(r"banned until (\d{13})", response.text)
+            retry_at = max(
+                time.time() + delay,
+                int(ban_match.group(1)) / 1000 if ban_match else 0.0,
+            )
+            with self._rate_limit_lock:
+                self._rate_limit_until[self.base_url] = max(
+                    retry_at, self._rate_limit_until.get(self.base_url, 0.0)
+                )
+                retry_at = self._rate_limit_until[self.base_url]
+            raise BinanceRateLimitError(retry_at)
         if response.status_code >= 400:
             if response.status_code == 408 or response.status_code >= 500:
                 raise ExchangeExecutionUnknownError(
@@ -105,6 +137,7 @@ class BinanceFuturesExchange:
         price_filter = values.get("PRICE_FILTER", {})
         lot_filter = values.get("LOT_SIZE", {})
         notional_filter = values.get("MIN_NOTIONAL", values.get("NOTIONAL", {}))
+        percent_price_filter = values.get("PERCENT_PRICE", {})
         return SymbolFilters(
             tick_size=Decimal(str(price_filter.get("tickSize", "0"))),
             step_size=Decimal(str(lot_filter.get("stepSize", "0"))),
@@ -114,6 +147,8 @@ class BinanceFuturesExchange:
             base_asset=str(entry.get("baseAsset", "")),
             margin_asset=str(entry.get("marginAsset", "")),
             contract_type=str(entry.get("contractType", "")),
+            percent_price_up=Decimal(str(percent_price_filter.get("multiplierUp", "0"))),
+            percent_price_down=Decimal(str(percent_price_filter.get("multiplierDown", "0"))),
         )
 
     def set_hedge_mode(self, enabled: bool) -> None:
@@ -144,6 +179,7 @@ class BinanceFuturesExchange:
         quantity: Decimal,
         price: Decimal,
         client_order_id: str,
+        post_only: bool = False,
     ) -> int:
         try:
             data = self._request(
@@ -154,7 +190,7 @@ class BinanceFuturesExchange:
                     "side": side.value,
                     "positionSide": position_side,
                     "type": "LIMIT",
-                    "timeInForce": "GTC",
+                    "timeInForce": "GTX" if post_only else "GTC",
                     "quantity": decimal_text(quantity),
                     "price": decimal_text(price),
                     "newClientOrderId": client_order_id,
@@ -168,6 +204,78 @@ class BinanceFuturesExchange:
                 exc,
             ).order_id
         return int(data["orderId"])
+
+    def place_market_order(
+        self,
+        symbol: str,
+        side: OrderSide,
+        position_side: str,
+        quantity: Decimal,
+        client_order_id: str,
+    ) -> int:
+        if self.market_type != FuturesMarket.USDM:
+            raise ValueError("aggregate market orders currently support USD-M only")
+        try:
+            data = self._request(
+                "POST",
+                self._path("order"),
+                {
+                    "symbol": symbol,
+                    "side": side.value,
+                    "positionSide": position_side,
+                    "type": "MARKET",
+                    "quantity": decimal_text(quantity),
+                    "newClientOrderId": client_order_id,
+                },
+                signed=True,
+            )
+        except ExchangeExecutionUnknownError as exc:
+            return self._confirm_order_by_client_id(symbol, client_order_id, exc).order_id
+        return int(data["orderId"])
+
+    def get_available_balance(self, asset: str = "USDT") -> Decimal:
+        if self.market_type != FuturesMarket.USDM:
+            raise ValueError("available USDT balance currently supports USD-M only")
+        data = self._request("GET", self._path("balance", version="v3"), signed=True)
+        row = next((item for item in data if item.get("asset") == asset), None)
+        if row is None:
+            raise BinanceAPIError(f"balance asset not found: {asset}")
+        return Decimal(str(row["availableBalance"]))
+
+    def get_commission_rates(self, symbol: str) -> tuple[Decimal, Decimal]:
+        if self.market_type != FuturesMarket.USDM:
+            raise ValueError("commission rates currently support USD-M only")
+        data = self._request(
+            "GET", self._path("commissionRate"), {"symbol": symbol}, signed=True
+        )
+        return (
+            Decimal(str(data["makerCommissionRate"])),
+            Decimal(str(data["takerCommissionRate"])),
+        )
+
+    def get_user_trades(
+        self,
+        symbol: str,
+        *,
+        start_time_ms: int | None = None,
+        end_time_ms: int | None = None,
+        from_id: int | None = None,
+        limit: int = 1000,
+    ) -> list[dict]:
+        if self.market_type != FuturesMarket.USDM:
+            raise ValueError("trade history currently supports USD-M only")
+        if from_id is not None and (start_time_ms is not None or end_time_ms is not None):
+            raise ValueError("fromId cannot be combined with startTime or endTime")
+        if not 1 <= limit <= 1000:
+            raise ValueError("trade history limit must be between 1 and 1000")
+        params = {"symbol": symbol, "limit": str(limit)}
+        if start_time_ms is not None:
+            params["startTime"] = str(start_time_ms)
+        if end_time_ms is not None:
+            params["endTime"] = str(end_time_ms)
+        if from_id is not None:
+            params["fromId"] = str(from_id)
+        return self._request("GET", self._path("userTrades"), params, signed=True)
 
     def get_order(self, symbol: str, order_id: int) -> OrderSnapshot:
         return self._query_order(
@@ -236,6 +344,42 @@ class BinanceFuturesExchange:
             for item in data
             if Decimal(str(item.get("positionAmt", "0"))) != 0
         ]
+
+    def get_position_prices(
+        self, symbol: str, position_side: str = "LONG"
+    ) -> tuple[Decimal | None, Decimal | None]:
+        version = "v1" if self.market_type == FuturesMarket.COINM else "v3"
+        data = self._request(
+            "GET", self._path("positionRisk", version=version),
+            {"symbol": symbol}, signed=True,
+        )
+        row = next(
+            (
+                item for item in data
+                if (
+                    item.get("positionSide") == position_side
+                    and Decimal(str(item.get("positionAmt", "0"))) != 0
+                ) or (
+                    item.get("positionSide") == "BOTH"
+                    and (
+                        Decimal(str(item.get("positionAmt", "0"))) > 0
+                        if position_side == "LONG" else
+                        Decimal(str(item.get("positionAmt", "0"))) < 0
+                    )
+                )
+            ),
+            None,
+        )
+        if row is None:
+            return None, None
+        break_even_price = row.get("breakEvenPrice")
+        return (
+            Decimal(str(row.get("entryPrice", "0"))),
+            None if break_even_price is None else Decimal(str(break_even_price)),
+        )
+
+    def get_position_entry_price(self, symbol: str, position_side: str = "LONG") -> Decimal | None:
+        return self.get_position_prices(symbol, position_side)[0]
 
     def cancel_order(self, symbol: str, order_id: int) -> OrderSnapshot:
         try:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import importlib.util
 import tempfile
 import unittest
 from decimal import Decimal
@@ -104,6 +105,8 @@ class ServiceAndSupervisorTests(unittest.TestCase):
 
             service.start(config.strategy_id)
             command = popen.call_args.args[0]
+            scheduler_module = command[command.index("-m") + 1]
+            self.assertIsNotNone(importlib.util.find_spec(scheduler_module))
             self.assertTrue(supervisor.pid_path.is_absolute())
             self.assertTrue(supervisor.log_dir.is_absolute())
             self.assertEqual(

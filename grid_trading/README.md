@@ -134,6 +134,65 @@ COIN-M 测试环境使用 `BINANCE_COINM_BASE_URL=https://testnet.binancefuture.
 
 访问 `http://127.0.0.1:8000`。前端默认连接 `http://127.0.0.1:8100`，可以在 `.env` 中通过 `GRID_API_URL` 修改。
 
+### 固定区间等 U 测试网版本
+
+这个版本位于 `feat/fixed-equal-usdt-grid` 工作区。前后端必须从该工作区启动，并连接同一个独立数据库；原工作区运行的页面不会显示这里的策略。若此工作区尚无 `.venv`，先按上文的安装步骤创建。使用已有的币安测试网 `test.env` 时，先在该工作区的 `grid_trading` 目录设置：
+
+```bash
+export GRID_ENV_FILE=/absolute/path/to/test.env
+export GRID_DB_PATH="$PWD/runtime/fixed-grid-testnet.sqlite3"
+export GRID_API_URL=http://127.0.0.1:8110
+```
+
+在两个终端分别设置上述三个环境变量，然后各启动一个进程：
+
+```bash
+.venv/bin/uvicorn grid_server.interfaces.api:create_app --factory --host 127.0.0.1 --port 8110 --workers 1
+.venv/bin/streamlit run app.py --server.address 127.0.0.1 --server.port 8510
+```
+
+访问 `http://127.0.0.1:8510`，点击「＋」选择「固定区间等 U」创建策略。`scripts/verify_fixed_grid_testnet.py` 使用临时数据库并在测试后清理订单和仓位，因此验证结果不会自动出现在策略列表中。
+
+### 固定区间等 U 币安实盘
+
+实盘需要单独的数据库、调度器 PID 和页面端口。启动时显式设置 `GRID_ENABLE_BINANCE_LIVE_FIXED_GRID=1`，并确认生产 API 地址为 `https://fapi.binance.com`。示例：
+
+```bash
+export GRID_ENV_FILE=/absolute/path/to/production/.env
+export GRID_DB_PATH="$PWD/runtime/fixed-grid-live.sqlite3"
+export GRID_RUNTIME_DIR="$PWD/runtime/live"
+export GRID_API_URL=http://127.0.0.1:8111
+export GRID_ENABLE_BINANCE_LIVE_FIXED_GRID=1
+# 若 VPN 使用本机系统代理而没有透明转发，需显式指定代理地址；调度器会继承。
+export HTTPS_PROXY=http://127.0.0.1:7890
+.venv/bin/uvicorn grid_server.interfaces.api:create_app --factory --host 127.0.0.1 --port 8111 --workers 1
+```
+
+前端在另一个终端设置相同的 `GRID_API_URL` 后启动在独立端口，例如 8511。侧栏显示“币安实盘”。固定网格最多 500 格；运行时先过滤当前不可挂的格，再按离现价的价格距离选买卖各 10 单。任一侧少于 5 单、多于 15 单，或更近的可挂格被较远旧单占位时批量重排。远端旧单每轮最多撤 10 张，直到恢复目标窗口。表格中的“待挂单”只表示暂无订单，不代表价格带拒单。币安的 `PERCENT_PRICE` 对买卖方向分别限制，被动买单和卖单可以挂在远端。停止策略只暂停调度，**不会撤单或平仓**。生产账户当前精度、手续费和持仓必须在启动前重新读取。
+
+币安返回 HTTP 429 或 418 时，适配器按 `Retry-After` 或封禁截止时间暂停请求；调度器跳过这段时间内的交易轮询与持仓巡检。限流按出口 IP 计算，切换 VPN 后先用同一代理验证币安接口可访问，再重启 API 和调度器以清除旧进程中的冷却状态。
+
+### OKX U 本位合约固定等 U 网格
+
+`feat/okx-swap-grid` 从固定等 U 网格分支继承。OKX 使用独立的 API、数据库和调度器；可以使用独立页面，也可以接入下方的统一前端。启动配置与适用范围见 [OKX 网格文档](docs/okx-swap-grid.md)。
+
+### 币安与 OKX 统一前端
+
+从 `feat/okx-swap-grid` 的 `grid_trading` 目录启动一个页面，两个后端服务仍分别运行在 8111 和 8112。复制 `frontend.env.example` 为 `frontend.env`，按实际 API 端口修改：
+
+```dotenv
+GRID_BINANCE_API_URL=http://127.0.0.1:8111
+GRID_OKX_API_URL=http://127.0.0.1:8112
+GRID_DEFAULT_EXCHANGE=all
+```
+
+```bash
+export GRID_FRONTEND_ENV_FILE="$PWD/frontend.env"
+python -m streamlit run app.py --server.address 127.0.0.1 --server.port 8513
+```
+
+访问 `http://127.0.0.1:8513`，总览默认显示两个交易所的策略，侧栏可按平台筛选。进入详情时页面按策略所属平台连接其 API，并核对 `/health` 返回的交易所；配置指错后端时只屏蔽该平台。切换筛选时会清除上一个交易所的详情链接和新建预览。各后端继续使用自己的密钥、数据库和调度器，页面切换不会停止策略。只有一个 `GRID_*_API_URL` 时页面保持单交易所模式；没有配置时继续使用原 `GRID_API_URL`。
+
 总览、预览、新增、编辑、启动、停止、刷新价格、归档、删除和 Cell 详情均通过 FastAPI 操作 SQLite/调度器。同一币对允许创建多组网格，页面使用 `strategy_id` 区分。
 
 ## 订单一致性规则

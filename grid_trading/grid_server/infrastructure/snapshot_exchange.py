@@ -25,11 +25,13 @@ class SnapshotExchange:
         self._open_orders: dict[str, dict[int, OrderSnapshot]] = {}
         self._positions: list[PositionSnapshot] | None = None
         self._filters: dict[str, SymbolFilters] = {}
+        self._price_limits: dict[str, tuple[Decimal | None, Decimal | None]] = {}
         self._hedge_mode: bool | None = None
         self._leverages: dict[str, int] = {}
 
     def begin_cycle(self) -> None:
         self._mark_prices.clear()
+        self._price_limits.clear()
         self._open_orders.clear()
         self._positions = None
 
@@ -42,6 +44,12 @@ class SnapshotExchange:
         if symbol not in self._filters:
             self._filters[symbol] = self.exchange.get_symbol_filters(symbol)
         return self._filters[symbol]
+
+    def get_price_limits(self, symbol: str) -> tuple[Decimal | None, Decimal | None]:
+        if symbol not in self._price_limits:
+            getter = getattr(self.exchange, "get_price_limits", None)
+            self._price_limits[symbol] = getter(symbol) if getter else (None, None)
+        return self._price_limits[symbol]
 
     def set_hedge_mode(self, enabled: bool) -> None:
         if self._hedge_mode is None:
@@ -68,10 +76,17 @@ class SnapshotExchange:
         quantity: Decimal,
         price: Decimal,
         client_order_id: str,
+        post_only: bool = False,
     ) -> int:
-        order_id = self.exchange.place_limit_order(
-            symbol, side, position_side, quantity, price, client_order_id
-        )
+        if post_only:
+            order_id = self.exchange.place_limit_order(
+                symbol, side, position_side, quantity, price, client_order_id,
+                post_only=True,
+            )
+        else:
+            order_id = self.exchange.place_limit_order(
+                symbol, side, position_side, quantity, price, client_order_id
+            )
         cached = self._open_orders.get(symbol)
         if cached is not None:
             cached[order_id] = OrderSnapshot(
@@ -110,6 +125,26 @@ class SnapshotExchange:
         if self._positions is None:
             self._positions = self.exchange.get_positions()
         return list(self._positions)
+
+    def get_available_balance(self, asset: str = "USDT") -> Decimal:
+        return self.exchange.get_available_balance(asset)
+
+    def get_commission_rates(self, symbol: str) -> tuple[Decimal, Decimal]:
+        return self.exchange.get_commission_rates(symbol)
+
+    def place_market_order(
+        self,
+        symbol: str,
+        side: OrderSide,
+        position_side: str,
+        quantity: Decimal,
+        client_order_id: str,
+    ) -> int:
+        order_id = self.exchange.place_market_order(
+            symbol, side, position_side, quantity, client_order_id
+        )
+        self.invalidate_positions()
+        return order_id
 
     def invalidate_positions(self) -> None:
         self._positions = None

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import tempfile
 import time
 import unittest
 from contextlib import contextmanager
@@ -99,6 +100,9 @@ def stub_api(state: StubState):
             if override is not None:
                 self._reply(*override)
                 return
+            if method == "GET" and path == "/health":
+                self._reply(200, {"status": "ok", "environment": "testnet", "venue": "binance"})
+                return
             if method == "GET" and path == "/strategies":
                 self._reply(200, state.strategies)
                 return
@@ -167,6 +171,292 @@ def run_app(*, timeout: float = 8) -> AppTest:
 
 
 class StreamlitAbnormalTests(unittest.TestCase):
+    def test_one_frontend_switches_between_isolated_exchange_backends(self):
+        binance = StubState(status_overrides={
+            ("GET", "/health"): (200, {"status": "ok", "environment": "live", "binance_configured": True}),
+        })
+        okx = StubState(status_overrides={
+            ("GET", "/health"): (200, {"status": "ok", "environment": "live", "venue": "okx"}),
+        })
+        previous = {name: os.environ.get(name) for name in (
+            "GRID_BINANCE_API_URL", "GRID_OKX_API_URL", "GRID_DEFAULT_EXCHANGE",
+            "GRID_FRONTEND_ENV_FILE",
+        )}
+        try:
+            with stub_api(binance) as binance_server, stub_api(okx) as okx_server, tempfile.TemporaryDirectory() as tempdir:
+                path = os.path.join(tempdir, "frontend.env")
+                with open(path, "w", encoding="utf-8") as config:
+                    config.write(
+                        f"GRID_BINANCE_API_URL=http://127.0.0.1:{binance_server.server_port}\n"
+                        f"GRID_OKX_API_URL=http://127.0.0.1:{okx_server.server_port}\n"
+                        "GRID_DEFAULT_EXCHANGE=all\n"
+                    )
+                for name in ("GRID_BINANCE_API_URL", "GRID_OKX_API_URL", "GRID_DEFAULT_EXCHANGE"):
+                    os.environ.pop(name, None)
+                os.environ["GRID_FRONTEND_ENV_FILE"] = path
+                app = run_app()
+                self.assertEqual(list(app.exception), [])
+                selector = next(item for item in app.selectbox if item.key == "selected_exchange")
+                self.assertEqual(selector.value, "all")
+                self.assertTrue(any(method == "GET" and path == "/strategies" for method, path, _ in binance.calls))
+                self.assertTrue(any(method == "GET" and path == "/strategies" for method, path, _ in okx.calls))
+                app.query_params["strategy"] = "binance-only"
+                selector.set_value("okx").run()
+                self.assertEqual(list(app.exception), [])
+                self.assertEqual(dict(app.query_params), {})
+                self.assertIn("当前 OKX 策略列表为空", " ".join(item.value for item in app.info))
+                self.assertIn("OKX 实盘", [item.value for item in app.error])
+        finally:
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+    def test_exchange_mismatch_blocks_only_wrong_backend(self):
+        binance = StubState(strategies=[strategy_payload("binance-grid")])
+        wrong_okx = StubState()
+        previous = {name: os.environ.get(name) for name in (
+            "GRID_BINANCE_API_URL", "GRID_OKX_API_URL", "GRID_DEFAULT_EXCHANGE",
+            "GRID_FRONTEND_ENV_FILE",
+        )}
+        try:
+            with stub_api(binance) as binance_server, stub_api(wrong_okx) as okx_server:
+                os.environ["GRID_BINANCE_API_URL"] = f"http://127.0.0.1:{binance_server.server_port}"
+                os.environ["GRID_OKX_API_URL"] = f"http://127.0.0.1:{okx_server.server_port}"
+                os.environ.pop("GRID_DEFAULT_EXCHANGE", None)
+                os.environ.pop("GRID_FRONTEND_ENV_FILE", None)
+                app = run_app()
+                self.assertEqual(list(app.exception), [])
+                self.assertTrue(any("配置的 okx API 实际返回 binance 后端" in warning.value for warning in app.warning))
+                self.assertTrue(any(path == "/strategies" for _, path, _ in binance.calls))
+                self.assertFalse(any(path == "/strategies" for _, path, _ in wrong_okx.calls))
+        finally:
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+    def test_okx_sidebar_shows_venue_without_magic_object_output(self):
+        state = StubState(status_overrides={
+            ("GET", "/health"): (200, {"status": "ok", "environment": "live", "venue": "okx"}),
+        })
+        with stub_api(state):
+            app = run_app()
+
+        self.assertEqual(list(app.exception), [])
+        self.assertEqual([item.value for item in app.error], ["OKX 实盘"])
+        self.assertEqual(len(app.table), 0)
+        self.assertIn("当前 OKX 策略列表为空", " ".join(item.value for item in app.info))
+
+    def test_fixed_grid_large_table_defaults_to_near_price_and_can_show_all(self):
+        item = strategy_payload(symbol="SOXLUSDT", status="running", has_started=True)
+        item.update({
+            "grid_kind": "fixed_equal_usdt",
+            "grid_budget_usdt": "4000",
+            "order_usdt": "50",
+            "current_price": "60",
+        })
+        cells = [
+            {
+                "index": index,
+                "cell_id": f"cell-{index}",
+                "buy_price": str(50 + index * 0.25),
+                "sell_price": str(50.25 + index * 0.25),
+                "stage": "pending_entry",
+                "entry_order_id": index,
+                "exit_order_id": None,
+                "open_qty": "0",
+                "budget_usdt": "50",
+                "cycle_count": 0,
+            }
+            for index in range(1, 81)
+        ]
+        state = StubState(
+            strategies=[item], cells=cells,
+            status_overrides={
+                ("GET", f"/strategies/{item['strategy_id']}/topups"): (200, []),
+                ("GET", f"/strategies/{item['strategy_id']}/reinvestments"): (200, []),
+            },
+        )
+        with stub_api(state):
+            app = AppTest.from_file(APP_FILE, default_timeout=12)
+            app.query_params["strategy"] = item["strategy_id"]
+            app.run()
+            self.assertEqual(list(app.exception), [])
+            self.assertEqual(len(app.dataframe[0].value), 25)
+            view = next(widget for widget in app.selectbox if widget.key == f"grid_view_{item['strategy_id']}")
+            view.set_value("全部").run()
+
+        self.assertEqual(list(app.exception), [])
+        self.assertEqual(len(app.dataframe[0].value), 80)
+
+    def test_fixed_grid_detail_keeps_topup_in_expander(self):
+        item = strategy_payload(symbol="SOLUSDT", status="running", has_started=True)
+        item.update({
+            "grid_kind": "fixed_equal_usdt",
+            "grid_budget_usdt": "400",
+            "order_usdt": "100",
+            "leverage": 1,
+            "move_grid": False,
+        })
+        cells = [
+            {
+                "index": index,
+                "cell_id": f"cell-{index}",
+                "buy_price": str(80 + index * 10),
+                "sell_price": str(90 + index * 10),
+                "stage": "pending_entry" if index == 1 else "pending_exit",
+                "entry_order_id": index if index == 1 else None,
+                "exit_order_id": index + 100 if index == 2 else None,
+                "open_qty": "0" if index == 1 else "1",
+                "budget_usdt": "100",
+                "cycle_count": 0,
+            }
+            for index in (1, 2)
+        ]
+        state = StubState(
+            strategies=[item],
+            cells=cells,
+            status_overrides={
+                ("GET", f"/strategies/{item['strategy_id']}/topups"): (200, []),
+                ("GET", f"/strategies/{item['strategy_id']}/reinvestments"): (200, [
+                    {"cell_id": "cell-2", "cycle_count": 1, "quantity_step": "0.01", "amount_usdt": "1"},
+                ]),
+                ("GET", f"/strategies/{item['strategy_id']}/performance"): (200, {
+                    "grid_budget_usdt": "400",
+                    "position_entry_price": "100",
+                    "initial_entry_price": "105",
+                    "position_break_even_price": "101",
+                    "coverage_complete": True,
+                    "accounting_complete": True,
+                    "completed_cycles": 7,
+                    "net_grid_profit_usdt": "1.25",
+                    "cell_net_grid_profit_usdt": {
+                        "cell-1": "0", "cell-2": "1.25",
+                    },
+                    "grid_profit_pct": "0.3125",
+                    "simple_annualized_pct": "12.5",
+                }),
+            },
+        )
+        with stub_api(state):
+            app = AppTest.from_file(APP_FILE, default_timeout=8)
+            app.query_params["strategy"] = item["strategy_id"]
+            app.run()
+
+        self.assertEqual(list(app.exception), [])
+        price_summary = next(
+            section.value for section in app.markdown
+            if "初始建仓价" in section.value
+        )
+        for label, value in (
+            ("初始建仓价", "105"), ("建仓均价", "100"),
+            ("当前价", "64,000"), ("损益两平价", "101"),
+        ):
+            self.assertIn(f"<div class='label'>{label}</div><div class='value'>{value}</div>", price_summary)
+        frame = next(frame.value for frame in app.dataframe if "买入/卖出价" in frame.value.columns)
+        self.assertNotIn("预算 (U)", frame.columns)
+        self.assertEqual(frame["买入/卖出价"].iloc[0], "100 (100 U) / 110 (110 U)")
+        self.assertEqual(frame["买入/卖出价"].iloc[1], "90 / 100")
+        self.assertNotIn("买入/卖出金额 (U)", frame.columns)
+        self.assertNotIn("累计净利 (U)", frame.columns)
+        self.assertEqual(
+            frame["交易次数/复投次数/净利 (U)"].tolist(),
+            ["0 / 1 / 1.2500", "0 / 0 / 0.0000"],
+        )
+        self.assertTrue(any(metric.label == "总交易次数" and metric.value == "7" for metric in app.metric))
+        self.assertTrue(any(section.label == "追加资金" for section in app.expander))
+        self.assertTrue(any(button.label == "预览资金分配" for button in app.button))
+        self.assertFalse(any(button.key and button.key.startswith("add_cell_") for button in app.button))
+
+    def test_okx_long_order_ids_do_not_hide_grid_profit_and_remain_queryable(self):
+        item = strategy_payload(symbol="SOXL-USDT-SWAP", status="running", has_started=True)
+        item.update({
+            "venue": "okx",
+            "grid_kind": "fixed_equal_usdt",
+            "grid_budget_usdt": "1000",
+            "order_usdt": "10",
+            "leverage": 1,
+            "move_grid": False,
+        })
+        buy_id = "4095698923160588288"
+        sell_id = "4095698923160588289"
+        cells = [
+            {
+                "index": 1,
+                "cell_id": "cell-1",
+                "buy_price": "62.50",
+                "sell_price": "62.8125",
+                "stage": "pending_entry",
+                "entry_order_id": buy_id,
+                "exit_order_id": None,
+                "entry_qty": "0.16",
+                "open_qty": "0",
+                "cycle_count": 2,
+            },
+            {
+                "index": 2,
+                "cell_id": "cell-2",
+                "buy_price": "62.8125",
+                "sell_price": "63.1265625",
+                "stage": "pending_exit",
+                "entry_order_id": None,
+                "exit_order_id": sell_id,
+                "exit_qty": "0.16",
+                "open_qty": "0.16",
+                "cycle_count": 3,
+            },
+        ]
+        state = StubState(
+            strategies=[item],
+            cells=cells,
+            status_overrides={
+                ("GET", "/health"): (200, {"status": "ok", "environment": "live", "venue": "okx"}),
+                ("GET", f"/strategies/{item['strategy_id']}/topups"): (200, []),
+                ("GET", f"/strategies/{item['strategy_id']}/reinvestments"): (200, []),
+                ("GET", f"/strategies/{item['strategy_id']}/performance"): (200, {
+                    "grid_budget_usdt": "1000",
+                    "position_entry_price": "62.60",
+                    "initial_entry_price": "62.70",
+                    "position_break_even_price": "62.65",
+                    "coverage_complete": True,
+                    "accounting_complete": True,
+                    "completed_cycles": 5,
+                    "net_grid_profit_usdt": "0.42",
+                    "cell_net_grid_profit_usdt": {"cell-1": "0.17", "cell-2": "0.25"},
+                    "grid_profit_pct": "0.042",
+                    "simple_annualized_pct": "15.33",
+                }),
+            },
+        )
+        with stub_api(state):
+            app = AppTest.from_file(APP_FILE, default_timeout=8)
+            app.query_params["strategy"] = item["strategy_id"]
+            app.run()
+
+        self.assertEqual(list(app.exception), [])
+        main_table = next(frame.value for frame in app.dataframe if "买入/卖出价" in frame.value.columns)
+        self.assertEqual(
+            list(main_table.columns),
+            ["网格", "买入/卖出价", "交易次数/复投次数/净利 (U)", "买入", "卖出"],
+        )
+        self.assertEqual(main_table["交易次数/复投次数/净利 (U)"].tolist(),
+                         ["3 / 0 / 0.2500", "2 / 0 / 0.1700"])
+        self.assertEqual(main_table["买入"].iloc[1], "挂单 · 0.16 SOXL")
+        self.assertEqual(main_table["卖出"].iloc[0], "挂单 · 0.16 SOXL")
+        self.assertNotIn("#", main_table["买入"].iloc[1])
+        self.assertNotIn("#", main_table["卖出"].iloc[0])
+        self.assertNotIn("SOXL-USDT-SWAP", main_table["买入"].iloc[1])
+        self.assertNotIn("SOXL-USDT-SWAP", main_table["卖出"].iloc[0])
+        self.assertNotIn(buy_id, main_table["买入"].iloc[1])
+        self.assertNotIn(sell_id, main_table["卖出"].iloc[0])
+        self.assertTrue(any(section.label == "完整订单号" for section in app.expander))
+        detail_tables = [frame.value for frame in app.dataframe if "买入/卖出价" not in frame.value.columns]
+        self.assertTrue(any(buy_id in table.to_string(index=False) and sell_id in table.to_string(index=False)
+                            for table in detail_tables))
+
     def test_initial_backend_outage_has_recovery_message_without_traceback(self):
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
@@ -183,7 +473,7 @@ class StreamlitAbnormalTests(unittest.TestCase):
 
         self.assertEqual(list(app.exception), [])
         self.assertIn("无法连接后端服务", app.error[0].value)
-        self.assertIn("请先启动 FastAPI", app.info[0].value)
+        self.assertIn("FastAPI 策略服务", app.info[0].value)
 
     def test_detail_cells_failure_is_rendered_without_page_crash(self):
         item = strategy_payload()
@@ -277,6 +567,7 @@ class StreamlitAbnormalTests(unittest.TestCase):
             ["成交:#102 · 5,412 AKE", "挂单:#101 · 5,466 AKE"],
         )
         self.assertEqual(list(frame["卖出"]), ["挂单:#202 · 1,818 AKE", ""])
+        self.assertEqual(list(frame["阶段/次数"]), ["待平仓 / 7", "待建仓 / 0"])
 
     def test_short_detail_puts_entry_quantity_under_sell_and_exit_under_buy(self):
         item = strategy_payload(symbol="HOMEUSDT", mode="short")
@@ -366,7 +657,7 @@ class StreamlitAbnormalTests(unittest.TestCase):
         self.assertIn("refresh unavailable", [error.value for error in app.error])
         self.assertEqual([call[1] for call in state.calls].count(refresh_path), 1)
 
-    def test_start_failure_rolls_toggle_back_to_server_state(self):
+    def test_start_failure_keeps_server_state_visible(self):
         item = strategy_payload()
         start_path = f"/strategies/{item['strategy_id']}/start"
         state = StubState(
@@ -375,12 +666,26 @@ class StreamlitAbnormalTests(unittest.TestCase):
         )
         with stub_api(state):
             app = run_app()
-            app.toggle(key=f"run_{item['strategy_id']}").set_value(True).run()
+            app.toggle(key=f"run_binance_{item['strategy_id']}").set_value(True).run()
 
         self.assertEqual(list(app.exception), [])
-        self.assertFalse(app.toggle(key=f"run_{item['strategy_id']}").value)
+        self.assertFalse(app.toggle(key=f"run_binance_{item['strategy_id']}").value)
         self.assertIn("start rejected", [error.value for error in app.error])
         self.assertEqual([call[1] for call in state.calls].count(start_path), 1)
+
+    def test_running_toggle_stops_only_after_direct_user_change(self):
+        item = strategy_payload(status="running", has_started=True)
+        state = StubState(strategies=[item])
+        stop_path = f"/strategies/{item['strategy_id']}/stop"
+        with stub_api(state):
+            app = run_app()
+            app.run()
+            self.assertTrue(app.toggle(key=f"run_binance_{item['strategy_id']}").value)
+            self.assertFalse(any(path == stop_path for _, path, _ in state.calls))
+            app.toggle(key=f"run_binance_{item['strategy_id']}").set_value(False).run()
+
+        self.assertEqual(list(app.exception), [])
+        self.assertEqual([path for method, path, _ in state.calls if method == "POST"].count(stop_path), 1)
 
     def test_unknown_strategy_query_falls_back_to_available_strategy(self):
         item = strategy_payload()
@@ -394,6 +699,125 @@ class StreamlitAbnormalTests(unittest.TestCase):
         self.assertEqual(app.query_params.get("strategy"), [item["strategy_id"]])
         self.assertTrue(any(item["symbol"] in heading.value for heading in app.markdown))
 
+    def test_combined_overview_shows_both_venues_and_routes_its_actions(self):
+        binance_item = strategy_payload("binance-grid", symbol="SOXLUSDT")
+        binance_item.update({
+            "grid_kind": "fixed_equal_usdt", "grid_budget_usdt": "1000",
+            "lower_price": "30", "upper_price": "150", "grid_count": 100,
+            "grid_ratio": "0.005", "order_usdt": "10", "leverage": 1,
+        })
+        okx_item = strategy_payload("okx-grid", symbol="SOXL-USDT-SWAP")
+        okx_item.update({
+            "grid_kind": "fixed_equal_usdt", "grid_budget_usdt": "2000",
+            "lower_price": "50", "upper_price": "80", "grid_count": 94,
+            "grid_ratio": "0.005", "order_usdt": "21.28", "leverage": 1,
+        })
+        binance = StubState(
+            strategies=[binance_item],
+            status_overrides={
+                ("GET", "/health"): (200, {"status": "ok", "environment": "live", "binance_configured": True}),
+            },
+        )
+        okx = StubState(
+            strategies=[okx_item], cells=[],
+            status_overrides={
+                ("GET", "/health"): (200, {"status": "ok", "environment": "live", "venue": "okx"}),
+            },
+        )
+        names = ("GRID_BINANCE_API_URL", "GRID_OKX_API_URL", "GRID_DEFAULT_EXCHANGE", "GRID_FRONTEND_ENV_FILE")
+        previous = {name: os.environ.get(name) for name in names}
+        try:
+            with stub_api(binance) as binance_server, stub_api(okx) as okx_server:
+                os.environ["GRID_BINANCE_API_URL"] = f"http://127.0.0.1:{binance_server.server_port}"
+                os.environ["GRID_OKX_API_URL"] = f"http://127.0.0.1:{okx_server.server_port}"
+                os.environ.pop("GRID_DEFAULT_EXCHANGE", None)
+                os.environ.pop("GRID_FRONTEND_ENV_FILE", None)
+                app = run_app()
+                self.assertEqual(list(app.exception), [])
+                markup = [element.value for element in app.markdown]
+                self.assertIn("**平台**", markup)
+                self.assertIn("**网格范围 / 总数 / 间距**", markup)
+                for old_header in ("**当前网格范围**", "**网格总数**", "**间距**", "**待建仓**", "**已建仓**", "**待平仓**"):
+                    self.assertNotIn(old_header, markup)
+                self.assertFalse(any(
+                    word in str(element.value)
+                    for element in [*app.markdown, *app.caption]
+                    for word in ("待建仓", "已建仓", "待平仓")
+                ))
+                links = [value for value in markup if "href=" in value]
+                self.assertEqual(len(links), 2)
+                self.assertTrue(any("SOXLUSDT" in value and "venue=binance" in value and "strategy=binance-grid" in value for value in links))
+                self.assertTrue(any("SOXL-USDT-SWAP" in value and "venue=okx" in value and "strategy=okx-grid" in value for value in links))
+                self.assertTrue(any("30" in value and "150" in value and "100 格" in value and "0.50%" in value for value in markup))
+                self.assertTrue(any("50" in value and "80" in value and "94 格" in value and "0.50%" in value for value in markup))
+                self.assertTrue(any(path == "/strategies" for _, path, _ in binance.calls))
+                self.assertTrue(any(path == "/strategies" for _, path, _ in okx.calls))
+
+                refresh = next(button for button in app.button if button.key and button.key.endswith("okx-grid") and button.label == "↻")
+                refresh.click().run()
+                self.assertIn(("POST", "/strategies/okx-grid/refresh-price", None), okx.calls)
+                self.assertNotIn(("POST", "/strategies/okx-grid/refresh-price", None), binance.calls)
+
+                app.query_params["venue"] = "okx"
+                app.query_params["strategy"] = "okx-grid"
+                app.run()
+                self.assertEqual(list(app.exception), [])
+                self.assertTrue(any(path == "/strategies/okx-grid/cells" for _, path, _ in okx.calls))
+                self.assertFalse(any(path == "/strategies/okx-grid/cells" for _, path, _ in binance.calls))
+        finally:
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+    def test_detail_link_venue_overrides_filter_and_overview_resets_to_all(self):
+        binance = StubState(strategies=[strategy_payload("binance-grid", symbol="BTCUSDT", status="running", has_started=True)])
+        okx = StubState(
+            strategies=[strategy_payload("okx-grid", symbol="SOXL-USDT-SWAP", status="running", has_started=True)],
+            cells=[],
+            status_overrides={
+                ("GET", "/health"): (200, {"status": "ok", "environment": "live", "venue": "okx"}),
+            },
+        )
+        names = ("GRID_BINANCE_API_URL", "GRID_OKX_API_URL", "GRID_DEFAULT_EXCHANGE", "GRID_FRONTEND_ENV_FILE")
+        previous = {name: os.environ.get(name) for name in names}
+        try:
+            with stub_api(binance) as binance_server, stub_api(okx) as okx_server:
+                os.environ["GRID_BINANCE_API_URL"] = f"http://127.0.0.1:{binance_server.server_port}"
+                os.environ["GRID_OKX_API_URL"] = f"http://127.0.0.1:{okx_server.server_port}"
+                os.environ["GRID_DEFAULT_EXCHANGE"] = "binance"
+                os.environ.pop("GRID_FRONTEND_ENV_FILE", None)
+                app = run_app()
+                self.assertEqual(next(widget.value for widget in app.selectbox if widget.key == "selected_exchange"), "binance")
+
+                app.query_params["venue"] = "okx"
+                app.query_params["strategy"] = "okx-grid"
+                app.run()
+                self.assertEqual(list(app.exception), [])
+                self.assertEqual(next(widget.value for widget in app.selectbox if widget.key == "selected_exchange"), "okx")
+                self.assertTrue(any("SOXL-USDT-SWAP 网格详情" in item.value for item in app.markdown))
+                self.assertTrue(any(path == "/strategies/okx-grid/cells" for _, path, _ in okx.calls))
+                self.assertFalse(any(path == "/strategies/okx-grid/cells" for _, path, _ in binance.calls))
+
+                next(button for button in app.button if button.label == "总览").click().run()
+                self.assertEqual(list(app.exception), [])
+                self.assertEqual(dict(app.query_params), {})
+                self.assertEqual(next(widget.value for widget in app.selectbox if widget.key == "selected_exchange"), "all")
+                overview = [item.value for item in app.markdown]
+                self.assertTrue(any("BTCUSDT" in value and "href=" in value for value in overview))
+                self.assertTrue(any("SOXL-USDT-SWAP" in value and "href=" in value for value in overview))
+                self.assertEqual(sum("运行中" in value for value in overview), 2)
+                self.assertTrue(app.toggle(key="run_binance_binance-grid").value)
+                self.assertTrue(app.toggle(key="run_okx_okx-grid").value)
+                self.assertFalse(any(path.endswith("/stop") for _, path, _ in binance.calls + okx.calls))
+        finally:
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
     def test_fifty_strategy_overview_has_unique_widgets_and_completes(self):
         strategies = [
             strategy_payload(f"strategy-{index:02d}", symbol=f"T{index:02d}USDT")
@@ -406,7 +830,7 @@ class StreamlitAbnormalTests(unittest.TestCase):
         elapsed = time.monotonic() - started
 
         self.assertEqual(list(app.exception), [])
-        self.assertEqual(len(app.toggle), 51)  # one filter plus fifty run-state toggles
+        self.assertEqual(len(app.toggle), 51)  # overview filter and fifty run-state switches
         self.assertLess(elapsed, 15)
 
     def test_missing_strategy_field_currently_surfaces_frontend_exception(self):

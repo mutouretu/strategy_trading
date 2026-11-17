@@ -11,15 +11,21 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from ..infrastructure.binance import BinanceCoinMExchange, BinanceFuturesExchange
+from ..infrastructure.binance import BinanceCoinMExchange, BinanceFuturesExchange, BinanceRateLimitError
+from ..infrastructure.okx import OkxRateLimitError, OkxSwapExchange
 from ..shared.config import (
     binance_base_url,
     binance_coinm_base_url,
     binance_credentials,
+    exchange_venue,
     load_environment,
+    okx_base_url,
+    okx_credentials,
+    okx_simulated,
 )
-from ..domain import FuturesMarket, Mode, StrategyStatus
+from ..domain import ExchangeVenue, FuturesMarket, GridKind, Mode, StrategyStatus
 from ..application.engine import TradingEngine
+from ..application.fixed_engine import FixedGridEngine
 from ..ports.exchange import Exchange
 from ..application.position_coordinator import PositionCoordinator
 from ..infrastructure.snapshot_exchange import SnapshotExchange
@@ -68,6 +74,7 @@ class StrategyScheduler:
         self.run_id = uuid.uuid4().hex
         self.engines: dict[str, TradingEngine] = {}
         self.next_due: dict[str, float] = {}
+        self.rate_limited_until: dict[str, float] = {}
         self.reconcile_interval_sec = max(5.0, reconcile_interval_sec)
         self.position_settlement_grace_sec = max(
             0.0,
@@ -99,18 +106,29 @@ class StrategyScheduler:
         for strategy_id in set(self.engines) - set(configs):
             self.engines.pop(strategy_id, None)
             self.next_due.pop(strategy_id, None)
+            self.rate_limited_until.pop(strategy_id, None)
 
         if not configs:
             self.next_reconcile_at = current_time + self.reconcile_interval_sec
             return 0
 
-        pending_action_ids = self.store.pending_cell_action_strategy_ids()
+        pending_action_ids = (
+            self.store.pending_cell_action_strategy_ids()
+            | self.store.pending_capital_action_strategy_ids()
+        )
+        paused_ids = {
+            strategy_id for strategy_id in configs
+            if current_time < self.rate_limited_until.get(strategy_id, 0.0)
+        }
         due = [
             config
             for strategy_id, config in configs.items()
-            if strategy_id in pending_action_ids
-            or strategy_id not in self.next_due
-            or current_time >= self.next_due[strategy_id]
+            if strategy_id not in paused_ids
+            and (
+                strategy_id in pending_action_ids
+                or strategy_id not in self.next_due
+                or current_time >= self.next_due[strategy_id]
+            )
         ]
         reconcile_due = current_time >= self.next_reconcile_at
         if not due and not reconcile_due:
@@ -128,13 +146,15 @@ class StrategyScheduler:
             if exchange is not None:
                 exchange.begin_cycle()
         processed = 0
-        cycle_had_errors = False
+        cycle_had_errors = bool(paused_ids)
         due_ids = {config.strategy_id for config in due}
         for config in sorted(due, key=lambda item: (item.symbol, item.strategy_id)):
             strategy_remains_active = True
+            retry_delay = config.poll_interval_sec
             engine = self.engines.get(config.strategy_id)
             if engine is None:
-                engine = TradingEngine(
+                engine_type = FixedGridEngine if config.grid_kind == GridKind.FIXED_EQUAL_USDT else TradingEngine
+                engine = engine_type(
                     self.store,
                     self._exchange_for(config.market_type),
                     config.strategy_id,
@@ -148,6 +168,7 @@ class StrategyScheduler:
                 engine.process_cell_actions()
                 engine.tick()
                 self._record_strategy_recovery(config)
+                self.rate_limited_until.pop(config.strategy_id, None)
                 if not self._strategy_is_active(config.strategy_id):
                     strategy_remains_active = False
             except Exception as exc:
@@ -159,6 +180,9 @@ class StrategyScheduler:
                     strategy_remains_active = False
                     continue
                 cycle_had_errors = True
+                if isinstance(exc, (BinanceRateLimitError, OkxRateLimitError)):
+                    retry_delay = max(retry_delay, exc.retry_at - float(self.wall_clock()))
+                    self.rate_limited_until[config.strategy_id] = current_time + retry_delay
                 self._record_strategy_failure(config, exc)
                 try:
                     self.store.heartbeat_if_active(
@@ -175,7 +199,7 @@ class StrategyScheduler:
                     strategy_remains_active = False
             finally:
                 if strategy_remains_active:
-                    self.next_due[config.strategy_id] = current_time + config.poll_interval_sec
+                    self.next_due[config.strategy_id] = current_time + retry_delay
                 else:
                     self.engines.pop(config.strategy_id, None)
                     self.next_due.pop(config.strategy_id, None)
@@ -183,11 +207,12 @@ class StrategyScheduler:
 
         if reconcile_due:
             for config in sorted(configs.values(), key=lambda item: (item.symbol, item.strategy_id)):
-                if config.strategy_id in due_ids:
+                if config.strategy_id in due_ids or config.strategy_id in paused_ids:
                     continue
                 engine = self.engines.get(config.strategy_id)
                 if engine is None:
-                    engine = TradingEngine(
+                    engine_type = FixedGridEngine if config.grid_kind == GridKind.FIXED_EQUAL_USDT else TradingEngine
+                    engine = engine_type(
                         self.store,
                         self._exchange_for(config.market_type),
                         config.strategy_id,
@@ -413,9 +438,13 @@ def main() -> int:
     parser.add_argument("--pid-file", default="runtime/scheduler.pid")
     parser.add_argument("--base-url", default=binance_base_url())
     parser.add_argument("--coinm-base-url", default=binance_coinm_base_url())
+    parser.add_argument("--okx-base-url", default=okx_base_url())
     args = parser.parse_args()
-
-    api_key, api_secret = binance_credentials(required=True)
+    venue = exchange_venue()
+    if venue == ExchangeVenue.OKX:
+        okx_key, okx_secret, okx_passphrase = okx_credentials(required=True)
+    else:
+        api_key, api_secret = binance_credentials(required=True)
 
     stopping = False
 
@@ -438,19 +467,17 @@ def main() -> int:
         pid_file.write(str(os.getpid()))
         pid_file.flush()
 
-        store = SQLiteStore(args.db)
-        exchanges = {
-            FuturesMarket.USDM: BinanceFuturesExchange(
-                api_key,
-                api_secret,
-                args.base_url,
-            ),
-            FuturesMarket.COINM: BinanceCoinMExchange(
-                api_key,
-                api_secret,
-                args.coinm_base_url,
-            ),
-        }
+        store = SQLiteStore(args.db, venue=venue)
+        if venue == ExchangeVenue.OKX:
+            exchanges = {FuturesMarket.USDM: OkxSwapExchange(
+                okx_key, okx_secret, okx_passphrase,
+                args.okx_base_url, simulated=okx_simulated(),
+            )}
+        else:
+            exchanges = {
+                FuturesMarket.USDM: BinanceFuturesExchange(api_key, api_secret, args.base_url),
+                FuturesMarket.COINM: BinanceCoinMExchange(api_key, api_secret, args.coinm_base_url),
+            }
         scheduler = StrategyScheduler(
             store,
             exchanges,

@@ -379,6 +379,7 @@ class PositionCoordinator:
             engines,
             filters,
             result,
+            mark_price,
         )
         logical_qty = fixed_reserved + sum(
             ownership_allocations.values(), Decimal("0")
@@ -396,10 +397,22 @@ class PositionCoordinator:
             ),
             Decimal("0"),
         )
+        virtual_exit_coverage = sum(
+            (
+                cell.open_qty
+                for cell in managed
+                if exit_allocations[(cell.strategy_id, cell.cell_id)] == cell.open_qty
+                if (
+                    deferred := getattr(engines[cell.strategy_id], "is_virtual_exit", None)
+                ) is not None
+                and deferred(cell, mark_price)
+            ),
+            Decimal("0"),
+        )
         if status_override is None and logical_qty == position_qty:
             if exit_coverage > position_qty:
                 status_override = "order_excess"
-            elif exit_coverage < logical_qty:
+            elif exit_coverage + virtual_exit_coverage < logical_qty:
                 status_override = "manual_review"
         self._save_pool(
             symbol,
@@ -454,6 +467,7 @@ class PositionCoordinator:
         engines: dict[str, TradingEngine],
         filters,
         result: PositionReconcileResult,
+        mark_price: Decimal,
     ) -> str | None:
         status_override: str | None = None
         for cell in cells:
@@ -535,6 +549,10 @@ class PositionCoordinator:
                 )
                 if status_override != "error":
                     status_override = "manual_review"
+                continue
+
+            deferred = getattr(engines[cell.strategy_id], "is_virtual_exit", None)
+            if deferred is not None and deferred(cell, mark_price):
                 continue
 
             try:

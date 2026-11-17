@@ -5,6 +5,7 @@ from decimal import Decimal
 from unittest.mock import Mock
 
 from grid_server.binance import BinanceAPIError, BinanceFuturesExchange
+from grid_server.infrastructure.binance import BinanceRateLimitError
 from grid_server.domain import OrderSide
 from grid_server.exchange import ExchangeExecutionUnknownError, OrderNotFoundError
 
@@ -35,6 +36,27 @@ class BinanceFuturesExchangeTests(unittest.TestCase):
 
         self.assertEqual(result, {"code": 200, "msg": "success"})
 
+    def test_tradifi_price_band_is_read_from_exchange_info(self):
+        exchange = BinanceFuturesExchange("key", "secret")
+        exchange._request = Mock(return_value={
+            "symbols": [{
+                "symbol": "SOXLUSDT", "contractType": "TRADIFI_PERPETUAL",
+                "baseAsset": "SOXL", "marginAsset": "USDT",
+                "filters": [
+                    {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+                    {"filterType": "LOT_SIZE", "stepSize": "0.01", "minQty": "0.01"},
+                    {"filterType": "MIN_NOTIONAL", "notional": "5"},
+                    {"filterType": "PERCENT_PRICE", "multiplierUp": "1.03", "multiplierDown": "0.97"},
+                ],
+            }],
+        })
+
+        filters = exchange.get_symbol_filters("SOXLUSDT")
+
+        self.assertEqual(filters.contract_type, "TRADIFI_PERPETUAL")
+        self.assertEqual(filters.percent_price_up, Decimal("1.03"))
+        self.assertEqual(filters.percent_price_down, Decimal("0.97"))
+
     def test_query_order_no_such_order_is_mapped_to_consistency_signal(self):
         exchange = BinanceFuturesExchange("key", "secret")
         exchange._request = Mock(  # type: ignore[method-assign]
@@ -60,6 +82,23 @@ class BinanceFuturesExchangeTests(unittest.TestCase):
         with self.assertRaises(ExchangeExecutionUnknownError):
             exchange._request("POST", "/fapi/v1/order", signed=True)
 
+    def test_http_418_blocks_further_requests_until_ban_expires(self):
+        exchange = BinanceFuturesExchange(
+            "key", "secret", base_url="https://rate-limit-test.example"
+        )
+        response = Mock()
+        response.status_code = 418
+        response.text = '{"code":-1003,"msg":"IP banned until 4102444800000"}'
+        response.headers = {"Retry-After": "60"}
+        exchange.session.request = Mock(return_value=response)
+
+        with self.assertRaises(BinanceRateLimitError) as first:
+            exchange._request("GET", "/fapi/v1/openOrders", signed=True)
+        self.assertGreaterEqual(first.exception.retry_at, 4102444800)
+        with self.assertRaises(BinanceRateLimitError):
+            exchange._request("GET", "/fapi/v1/premiumIndex")
+        self.assertEqual(exchange.session.request.call_count, 1)
+
     def test_place_timeout_confirms_order_by_client_id_without_duplicate(self):
         exchange = BinanceFuturesExchange(
             "key",
@@ -84,6 +123,20 @@ class BinanceFuturesExchangeTests(unittest.TestCase):
 
         self.assertEqual(order_id, 123)
         self.assertEqual(exchange._request.call_count, 2)
+
+    def test_price_protected_catchup_uses_gtc_limit(self):
+        exchange = BinanceFuturesExchange("key", "secret")
+        exchange._request = Mock(return_value=self.order_payload())  # type: ignore[method-assign]
+
+        exchange.place_limit_order(
+            "SOXLUSDT", OrderSide.SELL, "LONG", Decimal("0.79"),
+            Decimal("63.13"), "catchup-sell", post_only=False,
+        )
+
+        params = exchange._request.call_args.args[2]
+        self.assertEqual(params["type"], "LIMIT")
+        self.assertEqual(params["timeInForce"], "GTC")
+        self.assertEqual(params["price"], "63.13")
 
     def test_cancel_timeout_accepts_later_canceled_status(self):
         exchange = BinanceFuturesExchange(
@@ -139,6 +192,29 @@ class BinanceFuturesExchangeTests(unittest.TestCase):
                 ("BTCUSDT", "LONG", Decimal("0.25")),
                 ("BTCUSDT", "SHORT", Decimal("0.10")),
             ],
+        )
+
+    def test_position_prices_include_exchange_break_even_price(self):
+        exchange = BinanceFuturesExchange("key", "secret")
+        exchange._request = Mock(  # type: ignore[method-assign]
+            return_value=[
+                {
+                    "symbol": "SOXLUSDT", "positionSide": "LONG", "positionAmt": "26.37",
+                    "entryPrice": "62.43520", "breakEvenPrice": "62.55837",
+                },
+                {
+                    "symbol": "SOXLUSDT", "positionSide": "SHORT", "positionAmt": "-2",
+                    "entryPrice": "62.30", "breakEvenPrice": "62.20",
+                },
+            ]
+        )
+
+        self.assertEqual(
+            exchange.get_position_prices("SOXLUSDT"),
+            (Decimal("62.43520"), Decimal("62.55837")),
+        )
+        exchange._request.assert_called_once_with(
+            "GET", "/fapi/v3/positionRisk", {"symbol": "SOXLUSDT"}, signed=True
         )
 
     def test_all_open_orders_are_fetched_once_and_grouped_by_symbol(self):

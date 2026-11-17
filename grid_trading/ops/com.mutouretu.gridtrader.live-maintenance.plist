@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mutouretu.gridtrader.live-maintenance</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/dengerqiang/Documents/code/Trade/Crypto/strategy_trading/grid_trading/.venv/bin/python</string>
+        <string>/Users/dengerqiang/Documents/code/Trade/Crypto/strategy_trading/grid_trading/scripts/live_grid_maintenance.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/dengerqiang/Documents/code/Trade/Crypto/strategy_trading/grid_trading</string>
+    <key>StartInterval</key>
+    <integer>300</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/dengerqiang/Documents/code/Trade/Crypto/strategy_trading/grid_trading/runtime/live-maintenance/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/dengerqiang/Documents/code/Trade/Crypto/strategy_trading/grid_trading/runtime/live-maintenance/launchd.err.log</string>
+</dict>
+</plist>
