@@ -3,14 +3,17 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from html import escape
+from pathlib import Path
 from urllib.parse import quote
+import os
 import uuid
 
 import pandas as pd
 import streamlit as st
+from dotenv import dotenv_values
 
 from grid_server.interfaces.web_client import GridApiClient, GridApiError
-from grid_server.shared.config import api_base_url
+from grid_server.shared.config import DEFAULT_ENV_FILE, api_base_url
 from grid_server.shared.price_format import format_price, infer_price_precision
 
 
@@ -45,7 +48,118 @@ def api_client(base_url: str) -> GridApiClient:
 
 
 def backend() -> GridApiClient:
-    return api_client(api_base_url())
+    return api_client(st.session_state.get("active_api_url") or api_base_url())
+
+
+def backend_for(venue: str) -> GridApiClient:
+    url = st.session_state.get("venue_api_urls", {}).get(venue)
+    if not url:
+        raise GridApiError(f"{venue.upper()} 策略服务不可用")
+    return api_client(url)
+
+
+def activate_venue(venue: str) -> GridApiClient:
+    client = backend_for(venue)
+    st.session_state["active_api_url"] = client.base_url
+    st.session_state["exchange_venue"] = venue
+    return client
+
+
+def frontend_setting(name: str) -> str:
+    exported = os.getenv(name, "").strip()
+    if exported:
+        return exported
+    configured_path = os.getenv("GRID_FRONTEND_ENV_FILE") or os.getenv("GRID_ENV_FILE")
+    path = Path(configured_path).expanduser() if configured_path else DEFAULT_ENV_FILE
+    return str(dotenv_values(path).get(name) or "").strip()
+
+
+def configured_api_urls() -> dict[str, str]:
+    urls = {
+        venue: value.strip().rstrip("/")
+        for venue, value in (
+            ("binance", frontend_setting("GRID_BINANCE_API_URL")),
+            ("okx", frontend_setting("GRID_OKX_API_URL")),
+        )
+        if value.strip()
+    }
+    return urls or {"legacy": api_base_url()}
+
+
+def reset_exchange_view() -> None:
+    st.query_params.clear()
+    reset_create_preview()
+    for key in ("api_flash_error", "api_flash_success"):
+        st.session_state.pop(key, None)
+
+
+def reset_create_preview() -> None:
+    for key in (
+        "fixed_create_payload", "fixed_create_preview",
+        "grid_create_payload", "grid_create_preview",
+    ):
+        st.session_state.pop(key, None)
+
+
+def select_exchange_backend() -> tuple[str, dict[str, str]]:
+    urls = configured_api_urls()
+    st.sidebar.title("交易管理")
+    if len(urls) == 1:
+        selected = next(iter(urls))
+    else:
+        choices = ["all", *urls]
+        preferred = (frontend_setting("GRID_DEFAULT_EXCHANGE") or "all").lower()
+        if not st.session_state.get("overview_all_default_initialized"):
+            st.session_state["selected_exchange"] = preferred if preferred in choices else "all"
+            st.session_state["overview_all_default_initialized"] = True
+        elif st.session_state.get("selected_exchange") not in choices:
+            st.session_state["selected_exchange"] = "all"
+        link_venue = st.query_params.get("venue")
+        if st.query_params.get("strategy") and link_venue in urls:
+            if st.session_state["selected_exchange"] != link_venue:
+                reset_create_preview()
+            st.session_state["selected_exchange"] = link_venue
+        selected = st.sidebar.selectbox(
+            "交易所", choices, key="selected_exchange",
+            format_func=lambda item: {"all": "全部", "binance": "币安", "okx": "OKX"}[item],
+            on_change=reset_exchange_view,
+        )
+    return selected, urls
+
+
+def health_venue(health: dict) -> str | None:
+    venue = health.get("venue")
+    if venue in {"binance", "okx"}:
+        return venue
+    if venue is None and "binance_configured" in health and "okx_configured" not in health:
+        return "binance"
+    return None
+
+
+def load_exchange_data(urls: dict[str, str]) -> tuple[list[dict], dict[str, dict], dict[str, str], list[str]]:
+    strategies: list[dict] = []
+    health_by_venue: dict[str, dict] = {}
+    url_by_venue: dict[str, str] = {}
+    errors: list[str] = []
+    for expected_venue, url in urls.items():
+        try:
+            client = api_client(url)
+            health = client.health()
+            venue = health_venue(health)
+            if venue is None or (expected_venue != "legacy" and venue != expected_venue):
+                raise GridApiError(
+                    f"配置的 {expected_venue} API 实际返回 {venue or '未知'} 后端"
+                )
+            if venue in url_by_venue:
+                raise GridApiError(f"{venue.upper()} 后端配置重复")
+            items = client.list_strategies()
+            strategies.extend(normalize_strategy({**item, "venue": venue}) for item in items)
+            health_by_venue[venue] = health
+            url_by_venue[venue] = url
+        except GridApiError as exc:
+            label = {"binance": "币安", "okx": "OKX", "legacy": "策略"}[expected_venue]
+            errors.append(f"{label} API（{url}）：{exc}")
+    return strategies, health_by_venue, url_by_venue, errors
 
 
 def apply_styles() -> None:
@@ -154,6 +268,7 @@ def normalize_strategy(item: dict) -> dict:
         "grid_kind": item.get("grid_kind", "triggered"),
         "grid_budget_usdt": None if item.get("grid_budget_usdt") is None else decimal_number(item["grid_budget_usdt"]),
         "auto_reinvest_enabled": bool(item.get("auto_reinvest_enabled", False)),
+        "auto_reinvest_percent": decimal_number(item.get("auto_reinvest_percent"), 100.0),
         "market_label": (
             f"{'OKX' if venue == 'okx' else '币安'} · 固定等 U · U 本位永续"
             if item.get("grid_kind") == "fixed_equal_usdt"
@@ -199,7 +314,11 @@ def normalize_strategy(item: dict) -> dict:
 
 
 def load_strategies() -> list[dict]:
-    return [normalize_strategy(item) for item in backend().list_strategies()]
+    venue = st.session_state.get("exchange_venue", "binance")
+    return [
+        normalize_strategy({**item, "venue": item.get("venue") or venue})
+        for item in backend().list_strategies()
+    ]
 
 
 def form_payload(
@@ -252,6 +371,12 @@ def render_fixed_grid_create() -> None:
         upper = st.number_input("区间上界", min_value=0.0, value=None, step=0.01, format="%.8f")
         count = st.number_input("网格数量", min_value=1, max_value=500, value=20, step=1)
         budget = st.number_input("网格交易预算 (USDT)", min_value=0.01, value=None, step=100.0, format="%.2f")
+        auto_reinvest = st.checkbox("创建后开启自动复投", value=False)
+        reinvest_percent = st.number_input(
+            "每格净利复投比例（%）", min_value=0.0, max_value=100.0,
+            value=100.0, step=0.01, format="%.2f",
+            help="全策略使用同一比例；每格分别按实际买卖手续费计算净利，其余留在账户余额。",
+        )
         preview_clicked = st.form_submit_button("生成预览", type="primary")
     if preview_clicked:
         if not symbol.strip() or lower is None or upper is None or budget is None:
@@ -263,6 +388,8 @@ def render_fixed_grid_create() -> None:
                 "upper_price": str(upper),
                 "grid_count": int(count),
                 "grid_budget_usdt": str(budget),
+                "auto_reinvest_enabled": bool(auto_reinvest),
+                "auto_reinvest_percent": str(Decimal(str(reinvest_percent))),
             }
             try:
                 preview = backend().preview_fixed_grid(payload)
@@ -344,6 +471,22 @@ def render_fixed_grid_create() -> None:
 
 @st.dialog("新增币对网格")
 def create_grid_dialog() -> None:
+    venues = list(st.session_state.get("venue_api_urls", {}))
+    if not venues:
+        st.error("策略服务不可用")
+        return
+    if len(venues) > 1:
+        if st.session_state.get("create_venue") not in venues:
+            selected = st.session_state.get("selected_exchange")
+            st.session_state["create_venue"] = selected if selected in venues else venues[0]
+        venue = st.selectbox(
+            "平台", venues, key="create_venue",
+            format_func=lambda item: "币安" if item == "binance" else "OKX",
+            on_change=reset_create_preview,
+        )
+    else:
+        venue = venues[0]
+    activate_venue(venue)
     if st.session_state.get("exchange_venue") == "okx":
         render_fixed_grid_create()
         return
@@ -477,6 +620,7 @@ def strategy_by_id(strategies: list[dict], strategy_id: str) -> dict | None:
 
 @st.dialog("编辑币对网格")
 def edit_grid_dialog(grid: dict) -> None:
+    activate_venue(grid["venue"])
     if grid.get("has_started"):
         st.warning("该配置已经下发，不能再修改。")
         return
@@ -542,11 +686,12 @@ def edit_grid_dialog(grid: dict) -> None:
 
 @st.dialog("删除或归档")
 def remove_grid_dialog(grid: dict) -> None:
+    client = activate_venue(grid["venue"])
     st.write(f"请选择如何处理 **{grid['symbol']}**。")
     archive_col, delete_col = st.columns(2)
     if archive_col.button("归档", width="stretch"):
         try:
-            backend().archive_strategy(grid["id"])
+            client.archive_strategy(grid["id"])
         except GridApiError as exc:
             st.error(str(exc))
         else:
@@ -554,7 +699,7 @@ def remove_grid_dialog(grid: dict) -> None:
             st.rerun()
     if delete_col.button("永久删除", type="primary", width="stretch"):
         try:
-            backend().delete_strategy(grid["id"])
+            client.delete_strategy(grid["id"])
         except GridApiError as exc:
             st.error(str(exc))
         else:
@@ -564,23 +709,25 @@ def remove_grid_dialog(grid: dict) -> None:
             st.rerun()
 
 
-def render_sidebar(strategies: list[dict], environment: str = "", venue: str = "binance") -> str:
-    st.sidebar.title("交易管理")
-    if venue == "okx":
-        if environment == "live":
-            st.sidebar.error("OKX 实盘")
-        else:
-            st.sidebar.info("OKX 模拟盘")
-    elif environment == "live":
-        st.sidebar.error("币安实盘")
-    elif environment == "testnet":
-        st.sidebar.info("币安测试网")
+def render_sidebar(strategies: list[dict], health_by_venue: dict[str, dict]) -> str:
+    for venue, health in health_by_venue.items():
+        environment = health.get("environment", "")
+        if venue == "okx":
+            if environment == "live":
+                st.sidebar.error("OKX 实盘")
+            else:
+                st.sidebar.info("OKX 模拟盘")
+        elif environment == "live":
+            st.sidebar.error("币安实盘")
+        elif environment == "testnet":
+            st.sidebar.info("币安测试网")
     detail_active = bool(st.query_params.get("strategy") or st.query_params.get("symbol"))
     with st.sidebar.expander("网格交易管理", expanded=True):
         overview = st.button(
             "总览",
             width="stretch",
             type="secondary" if detail_active else "primary",
+            on_click=reset_overview,
         )
         detail = st.button(
             "币对详情",
@@ -589,33 +736,41 @@ def render_sidebar(strategies: list[dict], environment: str = "", venue: str = "
             disabled=not strategies,
         )
     if overview:
-        st.query_params.clear()
         st.rerun()
     if detail and strategies:
         st.query_params.clear()
+        st.query_params["venue"] = strategies[0]["venue"]
         st.query_params["strategy"] = strategies[0]["id"]
         st.rerun()
     return "详情" if detail_active and strategies else "总览"
 
 
-def change_run_state(strategy_id: str, previous_running: bool, fixed_grid: bool = False) -> None:
-    key = f"run_{strategy_id}"
-    requested = bool(st.session_state[key])
+def reset_overview() -> None:
+    st.query_params.clear()
+    reset_create_preview()
+    if len(configured_api_urls()) > 1:
+        st.session_state["selected_exchange"] = "all"
+
+
+def change_run_state(strategy_id: str, venue: str, requested_running: bool, fixed_grid: bool = False) -> None:
     try:
-        if requested:
-            backend().start_strategy(strategy_id)
+        if requested_running:
+            backend_for(venue).start_strategy(strategy_id)
         else:
-            backend().stop_strategy(strategy_id)
+            backend_for(venue).stop_strategy(strategy_id)
     except GridApiError as exc:
-        st.session_state[key] = previous_running
         st.session_state["api_flash_error"] = str(exc)
     else:
-        st.session_state[f"{key}_server"] = requested
         st.session_state["api_flash_success"] = (
-            "策略已启动" if requested
+            "策略已启动" if requested_running
             else "策略已停止；挂单和仓位仍保留" if fixed_grid
             else "策略已停止"
         )
+
+
+def change_run_toggle(strategy_id: str, venue: str, fixed_grid: bool = False) -> None:
+    requested_running = bool(st.session_state[f"run_{venue}_{strategy_id}"])
+    change_run_state(strategy_id, venue, requested_running, fixed_grid)
 
 
 def render_add_button() -> None:
@@ -636,16 +791,19 @@ def render_overview(strategies: list[dict]) -> None:
         if strategies:
             st.info("当前没有运行中的网格策略。")
         else:
-            if st.session_state.get("exchange_venue") == "okx":
+            if st.session_state.get("selected_exchange") == "okx" or (
+                st.session_state.get("selected_exchange") in {None, "legacy"}
+                and list(st.session_state.get("venue_api_urls", {})) == ["okx"]
+            ):
                 st.info("当前 OKX 策略列表为空。点击下方「＋」创建固定区间等 U 网格。")
             else:
                 st.info("当前策略数据库为空。点击下方「＋」，选择「固定区间等 U」创建网格。")
         render_add_button()
         return
 
-    widths = [1.1, .65, .85, 1.35, .7, .8, .6, .7, .7, .7, .7, 1.05, .65, 1.25]
+    widths = [.6, 1.2, .6, .85, 1.8, .9, .5, 1.1, .5, 1.2]
     header = st.columns(widths)
-    labels = ["币对", "方向", "当前价格", "当前网格范围", "间距", "单格数量", "杠杆", "网格总数", "待建仓", "已建仓", "待平仓", "状态 / 更新", "启动", "操作"]
+    labels = ["平台", "币对", "方向", "当前价格", "网格范围 / 总数 / 间距", "单格数量", "杠杆", "状态 / 更新", "运行", "操作"]
     for col, label in zip(header, labels):
         col.markdown(f"**{label}**")
     st.divider()
@@ -657,52 +815,48 @@ def render_overview(strategies: list[dict]) -> None:
         def cell(column, value: object) -> None:
             column.markdown(f"<span style='color:{row_color};font-weight:600'>{value}</span>", unsafe_allow_html=True)
 
-        href = f"?strategy={quote(item['id'])}"
-        cols[0].markdown(
+        href = f"?venue={quote(item['venue'])}&strategy={quote(item['id'])}"
+        cell(cols[0], "OKX" if item["venue"] == "okx" else "币安")
+        cols[1].markdown(
             f"<a href='{href}' target='_self' "
             f"style='color:{row_color};font-weight:700;text-decoration:none'>"
-            f"{escape(item['symbol'])}</a><br><span style='color:{row_color};opacity:.7;font-size:.8rem'>{item['market_label']}</span>",
+            f"{escape(item['symbol'])}</a>",
             unsafe_allow_html=True,
         )
-        cell(cols[1], item["mode"])
+        cell(cols[2], item["mode"])
         precision = item["price_precision"]
-        cell(cols[2], format_price(item["current_price"], precision))
+        cell(cols[3], format_price(item["current_price"], precision))
         cell(
-            cols[3],
+            cols[4],
             f"{format_price(item['lower_price'], precision)} – "
-            f"{format_price(item['upper_price'], precision)}",
+            f"{format_price(item['upper_price'], precision)}<br>"
+            f"{item['grid_count']} 格 / {item['grid_ratio']:.2f}%",
         )
-        cell(cols[4], f"{item['grid_ratio']:.2f}%")
         cell(cols[5], f"{format_quantity(item['order_amount'])} {item['order_unit']}")
         cell(cols[6], f"{item['leverage']}×")
-        cell(cols[7], item["grid_count"])
-        cell(cols[8], item["pending_entry"])
-        cell(cols[9], item["entered"])
-        cell(cols[10], item["pending_exit"])
-        cols[11].markdown(
+        cols[7].markdown(
             f"<span style='color:{row_color};font-weight:700'>{item['status']}</span><br>"
             f"<span style='color:{row_color};opacity:.7;font-size:.8rem'>{item['updated_at']}</span>",
             unsafe_allow_html=True,
         )
         is_running = item["status_value"] in {"starting", "running", "error"}
-        run_key = f"run_{item['id']}"
-        server_key = f"{run_key}_server"
-        if st.session_state.get(server_key) != is_running:
-            st.session_state[run_key] = is_running
-            st.session_state[server_key] = is_running
-        cols[12].toggle(
+        run_key = f"run_{item['venue']}_{item['id']}"
+        # The API is the source of truth on every render, including periodic
+        # refreshes and switches between the single-venue and all views.
+        st.session_state[run_key] = is_running
+        cols[8].toggle(
             "运行",
             key=run_key,
             label_visibility="collapsed",
             disabled=item["archived"],
             help=(
-                "固定网格停止后挂单和仓位仍保留，需要单独处理。"
-                if item["grid_kind"] == "fixed_equal_usdt" else None
+                "开＝运行，关＝停止。固定网格停止后挂单和仓位仍保留，需要单独处理。"
+                if item["grid_kind"] == "fixed_equal_usdt" else "开＝运行，关＝停止。"
             ),
-            on_change=change_run_state,
-            args=(item["id"], is_running, item["grid_kind"] == "fixed_equal_usdt"),
+            on_change=change_run_toggle,
+            args=(item["id"], item["venue"], item["grid_kind"] == "fixed_equal_usdt"),
         )
-        with cols[13]:
+        with cols[9]:
             delete_col, edit_col, refresh_col = st.columns(3, gap="small")
             if delete_col.button("×", key=f"delete_{item['id']}", help="删除或归档", width="stretch"):
                 remove_grid_dialog(item)
@@ -716,7 +870,7 @@ def render_overview(strategies: list[dict]) -> None:
                 edit_grid_dialog(item)
             if refresh_col.button("↻", key=f"refresh_{item['id']}", help="刷新价格", width="stretch"):
                 try:
-                    backend().refresh_price(item["id"])
+                    backend_for(item["venue"]).refresh_price(item["id"])
                 except GridApiError as exc:
                     st.error(str(exc))
                 else:
@@ -724,17 +878,27 @@ def render_overview(strategies: list[dict]) -> None:
                     st.rerun()
         st.divider()
 
-    st.caption(
-        f"共 {len(rows)} 组网格 · "
-        f"待建仓 {sum(item['pending_entry'] for item in rows)} 格 · "
-        f"已建仓 {sum(item['entered'] for item in rows)} 格 · "
-        f"待平仓 {sum(item['pending_exit'] for item in rows)} 格"
-    )
+    st.caption(f"共 {len(rows)} 组网格")
     render_add_button()
+
+
+@st.fragment(run_every="10s")
+def render_overview_live(urls: dict[str, str], selected_exchange: str) -> None:
+    all_strategies, _, _, errors = load_exchange_data(urls)
+    for message in errors:
+        st.warning(message)
+    strategies = (
+        [item for item in all_strategies if item["venue"] == selected_exchange]
+        if selected_exchange not in {"all", "legacy"}
+        else all_strategies
+    )
+    render_overview(strategies)
 
 
 def base_asset(symbol: str) -> str:
     root = symbol.upper().split("_", 1)[0]
+    if "-" in root:
+        return root.split("-", 1)[0]
     for quote_asset in ("USDT", "USDC", "FDUSD", "BUSD"):
         if root.endswith(quote_asset):
             return root[: -len(quote_asset)]
@@ -762,7 +926,8 @@ def order_text(
 ) -> str:
     if order_id is None:
         return ""
-    text = f"{prefix}:#{order_id}"
+    full_id = str(order_id)
+    text = prefix if len(full_id) > 10 else f"{prefix}:#{full_id}"
     if quantity not in (None, ""):
         unit = "张" if quantity_unit == "contract" else base_asset(symbol)
         text += f" · {format_quantity(quantity)} {unit}"
@@ -803,9 +968,9 @@ def build_cell_rows(
             buy_order = exit_text
         if grid["grid_kind"] == "fixed_equal_usdt":
             if stage == "pending_entry" and cell.get("entry_order_id") is None:
-                buy_order = "订单确认中" if cell.get("entry_client_id") else "等待价格带"
+                buy_order = "订单确认中" if cell.get("entry_client_id") else "待挂单"
             if stage == "pending_exit" and cell.get("exit_order_id") is None:
-                sell_order = "订单确认中" if cell.get("exit_client_id") else "等待价格带"
+                sell_order = "订单确认中" if cell.get("exit_client_id") else "待挂单"
         stage_text = (
             f"{int(cell.get('cycle_count', 0))} / "
             f"{reinvest_counts.get(cell['cell_id'], 0) if reinvest_counts is not None else '—'}"
@@ -1054,9 +1219,26 @@ def render_fixed_reinvestment(grid: dict, cells: list[dict]) -> dict[str, int] |
         counts[entry["cell_id"]] = counts.get(entry["cell_id"], 0) + 1
     invested = sum((Decimal(entry["amount_usdt"]) for entry in entries), Decimal("0"))
     enabled = grid["auto_reinvest_enabled"]
+    percent = grid["auto_reinvest_percent"]
     label = "开启" if enabled else "关闭"
-    with st.expander(f"自动复投 · {label} · {len(entries)} 次 / {invested:.4f} U", expanded=False):
-        st.caption("每格完成卖出后，若该格累计净利扣除已复投金额仍足够，下一轮买入数量增加一个交易所数量步长；已有卖单不单独补买。")
+    with st.expander(f"自动复投 · {label} {percent:g}% · {len(entries)} 次 / {invested:.4f} U", expanded=False):
+        st.caption("全策略共用该比例；每格买卖成交扣除实际手续费后独立累计。达到最小增投金额后，下一轮买单增加一个数量步长；其余净利留在账户余额，资金费不分摊到格子。")
+        with st.form(f"reinvest_percent_form_{strategy_id}"):
+            selected_percent = st.number_input(
+                "每格净利复投比例（%）", min_value=0.0, max_value=100.0,
+                value=float(percent), step=0.01, format="%.2f",
+                key=f"reinvest_percent_{strategy_id}",
+            )
+            save_percent = st.form_submit_button("保存比例")
+        if save_percent:
+            try:
+                backend().set_auto_reinvest(
+                    strategy_id, enabled, str(Decimal(str(selected_percent)))
+                )
+            except GridApiError as exc:
+                st.error(str(exc))
+            else:
+                st.rerun()
         if st.button("关闭自动复投" if enabled else "开启自动复投", key=f"reinvest_toggle_{strategy_id}"):
             try:
                 backend().set_auto_reinvest(strategy_id, not enabled)
@@ -1279,17 +1461,34 @@ def _render_detail_live(strategy_id: str) -> None:
             column_config={
                 "网格": st.column_config.TextColumn("网格", width="small"),
                 "买入/卖出价": st.column_config.TextColumn(
-                    "买入/卖出价", width="large" if grid["grid_kind"] == "fixed_equal_usdt" else "medium"
+                    "买入/卖出价", width=260 if grid["grid_kind"] == "fixed_equal_usdt" else 200
                 ),
                 stage_column: st.column_config.TextColumn(
                     stage_column, width="medium",
                     help="交易次数 / 复投次数 / 累计纯网格净利（U）"
                     if grid["grid_kind"] == "fixed_equal_usdt" else None,
                 ),
-                "买入": st.column_config.TextColumn("买入", width="medium"),
-                "卖出": st.column_config.TextColumn("卖出", width="medium"),
+                "买入": st.column_config.TextColumn("买入", width=150),
+                "卖出": st.column_config.TextColumn("卖出", width=150),
             },
         )
+        if any(
+            len(str(cell.get(order_key))) > 10
+            for cell in visible_cells
+            for order_key in ("entry_order_id", "exit_order_id")
+            if cell.get(order_key) is not None
+        ):
+            full_orders = [
+                {
+                    "网格": f"#{int(cell['index']):03d}",
+                    "买入订单号": str(cell["entry_order_id"]) if cell.get("entry_order_id") is not None else "",
+                    "卖出订单号": str(cell["exit_order_id"]) if cell.get("exit_order_id") is not None else "",
+                }
+                for cell in visible_cells
+                if cell.get("entry_order_id") is not None or cell.get("exit_order_id") is not None
+            ]
+            with st.expander("完整订单号", expanded=False):
+                st.dataframe(pd.DataFrame(full_orders), hide_index=True, width="stretch", height=300)
     render_cell_boundary_controls(grid, cells, "lower", pending_action)
 
 
@@ -1305,28 +1504,37 @@ def render_pending_detail_live(strategy_id: str) -> None:
 
 def render_detail(strategies: list[dict]) -> None:
     requested_id = st.query_params.get("strategy")
+    requested_venue = st.query_params.get("venue")
     if not requested_id and st.query_params.get("symbol"):
         legacy_symbol = st.query_params.get("symbol")
         requested_id = next((item["id"] for item in strategies if item["symbol"] == legacy_symbol), None)
-    grid = strategy_by_id(strategies, requested_id or "") or strategies[0]
+    grid = next(
+        (item for item in strategies if item["id"] == requested_id
+         and (not requested_venue or item["venue"] == requested_venue)),
+        None,
+    ) or strategies[0]
+    activate_venue(grid["venue"])
 
     st.markdown(f"### {grid['symbol']} 网格详情")
-    options = [item["id"] for item in strategies]
+    options = [(item["venue"], item["id"]) for item in strategies]
     labels = {
-        item["id"]: f"{item['symbol']} · {item['market_label']} · {item['mode']} · {item['id'][-8:]}"
+        (item["venue"], item["id"]):
+            f"{'OKX' if item['venue'] == 'okx' else '币安'} · {item['symbol']} · "
+            f"{item['market_label']} · {item['mode']} · {item['id'][-8:]}"
         for item in strategies
     }
     selector, _ = st.columns([1.7, 6])
     selected = selector.selectbox(
         "切换币对",
         options,
-        index=options.index(grid["id"]),
-        format_func=lambda strategy_id: labels[strategy_id],
+        index=options.index((grid["venue"], grid["id"])),
+        format_func=lambda strategy_key: labels[strategy_key],
         label_visibility="collapsed",
     )
-    if selected != requested_id:
+    if selected != (requested_venue, requested_id):
         st.query_params.clear()
-        st.query_params["strategy"] = selected
+        st.query_params["venue"] = selected[0]
+        st.query_params["strategy"] = selected[1]
         st.rerun()
 
     if grid["grid_kind"] == "fixed_equal_usdt" or st.session_state.get(cell_action_state_key(grid["id"])):
@@ -1336,20 +1544,32 @@ def render_detail(strategies: list[dict]) -> None:
 
 
 apply_styles()
+selected_exchange, configured_urls = select_exchange_backend()
 display_flash()
-try:
-    health = backend().health()
-    st.session_state["exchange_venue"] = health.get("venue", "binance")
-    strategies = load_strategies()
-except GridApiError as exc:
-    st.sidebar.title("交易管理")
-    st.sidebar.caption(f"API {api_base_url()}")
-    st.error(str(exc))
-    st.info("请先启动 FastAPI：.venv/bin/uvicorn grid_server.api:create_app --factory --port 8100 --workers 1")
+all_strategies, health_by_venue, venue_api_urls, load_errors = load_exchange_data(configured_urls)
+st.session_state["venue_api_urls"] = venue_api_urls
+if not venue_api_urls:
+    for message in load_errors:
+        st.error(message)
+    st.info("请先启动对应的 FastAPI 策略服务。")
     st.stop()
+for message in load_errors:
+    st.warning(message)
+st.session_state["active_api_url"] = next(iter(venue_api_urls.values()))
+st.session_state["exchange_venue"] = next(iter(venue_api_urls))
+strategies = (
+    [item for item in all_strategies if item["venue"] == selected_exchange]
+    if selected_exchange not in {"all", "legacy"}
+    else all_strategies
+)
 
-current_page = render_sidebar(strategies, health.get("environment", ""), health.get("venue", "binance"))
+visible_health = (
+    {venue: health for venue, health in health_by_venue.items() if venue == selected_exchange}
+    if selected_exchange not in {"all", "legacy"}
+    else health_by_venue
+)
+current_page = render_sidebar(strategies, visible_health)
 if current_page == "详情":
     render_detail(strategies)
 else:
-    render_overview(strategies)
+    render_overview_live(configured_urls, selected_exchange)

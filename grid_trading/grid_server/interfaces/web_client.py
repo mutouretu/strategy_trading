@@ -68,10 +68,15 @@ class GridApiClient:
     def reinvestments(self, strategy_id: str) -> list[dict]:
         return self._request("GET", f"/strategies/{strategy_id}/reinvestments")
 
-    def set_auto_reinvest(self, strategy_id: str, enabled: bool) -> dict:
+    def set_auto_reinvest(
+        self, strategy_id: str, enabled: bool, percent: str | None = None,
+    ) -> dict:
+        payload: dict[str, bool | str] = {"enabled": enabled}
+        if percent is not None:
+            payload["auto_reinvest_percent"] = percent
         return self._request(
             "POST", f"/strategies/{strategy_id}/auto-reinvest",
-            json={"enabled": enabled},
+            json=payload,
         )
 
     def update_strategy(self, strategy_id: str, payload: dict) -> dict:

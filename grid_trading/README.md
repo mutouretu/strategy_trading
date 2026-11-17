@@ -168,13 +168,30 @@ export HTTPS_PROXY=http://127.0.0.1:7890
 .venv/bin/uvicorn grid_server.interfaces.api:create_app --factory --host 127.0.0.1 --port 8111 --workers 1
 ```
 
-前端在另一个终端设置相同的 `GRID_API_URL` 后启动在独立端口，例如 8511。侧栏显示“币安实盘”。固定网格最多 500 格；运行时以现价附近买卖各 10 单为挂单目标，任一侧少于 5 单或多于 15 单时批量重排。远端旧单每轮最多撤 10 张，直到恢复目标窗口。币安的 `PERCENT_PRICE` 对买卖方向分别限制，被动买单和卖单可以挂在远端。停止策略只暂停调度，**不会撤单或平仓**。生产账户当前精度、手续费和持仓必须在启动前重新读取。
+前端在另一个终端设置相同的 `GRID_API_URL` 后启动在独立端口，例如 8511。侧栏显示“币安实盘”。固定网格最多 500 格；运行时先过滤当前不可挂的格，再按离现价的价格距离选买卖各 10 单。任一侧少于 5 单、多于 15 单，或更近的可挂格被较远旧单占位时批量重排。远端旧单每轮最多撤 10 张，直到恢复目标窗口。表格中的“待挂单”只表示暂无订单，不代表价格带拒单。币安的 `PERCENT_PRICE` 对买卖方向分别限制，被动买单和卖单可以挂在远端。停止策略只暂停调度，**不会撤单或平仓**。生产账户当前精度、手续费和持仓必须在启动前重新读取。
 
 币安返回 HTTP 429 或 418 时，适配器按 `Retry-After` 或封禁截止时间暂停请求；调度器跳过这段时间内的交易轮询与持仓巡检。限流按出口 IP 计算，切换 VPN 后先用同一代理验证币安接口可访问，再重启 API 和调度器以清除旧进程中的冷却状态。
 
 ### OKX U 本位合约固定等 U 网格
 
-`feat/okx-swap-grid` 从固定等 U 网格分支继承。OKX 使用独立的 API、页面、数据库和调度器，启动配置与适用范围见 [OKX 网格文档](docs/okx-swap-grid.md)。
+`feat/okx-swap-grid` 从固定等 U 网格分支继承。OKX 使用独立的 API、数据库和调度器；可以使用独立页面，也可以接入下方的统一前端。启动配置与适用范围见 [OKX 网格文档](docs/okx-swap-grid.md)。
+
+### 币安与 OKX 统一前端
+
+从 `feat/okx-swap-grid` 的 `grid_trading` 目录启动一个页面，两个后端服务仍分别运行在 8111 和 8112。复制 `frontend.env.example` 为 `frontend.env`，按实际 API 端口修改：
+
+```dotenv
+GRID_BINANCE_API_URL=http://127.0.0.1:8111
+GRID_OKX_API_URL=http://127.0.0.1:8112
+GRID_DEFAULT_EXCHANGE=all
+```
+
+```bash
+export GRID_FRONTEND_ENV_FILE="$PWD/frontend.env"
+python -m streamlit run app.py --server.address 127.0.0.1 --server.port 8513
+```
+
+访问 `http://127.0.0.1:8513`，总览默认显示两个交易所的策略，侧栏可按平台筛选。进入详情时页面按策略所属平台连接其 API，并核对 `/health` 返回的交易所；配置指错后端时只屏蔽该平台。切换筛选时会清除上一个交易所的详情链接和新建预览。各后端继续使用自己的密钥、数据库和调度器，页面切换不会停止策略。只有一个 `GRID_*_API_URL` 时页面保持单交易所模式；没有配置时继续使用原 `GRID_API_URL`。
 
 总览、预览、新增、编辑、启动、停止、刷新价格、归档、删除和 Cell 详情均通过 FastAPI 操作 SQLite/调度器。同一币对允许创建多组网格，页面使用 `strategy_id` 区分。
 

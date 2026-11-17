@@ -80,6 +80,7 @@ class SQLiteStore:
                     upper_price TEXT,
                     grid_budget_usdt TEXT,
                     auto_reinvest_enabled INTEGER NOT NULL DEFAULT 0,
+                    auto_reinvest_percent TEXT NOT NULL DEFAULT '100',
                     order_coin_qty TEXT,
                     contract_size TEXT NOT NULL DEFAULT '0',
                     leverage INTEGER NOT NULL,
@@ -271,6 +272,33 @@ class SQLiteStore:
                     FOREIGN KEY(strategy_id) REFERENCES strategies(strategy_id)
                 );
 
+                CREATE TABLE IF NOT EXISTS cell_reinvest_earnings (
+                    strategy_id TEXT NOT NULL,
+                    cell_id TEXT NOT NULL,
+                    cycle_count INTEGER NOT NULL,
+                    net_profit_usdt TEXT NOT NULL,
+                    eligible_profit_usdt TEXT NOT NULL,
+                    auto_reinvest_percent TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(strategy_id, cell_id, cycle_count),
+                    FOREIGN KEY(strategy_id) REFERENCES strategies(strategy_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS reinvest_cutovers (
+                    strategy_id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(strategy_id) REFERENCES strategies(strategy_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS cell_reinvest_checkpoints (
+                    strategy_id TEXT NOT NULL,
+                    cell_id TEXT NOT NULL,
+                    last_old_cycle_count INTEGER NOT NULL,
+                    last_old_reinvestment_id INTEGER NOT NULL,
+                    PRIMARY KEY(strategy_id, cell_id),
+                    FOREIGN KEY(strategy_id) REFERENCES strategies(strategy_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS scheduler_runs (
                     run_id TEXT PRIMARY KEY,
                     pid INTEGER NOT NULL,
@@ -355,6 +383,7 @@ class SQLiteStore:
                 ("upper_price", "TEXT"),
                 ("grid_budget_usdt", "TEXT"),
                 ("auto_reinvest_enabled", "INTEGER NOT NULL DEFAULT 0"),
+                ("auto_reinvest_percent", "TEXT NOT NULL DEFAULT '100'"),
             ):
                 if column not in strategy_columns:
                     conn.execute(f"ALTER TABLE strategies ADD COLUMN {column} {definition}")
@@ -447,11 +476,11 @@ class SQLiteStore:
                 INSERT INTO strategies (
                     strategy_id, symbol, market_type, venue, mode, anchor_price, grid_ratio, grid_count,
                     order_usdt, grid_kind, lower_price, upper_price, grid_budget_usdt,
-                    auto_reinvest_enabled,
+                    auto_reinvest_enabled, auto_reinvest_percent,
                     order_coin_qty, contract_size, leverage,
                     poll_interval_sec, move_grid, status,
                     has_started, archived, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     config.strategy_id,
@@ -468,6 +497,7 @@ class SQLiteStore:
                     None if config.upper_price is None else str(config.upper_price),
                     None if config.grid_budget_usdt is None else str(config.grid_budget_usdt),
                     int(config.auto_reinvest_enabled),
+                    str(config.auto_reinvest_percent),
                     None if config.order_coin_qty is None else str(config.order_coin_qty),
                     str(config.contract_size),
                     config.leverage,
@@ -520,7 +550,7 @@ class SQLiteStore:
                 """
                 UPDATE strategies SET symbol=?, market_type=?, venue=?, mode=?, anchor_price=?, grid_ratio=?, grid_count=?,
                     order_usdt=?, grid_kind=?, lower_price=?, upper_price=?, grid_budget_usdt=?,
-                    auto_reinvest_enabled=?,
+                    auto_reinvest_enabled=?, auto_reinvest_percent=?,
                     order_coin_qty=?, contract_size=?, leverage=?,
                     poll_interval_sec=?, move_grid=?, updated_at=?
                 WHERE strategy_id=?
@@ -539,6 +569,7 @@ class SQLiteStore:
                     None if config.upper_price is None else str(config.upper_price),
                     None if config.grid_budget_usdt is None else str(config.grid_budget_usdt),
                     int(config.auto_reinvest_enabled),
+                    str(config.auto_reinvest_percent),
                     None if config.order_coin_qty is None else str(config.order_coin_qty),
                     str(config.contract_size),
                     config.leverage,
@@ -1048,16 +1079,123 @@ class SQLiteStore:
             )
 
     def set_auto_reinvest_enabled(self, strategy_id: str, enabled: bool) -> None:
+        self.set_auto_reinvest_config(strategy_id, enabled=enabled)
+
+    def ensure_reinvest_cutover(self, strategy_id: str) -> None:
+        """Exclude old profits/spends at the first tick of the new engine."""
         with self.connection() as conn:
-            result = conn.execute(
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute(
+                "SELECT 1 FROM reinvest_cutovers WHERE strategy_id=?", (strategy_id,)
+            ).fetchone():
+                return
+            strategy = conn.execute(
+                "SELECT 1 FROM strategies WHERE strategy_id=? AND grid_kind=?",
+                (strategy_id, GridKind.FIXED_EQUAL_USDT.value),
+            ).fetchone()
+            if strategy is None:
+                raise ValueError("fixed grid not found for reinvest cutover")
+            conn.execute(
                 """
-                UPDATE strategies SET auto_reinvest_enabled=?, updated_at=?
+                INSERT INTO cell_reinvest_checkpoints(
+                    strategy_id, cell_id, last_old_cycle_count, last_old_reinvestment_id
+                )
+                SELECT c.strategy_id, c.cell_id, c.cycle_count,
+                       COALESCE(MAX(r.id), 0)
+                FROM cells c LEFT JOIN cell_reinvestments r
+                    ON r.strategy_id=c.strategy_id AND r.cell_id=c.cell_id
+                WHERE c.strategy_id=? GROUP BY c.strategy_id, c.cell_id
+                """,
+                (strategy_id,),
+            )
+            conn.execute(
+                "INSERT INTO reinvest_cutovers(strategy_id, created_at) VALUES (?, ?)",
+                (strategy_id, utc_now()),
+            )
+
+    def reinvest_cutover_cycles(self, strategy_id: str) -> dict[str, int]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT cell_id, last_old_cycle_count FROM cell_reinvest_checkpoints WHERE strategy_id=?",
+                (strategy_id,),
+            ).fetchall()
+        return {row["cell_id"]: int(row["last_old_cycle_count"]) for row in rows}
+
+    def set_auto_reinvest_config(
+        self, strategy_id: str, *, enabled: bool,
+        auto_reinvest_percent: Decimal | None = None,
+    ) -> Decimal:
+        if auto_reinvest_percent is not None and (
+            not auto_reinvest_percent.is_finite()
+            or not Decimal("0") <= auto_reinvest_percent <= Decimal("100")
+        ):
+            raise ValueError("auto_reinvest_percent must be between 0 and 100")
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute(
+                """
+                SELECT auto_reinvest_percent FROM strategies
                 WHERE strategy_id=? AND grid_kind=? AND deleted_at IS NULL AND archived=0
                 """,
-                (int(enabled), utc_now(), strategy_id, GridKind.FIXED_EQUAL_USDT.value),
+                (strategy_id, GridKind.FIXED_EQUAL_USDT.value),
+            ).fetchone()
+            if current is None:
+                raise ValueError("active fixed grid not found")
+            percent = (
+                Decimal(current["auto_reinvest_percent"])
+                if auto_reinvest_percent is None else auto_reinvest_percent
+            )
+            result = conn.execute(
+                """
+                UPDATE strategies SET auto_reinvest_enabled=?, auto_reinvest_percent=?, updated_at=?
+                WHERE strategy_id=? AND grid_kind=? AND deleted_at IS NULL AND archived=0
+                """,
+                (int(enabled), str(percent), utc_now(), strategy_id, GridKind.FIXED_EQUAL_USDT.value),
             )
             if result.rowcount != 1:
                 raise ValueError("active fixed grid not found")
+            return percent
+
+    def book_cell_reinvest_earnings(
+        self, strategy_id: str, cell_id: str, cycle_count: int,
+        net_profit_usdt: Decimal, auto_reinvest_percent: Decimal,
+    ) -> bool:
+        """Permanently earmark this completed cycle's chosen share of net profit."""
+        if cycle_count < 1 or not net_profit_usdt.is_finite():
+            raise ValueError("invalid completed-cycle profit")
+        if not auto_reinvest_percent.is_finite() or not Decimal("0") <= auto_reinvest_percent <= Decimal("100"):
+            raise ValueError("auto_reinvest_percent must be between 0 and 100")
+        eligible = net_profit_usdt * auto_reinvest_percent / Decimal("100")
+        with self.connection() as conn:
+            checkpoint = conn.execute(
+                "SELECT last_old_cycle_count FROM cell_reinvest_checkpoints WHERE strategy_id=? AND cell_id=?",
+                (strategy_id, cell_id),
+            ).fetchone()
+            if not conn.execute(
+                "SELECT 1 FROM reinvest_cutovers WHERE strategy_id=?", (strategy_id,)
+            ).fetchone():
+                return False
+            if checkpoint is not None and cycle_count <= int(checkpoint["last_old_cycle_count"]):
+                return False
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO cell_reinvest_earnings(
+                    strategy_id, cell_id, cycle_count, net_profit_usdt,
+                    eligible_profit_usdt, auto_reinvest_percent, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (strategy_id, cell_id, cycle_count, str(net_profit_usdt),
+                 str(eligible), str(auto_reinvest_percent), utc_now()),
+            )
+            return cursor.rowcount == 1
+
+    def list_cell_reinvest_earnings(self, strategy_id: str) -> list[dict]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM cell_reinvest_earnings WHERE strategy_id=? ORDER BY cell_id, cycle_count",
+                (strategy_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def list_cell_reinvestments(self, strategy_id: str) -> list[dict]:
         with self.connection() as conn:
@@ -1107,13 +1245,24 @@ class SQLiteStore:
             ).fetchone()
             if existing_cycle is not None:
                 return False
-            spent_rows = conn.execute(
-                "SELECT amount_usdt FROM cell_reinvestments WHERE strategy_id=? AND cell_id=?",
+            earned_rows = conn.execute(
+                "SELECT net_profit_usdt, eligible_profit_usdt FROM cell_reinvest_earnings WHERE strategy_id=? AND cell_id=?",
                 (strategy_id, cell_id),
+            ).fetchall()
+            eligible = sum((Decimal(row["eligible_profit_usdt"]) for row in earned_rows), Decimal("0"))
+            net_earned = sum((Decimal(row["net_profit_usdt"]) for row in earned_rows), Decimal("0"))
+            checkpoint = conn.execute(
+                "SELECT last_old_reinvestment_id FROM cell_reinvest_checkpoints WHERE strategy_id=? AND cell_id=?",
+                (strategy_id, cell_id),
+            ).fetchone()
+            old_reinvest_id = int(checkpoint["last_old_reinvestment_id"]) if checkpoint else 0
+            spent_rows = conn.execute(
+                "SELECT amount_usdt FROM cell_reinvestments WHERE strategy_id=? AND cell_id=? AND id>?",
+                (strategy_id, cell_id, old_reinvest_id),
             ).fetchall()
             spent = sum((Decimal(row["amount_usdt"]) for row in spent_rows), Decimal("0"))
             amount = Decimal(cell["buy_price"]) * quantity_step
-            if profit_snapshot_usdt - spent < amount:
+            if eligible - spent < amount or net_earned - spent < amount:
                 return False
             now = utc_now()
             new_budget = Decimal(cell["budget_usdt"]) + amount
@@ -1140,7 +1289,8 @@ class SQLiteStore:
                 "INSERT INTO events(strategy_id, cell_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",
                 (strategy_id, cell_id, "CELL_PROFIT_REINVESTED",
                  json.dumps({"cycle_count": cycle_count, "quantity_step": str(quantity_step),
-                             "amount_usdt": str(amount), "profit_snapshot_usdt": str(profit_snapshot_usdt)}), now),
+                             "amount_usdt": str(amount), "profit_snapshot_usdt": str(profit_snapshot_usdt),
+                             "eligible_profit_usdt": str(eligible)}), now),
             )
             return True
 
@@ -1156,6 +1306,31 @@ class SQLiteStore:
             cursor = conn.execute(
                 "INSERT INTO events(strategy_id, run_id, cell_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (strategy_id, run_id, cell_id, event_type, json.dumps(payload or {}, ensure_ascii=False), utc_now()),
+            )
+            return int(cursor.lastrowid)
+
+    def append_cycle_close_event(
+        self, strategy_id: str, cell_id: str, event_type: str,
+        payload: dict, cycle_count: int, run_id: str | None,
+    ) -> int:
+        """Record the completed cycle with the policy committed at that instant."""
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT auto_reinvest_percent FROM strategies WHERE strategy_id=?",
+                (strategy_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("strategy not found for cycle close")
+            enriched = {
+                **payload,
+                "cycle_count": cycle_count,
+                "auto_reinvest_percent": row["auto_reinvest_percent"],
+            }
+            cursor = conn.execute(
+                "INSERT INTO events(strategy_id, run_id, cell_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (strategy_id, run_id, cell_id, event_type,
+                 json.dumps(enriched, ensure_ascii=False), utc_now()),
             )
             return int(cursor.lastrowid)
 
@@ -1724,6 +1899,7 @@ class SQLiteStore:
             upper_price=Decimal(row["upper_price"]) if "upper_price" in row.keys() and row["upper_price"] is not None else None,
             grid_budget_usdt=Decimal(row["grid_budget_usdt"]) if "grid_budget_usdt" in row.keys() and row["grid_budget_usdt"] is not None else None,
             auto_reinvest_enabled=bool(row["auto_reinvest_enabled"]) if "auto_reinvest_enabled" in row.keys() else False,
+            auto_reinvest_percent=Decimal(row["auto_reinvest_percent"]) if "auto_reinvest_percent" in row.keys() else Decimal("100"),
         )
 
     @staticmethod

@@ -155,8 +155,103 @@ class FixedEqualUGridTests(unittest.TestCase):
         self.assertTrue(client.get("/strategies").json()[0]["auto_reinvest_enabled"])
         self.assertEqual(client.get(f"/strategies/{engine.strategy_id}/reinvestments").json(), [])
 
+    def test_delayed_trade_fees_keep_percent_from_cycle_close(self) -> None:
+        engine = self.make_engine()
+        engine.tick()
+        cell = self.store.list_cells(engine.strategy_id)[0]
+        entry_order = self.exchange.orders[cell.entry_order_id]
+        self.exchange.fill(entry_order.order_id, cell.buy_price)
+        engine.tick()
+        cell = next(c for c in self.store.list_cells(engine.strategy_id) if c.cell_id == cell.cell_id)
+        exit_order = self.exchange.orders[cell.exit_order_id]
+        self.store.set_auto_reinvest_config(
+            engine.strategy_id, enabled=False, auto_reinvest_percent=Decimal("50")
+        )
+        self.exchange.fill(exit_order.order_id, cell.sell_price)
+        engine.tick()  # Closing event is persisted, but exchange fees are not synced yet.
+        close = next(e for e in self.store.list_events(engine.strategy_id)
+                     if e["event_type"] == "CYCLE_CLOSED" and e["cell_id"] == cell.cell_id)
+        self.assertEqual(close["payload"]["auto_reinvest_percent"], "50")
+        self.assertEqual(self.store.list_cell_reinvest_earnings(engine.strategy_id), [])
+
+        self.store.set_auto_reinvest_config(
+            engine.strategy_id, enabled=True, auto_reinvest_percent=Decimal("100")
+        )
+        seed = self.store.get_capital_action(f"seed:{engine.strategy_id}")
+        def fill(trade_id, order_id, side, qty, price, fee):
+            return {
+                "id": trade_id, "orderId": order_id, "side": side,
+                "qty": str(qty), "price": str(price), "realizedPnl": "0",
+                "commission": str(fee), "commissionAsset": "USDT",
+                "time": 1794480000000 + trade_id,
+            }
+        first_sell_qty = exit_order.original_qty / 2
+        self.store.save_strategy_trades(engine.strategy_id, [
+            fill(1, seed["order_id"], "BUY", seed["executed_qty"], self.exchange.mark, Decimal("0")),
+            fill(2, entry_order.order_id, "BUY", entry_order.original_qty, cell.buy_price, Decimal("0.03")),
+            fill(3, exit_order.order_id, "SELL", first_sell_qty, cell.sell_price, Decimal("0.02")),
+        ])
+        self.exchange.get_user_trades = lambda symbol, **kwargs: []
+        engine.tick()
+        self.assertEqual(self.store.list_cell_reinvest_earnings(engine.strategy_id), [])
+        self.store.save_strategy_trades(engine.strategy_id, [
+            fill(4, exit_order.order_id, "SELL", exit_order.original_qty - first_sell_qty,
+                 cell.sell_price, Decimal("0.02")),
+        ])
+        engine.tick()
+
+        earnings = self.store.list_cell_reinvest_earnings(engine.strategy_id)
+        self.assertEqual(len(earnings), 1)
+        gross = entry_order.original_qty * (cell.sell_price - cell.buy_price)
+        expected_net = gross - Decimal("0.07")
+        self.assertEqual(Decimal(earnings[0]["net_profit_usdt"]), expected_net)
+        self.assertEqual(Decimal(earnings[0]["eligible_profit_usdt"]), expected_net / 2)
+        self.assertEqual(earnings[0]["auto_reinvest_percent"], "50")
+
+    def test_partial_replaced_exit_waits_for_all_fee_fills(self) -> None:
+        engine = self.make_engine()
+        engine.initialize()
+        cell = self.store.list_cells(engine.strategy_id)[0]
+        cell.cycle_count = 1
+        self.store.save_cell(cell)
+        for kind, payload in (
+            ("ENTRY_FILLED", {"order_id": 901, "qty": "1"}),
+            ("EXIT_PARTIALLY_FILLED", {"order_id": 902, "executed_total": "0.4"}),
+            ("EXIT_ENDED", {"order_id": 902, "executed_qty": "0.4", "action": "manual_review"}),
+        ):
+            self.store.append_event(engine.strategy_id, kind, payload, cell.cell_id)
+        self.store.append_cycle_close_event(
+            engine.strategy_id, cell.cell_id, "CYCLE_CLOSED",
+            {"order_id": 903, "qty": "0.6"}, 1, None,
+        )
+
+        def trade(trade_id, order_id, side, qty, price, fee):
+            return {
+                "id": trade_id, "orderId": order_id, "side": side,
+                "qty": str(qty), "price": str(price), "realizedPnl": "0",
+                "commission": str(fee), "commissionAsset": "USDT",
+                "time": 1794480000000 + trade_id,
+            }
+        self.store.save_strategy_trades(engine.strategy_id, [
+            trade(1, 901, "BUY", "1", cell.buy_price, "0.01"),
+            trade(3, 903, "SELL", "0.6", cell.sell_price, "0.02"),
+        ])
+        self.exchange.get_user_trades = lambda symbol, **kwargs: []
+        engine._reinvest_closed_cells()
+        self.assertEqual(self.store.list_cell_reinvest_earnings(engine.strategy_id), [])
+
+        self.store.save_strategy_trades(engine.strategy_id, [
+            trade(2, 902, "SELL", "0.4", cell.sell_price, "0.03"),
+        ])
+        engine._reinvest_closed_cells()
+        earnings = self.store.list_cell_reinvest_earnings(engine.strategy_id)
+        self.assertEqual(len(earnings), 1)
+        self.assertEqual(Decimal(earnings[0]["net_profit_usdt"]),
+                         cell.sell_price - cell.buy_price - Decimal("0.06"))
+
     def test_reinvestment_cannot_spend_same_cycle_profit_twice(self) -> None:
         engine = self.make_engine()
+        self.store.ensure_reinvest_cutover(engine.strategy_id)
         cell = self.store.list_cells(engine.strategy_id)[0]
         cell.cycle_count = 1
         self.store.save_cell(cell)
@@ -167,6 +262,9 @@ class FixedEqualUGridTests(unittest.TestCase):
         self.assertFalse(self.store.apply_cell_reinvestment(
             engine.strategy_id, cell.cell_id, 1, self.exchange.filters.step_size, unit - Decimal("0.00001")
         ))
+        self.assertTrue(self.store.book_cell_reinvest_earnings(
+            engine.strategy_id, cell.cell_id, 1, unit * 3, Decimal("100")
+        ))
         self.assertTrue(self.store.apply_cell_reinvestment(
             engine.strategy_id, cell.cell_id, 1, self.exchange.filters.step_size, unit * 3
         ))
@@ -176,6 +274,145 @@ class FixedEqualUGridTests(unittest.TestCase):
         updated = next(item for item in self.store.list_cells(engine.strategy_id) if item.cell_id == cell.cell_id)
         self.assertEqual(updated.budget_usdt, original_budget + unit)
         self.assertEqual(len(self.store.list_cell_reinvestments(engine.strategy_id)), 1)
+
+    def test_reinvest_percent_is_locked_per_cycle_and_kept_per_cell(self) -> None:
+        engine = self.make_engine()
+        self.store.ensure_reinvest_cutover(engine.strategy_id)
+        cell = self.store.list_cells(engine.strategy_id)[0]
+        other = self.store.list_cells(engine.strategy_id)[1]
+        unit = cell.buy_price * self.exchange.filters.step_size
+        self.store.set_auto_reinvest_config(
+            engine.strategy_id, enabled=True, auto_reinvest_percent=Decimal("100")
+        )
+
+        def close(cycle: int, net: Decimal, percent: Decimal) -> bool:
+            cell.cycle_count = cycle
+            self.store.save_cell(cell)
+            self.assertTrue(self.store.book_cell_reinvest_earnings(
+                engine.strategy_id, cell.cell_id, cycle, net, percent
+            ))
+            return self.store.apply_cell_reinvestment(
+                engine.strategy_id, cell.cell_id, cycle,
+                self.exchange.filters.step_size, net,
+            )
+
+        self.assertFalse(close(1, unit * Decimal("0.75"), Decimal("100")))
+        self.store.set_auto_reinvest_config(
+            engine.strategy_id, enabled=True, auto_reinvest_percent=Decimal("50")
+        )
+        self.assertTrue(close(2, unit, Decimal("50")))
+        self.store.set_auto_reinvest_config(
+            engine.strategy_id, enabled=True, auto_reinvest_percent=Decimal("100")
+        )
+        self.assertTrue(close(3, unit, Decimal("100")))
+        self.assertEqual(len(self.store.list_cell_reinvestments(engine.strategy_id)), 2)
+        earnings = self.store.list_cell_reinvest_earnings(engine.strategy_id)
+        self.assertEqual(
+            [Decimal(item["eligible_profit_usdt"]) for item in earnings],
+            [unit * Decimal("0.75"), unit * Decimal("0.5"), unit],
+        )
+        other.cycle_count = 1
+        self.store.save_cell(other)
+        self.assertTrue(self.store.book_cell_reinvest_earnings(
+            engine.strategy_id, other.cell_id, 1, Decimal("0"), Decimal("100")
+        ))
+        self.assertFalse(self.store.apply_cell_reinvestment(
+            engine.strategy_id, other.cell_id, 1,
+            self.exchange.filters.step_size, unit,
+        ))
+
+    def test_zero_percent_and_negative_cycle_do_not_unlock_old_profit(self) -> None:
+        engine = self.make_engine()
+        self.store.ensure_reinvest_cutover(engine.strategy_id)
+        cell = self.store.list_cells(engine.strategy_id)[0]
+        unit = cell.buy_price * self.exchange.filters.step_size
+        self.store.set_auto_reinvest_enabled(engine.strategy_id, True)
+        for cycle, net, percent in (
+            (1, unit * 10, Decimal("0")),
+            (2, unit * 2, Decimal("100")),
+            (3, -unit * 2, Decimal("100")),
+            (4, unit, Decimal("100")),
+        ):
+            cell.cycle_count = cycle
+            self.store.save_cell(cell)
+            self.assertTrue(self.store.book_cell_reinvest_earnings(
+                engine.strategy_id, cell.cell_id, cycle, net, percent
+            ))
+            spent = self.store.apply_cell_reinvestment(
+                engine.strategy_id, cell.cell_id, cycle,
+                self.exchange.filters.step_size, net,
+            )
+            self.assertEqual(spent, cycle == 2)
+        self.assertEqual(len(self.store.list_cell_reinvestments(engine.strategy_id)), 1)
+
+    def test_zero_percent_loss_can_exhaust_earlier_earmarked_profit(self) -> None:
+        engine = self.make_engine()
+        self.store.ensure_reinvest_cutover(engine.strategy_id)
+        cell = self.store.list_cells(engine.strategy_id)[0]
+        unit = cell.buy_price * self.exchange.filters.step_size
+        for cycle, net, percent in (
+            (1, unit * 2, Decimal("50")),
+            (2, -unit * 2, Decimal("0")),
+        ):
+            cell.cycle_count = cycle
+            self.store.save_cell(cell)
+            self.assertTrue(self.store.book_cell_reinvest_earnings(
+                engine.strategy_id, cell.cell_id, cycle, net, percent
+            ))
+        self.store.set_auto_reinvest_enabled(engine.strategy_id, True)
+        self.assertFalse(self.store.apply_cell_reinvestment(
+            engine.strategy_id, cell.cell_id, 2,
+            self.exchange.filters.step_size, Decimal("0"),
+        ))
+
+    def test_reinvest_cutover_excludes_old_cycles_and_old_spends(self) -> None:
+        engine = self.make_engine()
+        cell = self.store.list_cells(engine.strategy_id)[0]
+        unit = cell.buy_price * self.exchange.filters.step_size
+        cell.cycle_count = 3
+        self.store.save_cell(cell)
+        with self.store.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO cell_reinvestments(
+                    strategy_id, cell_id, cycle_count, quantity_step,
+                    amount_usdt, profit_snapshot_usdt, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (engine.strategy_id, cell.cell_id, 2,
+                 str(self.exchange.filters.step_size), str(unit), str(unit),
+                 "2026-11-01T00:00:00+00:00"),
+            )
+        self.store.ensure_reinvest_cutover(engine.strategy_id)
+        self.assertEqual(self.store.reinvest_cutover_cycles(engine.strategy_id)[cell.cell_id], 3)
+        self.assertFalse(self.store.book_cell_reinvest_earnings(
+            engine.strategy_id, cell.cell_id, 3, unit * 100, Decimal("100")
+        ))
+        cell.cycle_count = 4
+        self.store.save_cell(cell)
+        self.store.set_auto_reinvest_enabled(engine.strategy_id, True)
+        self.assertTrue(self.store.book_cell_reinvest_earnings(
+            engine.strategy_id, cell.cell_id, 4, unit, Decimal("100")
+        ))
+        self.assertTrue(self.store.apply_cell_reinvestment(
+            engine.strategy_id, cell.cell_id, 4,
+            self.exchange.filters.step_size, unit,
+        ))
+        self.assertEqual(len(self.store.list_cell_reinvestments(engine.strategy_id)), 2)
+
+    def test_reinvest_percent_api_validates_and_preserves_value_on_old_toggle(self) -> None:
+        engine = self.make_engine()
+        client = TestClient(create_app(self.store.path, lambda market=FuturesMarket.USDM: self.exchange))
+        path = f"/strategies/{engine.strategy_id}/auto-reinvest"
+        updated = client.post(path, json={"enabled": True, "auto_reinvest_percent": "37.5"})
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertEqual(updated.json()["auto_reinvest_percent"], "37.5")
+        self.assertEqual(client.get("/strategies").json()[0]["auto_reinvest_percent"], "37.5")
+        self.assertEqual(client.post(path, json={"enabled": False}).json()["auto_reinvest_percent"], "37.5")
+        for invalid in ("101", "-1", "NaN"):
+            self.assertEqual(client.post(
+                path, json={"enabled": True, "auto_reinvest_percent": invalid}
+            ).status_code, 422)
 
     def test_fifty_usdt_cells_seed_variable_qty_for_equal_sell_notional(self) -> None:
         self.exchange.mark = Decimal("62.54")
@@ -495,6 +732,337 @@ class FixedEqualUGridTests(unittest.TestCase):
         self.assertEqual(sum(cell.stage == CellStage.PENDING_ENTRY and cell.entry_order_id is not None for cell in cells), 10)
         self.assertEqual(sum(cell.stage == CellStage.PENDING_EXIT and cell.exit_order_id is not None for cell in cells), 10)
 
+    def test_external_amended_then_canceled_exits_reenter_window_after_audit(self) -> None:
+        self.exchange.mark = Decimal("60.23")
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            step_size=Decimal("0.01"), min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"), contract_type="TRADIFI_PERPETUAL",
+        )
+        service = GridService(self.store, SimpleNamespace())
+        config = service.create_fixed(
+            "SOXLUSDT", Decimal("30"), Decimal("150"), 323,
+            Decimal("5000"), Decimal("0.01"),
+        )
+        self.store.mark_started(config.strategy_id)
+        scheduler = StrategyScheduler(
+            self.store, self.exchange, pid=12345, reconcile_interval_sec=5,
+        )
+        scheduler.run_once(now=0)
+        exits = sorted(
+            (
+                cell for cell in self.store.list_cells(config.strategy_id)
+                if cell.exit_order_id is not None
+            ),
+            key=lambda cell: cell.sell_price,
+        )
+        self.assertEqual(len(exits), 10)
+        # Model a stale window with three farther resting sells. Their orders
+        # must yield to the nearer cells after the position audit clears them.
+        far_cells = sorted(
+            (
+                cell for cell in self.store.list_cells(config.strategy_id)
+                if cell.stage == CellStage.PENDING_EXIT and cell.exit_order_id is None
+            ),
+            key=lambda cell: cell.sell_price,
+        )[:3]
+        self.assertEqual(len(far_cells), 3)
+        engine = scheduler.engines[config.strategy_id]
+        for cell in far_cells:
+            engine.ensure_exit(cell)
+        far_order_ids = {
+            self.store.get_cell(config.strategy_id, cell.cell_id).exit_order_id
+            for cell in far_cells
+        }
+        canceled = exits[:3]
+        previous = {
+            cell.cell_id: (cell.exit_order_id, cell.open_qty, cell.cycle_count)
+            for cell in canceled
+        }
+        for cell in canceled:
+            # OKX chart dragging amends the live order without changing its ID.
+            self.exchange.orders[cell.exit_order_id] = replace(
+                self.exchange.orders[cell.exit_order_id],
+                price=cell.sell_price - self.exchange.filters.tick_size,
+            )
+            self.exchange.cancel_order(config.symbol, cell.exit_order_id)
+
+        # First pass observes the cancellation; the position audit confirms
+        # that the held quantity still belongs to each cell before it can sell.
+        scheduler.run_once(now=6)
+        for cell in canceled:
+            audited = self.store.get_cell(config.strategy_id, cell.cell_id)
+            self.assertEqual(audited.open_qty, previous[cell.cell_id][1])
+            self.assertEqual(audited.cycle_count, previous[cell.cell_id][2])
+            self.assertEqual(audited.stage, CellStage.PENDING_EXIT)
+
+        scheduler.run_once(now=12)
+        cells = self.store.list_cells(config.strategy_id)
+        self.assertEqual(sum(cell.exit_order_id is not None for cell in cells), 10)
+        self.assertTrue(all(
+            self.exchange.orders[order_id].status == OrderStatus.CANCELED
+            for order_id in far_order_ids
+        ))
+        for cell in canceled:
+            restored = self.store.get_cell(config.strategy_id, cell.cell_id)
+            old_id, original_qty, cycle_count = previous[cell.cell_id]
+            self.assertIsNotNone(restored.exit_order_id)
+            self.assertNotEqual(restored.exit_order_id, old_id)
+            self.assertEqual(restored.open_qty, original_qty)
+            self.assertEqual(restored.cycle_count, cycle_count)
+            self.assertEqual(
+                self.exchange.orders[restored.exit_order_id].price,
+                restored.sell_price,
+            )
+        scheduler.run_once(now=18)
+        active_ids = {
+            cell.exit_order_id
+            for cell in self.store.list_cells(config.strategy_id)
+            if cell.exit_order_id is not None
+        }
+        self.assertEqual(len(active_ids), 10)
+        self.assertEqual({
+            order.order_id for order in self.exchange.get_open_orders(config.symbol)
+            if order.side == OrderSide.SELL
+        }, active_ids)
+
+    def test_external_canceled_exits_refill_even_with_seven_remaining(self) -> None:
+        self.exchange.mark = Decimal("60.23")
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            step_size=Decimal("0.01"), min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"), contract_type="TRADIFI_PERPETUAL",
+        )
+        config = GridService(self.store, SimpleNamespace()).create_fixed(
+            "SOXLUSDT", Decimal("30"), Decimal("150"), 323,
+            Decimal("5000"), Decimal("0.01"),
+        )
+        self.store.mark_started(config.strategy_id)
+        scheduler = StrategyScheduler(
+            self.store, self.exchange, pid=12345, reconcile_interval_sec=5,
+        )
+        scheduler.run_once(now=0)
+        exits = sorted(
+            (cell for cell in self.store.list_cells(config.strategy_id)
+             if cell.exit_order_id is not None),
+            key=lambda cell: cell.sell_price,
+        )
+        self.assertEqual(len(exits), 10)
+        canceled = exits[:3]
+        old_ids = {cell.cell_id: cell.exit_order_id for cell in canceled}
+        original_qty = {cell.cell_id: cell.open_qty for cell in canceled}
+        for cell in canceled:
+            self.exchange.orders[cell.exit_order_id] = replace(
+                self.exchange.orders[cell.exit_order_id],
+                price=cell.sell_price - self.exchange.filters.tick_size,
+            )
+            self.exchange.cancel_order(config.symbol, cell.exit_order_id)
+
+        scheduler.run_once(now=6)
+        audited = self.store.list_cells(config.strategy_id)
+        self.assertEqual(sum(cell.exit_order_id is not None for cell in audited), 7)
+        for cell in canceled:
+            current = self.store.get_cell(config.strategy_id, cell.cell_id)
+            self.assertEqual(current.stage, CellStage.PENDING_EXIT)
+            self.assertEqual(current.open_qty, original_qty[cell.cell_id])
+            self.assertIsNone(current.exit_order_id)
+
+        # These three were in the managed window before external cancellation.
+        # The five-order threshold only governs ordinary trading depletion.
+        scheduler.run_once(now=12)
+        cells = self.store.list_cells(config.strategy_id)
+        self.assertEqual(sum(cell.exit_order_id is not None for cell in cells), 10)
+        for cell in canceled:
+            restored = self.store.get_cell(config.strategy_id, cell.cell_id)
+            self.assertIsNotNone(restored.exit_order_id)
+            self.assertNotEqual(restored.exit_order_id, old_ids[cell.cell_id])
+            self.assertEqual(restored.open_qty, original_qty[cell.cell_id])
+            self.assertEqual(restored.cycle_count, cell.cycle_count)
+            self.assertEqual(
+                self.exchange.orders[restored.exit_order_id].price,
+                restored.sell_price,
+            )
+        scheduler.run_once(now=18)
+        self.assertEqual(sum(
+            cell.exit_order_id is not None
+            for cell in self.store.list_cells(config.strategy_id)
+        ), 10)
+
+    def test_external_exit_repair_waits_for_unreserved_consistent_pool(self) -> None:
+        self.exchange.mark = Decimal("60.23")
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            step_size=Decimal("0.01"), min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"), contract_type="TRADIFI_PERPETUAL",
+        )
+        config = GridService(self.store, SimpleNamespace()).create_fixed(
+            "SOXLUSDT", Decimal("30"), Decimal("150"), 323,
+            Decimal("5000"), Decimal("0.01"),
+        )
+        self.store.mark_started(config.strategy_id)
+        engine = FixedGridEngine(self.store, self.exchange, config.strategy_id)
+        engine.tick()
+        canceled = sorted(
+            (cell for cell in self.store.list_cells(config.strategy_id)
+             if cell.exit_order_id is not None),
+            key=lambda cell: cell.sell_price,
+        )[:3]
+        self.assertEqual(len(canceled), 3)
+        for cell in canceled:
+            self.exchange.cancel_order(config.symbol, cell.exit_order_id)
+        engine.tick()
+        for cell in canceled:
+            reviewed = self.store.get_cell(config.strategy_id, cell.cell_id)
+            self.assertEqual(reviewed.stage, CellStage.MANUAL_REVIEW)
+            # Represent a cell released for possible repair while the pool
+            # audit is still stale or another close order reserves position.
+            reviewed.stage = CellStage.PENDING_EXIT
+            self.store.save_cell(reviewed)
+
+        logical_qty = sum(
+            (cell.open_qty for cell in self.store.list_cells(config.strategy_id)),
+            Decimal("0"),
+        )
+
+        def save_pool(status: str, reserved: Decimal) -> None:
+            self.store.save_position_pool(
+                config.symbol, "LONG", logical_qty, logical_qty, reserved,
+                Decimal("0"), Decimal("0"), status, config.market_type,
+            )
+
+        def assert_seven_unrepaired() -> None:
+            cells = self.store.list_cells(config.strategy_id)
+            self.assertEqual(sum(cell.exit_order_id is not None for cell in cells), 7)
+            self.assertTrue(all(
+                self.store.get_cell(config.strategy_id, cell.cell_id).exit_order_id is None
+                for cell in canceled
+            ))
+
+        save_pool("manual_review", Decimal("0"))
+        engine.tick()
+        assert_seven_unrepaired()
+
+        save_pool("consistent", Decimal("0.01"))
+        engine.tick()
+        assert_seven_unrepaired()
+
+        save_pool("consistent", Decimal("0"))
+        engine.tick()
+        self.assertEqual(sum(
+            cell.exit_order_id is not None
+            for cell in self.store.list_cells(config.strategy_id)
+        ), 10)
+
+    def test_patrol_closed_sell_rebuys_after_mark_crosses_buy_line(self) -> None:
+        self.exchange.mark = Decimal("61.50")
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            step_size=Decimal("0.01"), min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"), contract_type="TRADIFI_PERPETUAL",
+        )
+        config = GridService(self.store, SimpleNamespace()).create_fixed(
+            "SOXLUSDT", Decimal("59"), Decimal("64"), 16,
+            Decimal("800"), Decimal("0.01"), poll_interval_sec=60,
+        )
+        self.store.mark_started(config.strategy_id)
+        scheduler = StrategyScheduler(
+            self.store, self.exchange, pid=12345, reconcile_interval_sec=5,
+        )
+        scheduler.run_once(now=0)
+        cells = self.store.list_cells(config.strategy_id)
+        active_buys = [cell for cell in cells if cell.entry_order_id is not None]
+        active_sells = [cell for cell in cells if cell.exit_order_id is not None]
+        self.assertTrue(5 <= len(active_buys) < 10)
+        self.assertTrue(6 <= len(active_sells) <= 10)
+        sold = max(active_sells, key=lambda cell: cell.sell_price)
+        old_sell_id = sold.exit_order_id
+        self.exchange.fill(old_sell_id, sold.sell_price)
+        self.exchange.mark = sold.sell_price + Decimal("0.01")
+
+        # Only the position patrol runs here. It records the completed cycle
+        # but does not have a window in which to place the paired buy.
+        self.assertEqual(scheduler.run_once(now=6), 0)
+        after_patrol = self.store.get_cell(config.strategy_id, sold.cell_id)
+        self.assertEqual(after_patrol.stage, CellStage.UNTRIGGERED)
+        self.assertIsNone(after_patrol.entry_order_id)
+        self.assertEqual(after_patrol.cycle_count, sold.cycle_count + 1)
+
+        self.exchange.mark = sold.buy_price - Decimal("0.01")
+        self.assertLess(self.exchange.mark, sold.buy_price)
+        scheduler.run_once(now=60)
+        reopened = self.store.get_cell(config.strategy_id, sold.cell_id)
+        self.assertEqual(reopened.stage, CellStage.PENDING_ENTRY)
+        self.assertIsNotNone(reopened.entry_order_id)
+        self.assertEqual(
+            self.exchange.orders[reopened.entry_order_id].price,
+            reopened.buy_price,
+        )
+        self.assertEqual(reopened.cycle_count, sold.cycle_count + 1)
+
+    def test_crossed_paired_buy_preempts_ten_closer_resting_buys(self) -> None:
+        self.exchange.mark = Decimal("60.23")
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            step_size=Decimal("0.01"), min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"), contract_type="TRADIFI_PERPETUAL",
+        )
+        config = GridService(self.store, SimpleNamespace()).create_fixed(
+            "SOXLUSDT", Decimal("30"), Decimal("150"), 323,
+            Decimal("5000"), Decimal("0.01"), poll_interval_sec=60,
+        )
+        self.store.mark_started(config.strategy_id)
+        scheduler = StrategyScheduler(
+            self.store, self.exchange, pid=12345, reconcile_interval_sec=5,
+        )
+        scheduler.run_once(now=0)
+        cells = self.store.list_cells(config.strategy_id)
+        active_buys = [cell for cell in cells if cell.entry_order_id is not None]
+        active_sells = [cell for cell in cells if cell.exit_order_id is not None]
+        self.assertEqual(len(active_buys), 10)
+        self.assertEqual(len(active_sells), 10)
+        sold = max(active_sells, key=lambda cell: cell.sell_price)
+        self.assertGreater(
+            sold.buy_price, max(cell.buy_price for cell in active_buys),
+        )
+        self.exchange.fill(sold.exit_order_id, sold.sell_price)
+        self.exchange.mark = sold.sell_price + Decimal("0.01")
+        self.assertEqual(scheduler.run_once(now=6), 0)
+        after_patrol = self.store.get_cell(config.strategy_id, sold.cell_id)
+        self.assertEqual(after_patrol.stage, CellStage.UNTRIGGERED)
+        self.assertEqual(after_patrol.cycle_count, sold.cycle_count + 1)
+
+        self.exchange.mark = min(cell.buy_price for cell in active_buys)
+        self.assertLess(self.exchange.mark, sold.buy_price)
+        self.assertTrue(all(
+            abs(cell.buy_price - self.exchange.mark)
+            < abs(sold.buy_price - self.exchange.mark)
+            for cell in active_buys
+        ))
+        scheduler.run_once(now=60)
+        reopened = self.store.get_cell(config.strategy_id, sold.cell_id)
+        self.assertEqual(reopened.stage, CellStage.PENDING_ENTRY)
+        self.assertIsNotNone(reopened.entry_order_id)
+        self.assertLessEqual(
+            self.exchange.orders[reopened.entry_order_id].price,
+            reopened.buy_price,
+        )
+        self.assertEqual(reopened.cycle_count, sold.cycle_count + 1)
+        active_ids = {
+            cell.entry_order_id
+            for cell in self.store.list_cells(config.strategy_id)
+            if cell.entry_order_id is not None
+        }
+        self.assertLessEqual(len(active_ids), 10)
+        self.assertIn(reopened.entry_order_id, active_ids)
+        self.assertTrue(any(
+            self.exchange.orders[cell.entry_order_id].status == OrderStatus.CANCELED
+            for cell in active_buys
+        ))
+        self.assertEqual({
+            order.order_id for order in self.exchange.get_open_orders(config.symbol)
+            if order.side == OrderSide.BUY
+        }, active_ids)
+
     def test_rebalance_cancels_old_partial_exit_and_keeps_logical_position(self) -> None:
         self.exchange.mark = Decimal("60.23")
         self.exchange.filters = replace(
@@ -578,6 +1146,94 @@ class FixedEqualUGridTests(unittest.TestCase):
         self.assertEqual(sum(cell.exit_order_id is not None for cell in cells), 10)
         self.assertEqual(sum(cell.entry_order_id is not None for cell in cells), 10)
         self.assertEqual(window_events(), initial_rebalances + 1)
+
+    def test_order_window_refills_missing_buy_inside_nine_resting_orders(self) -> None:
+        self.exchange.mark = Decimal("60.23")
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            step_size=Decimal("0.01"), min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"), contract_type="TRADIFI_PERPETUAL",
+        )
+        service = GridService(self.store, SimpleNamespace())
+        config = service.create_fixed(
+            "SOXLUSDT", Decimal("30"), Decimal("150"), 323,
+            Decimal("5000"), Decimal("0.01"),
+        )
+        self.store.mark_started(config.strategy_id)
+        engine = FixedGridEngine(self.store, self.exchange, config.strategy_id)
+        engine.tick()
+        buys = sorted(
+            (cell for cell in self.store.list_cells(config.strategy_id)
+             if cell.stage == CellStage.PENDING_ENTRY and cell.entry_order_id is not None),
+            key=lambda cell: cell.buy_price, reverse=True,
+        )
+        self.assertEqual(len(buys), 10)
+        missing = buys[1]
+        previous_order_id = missing.entry_order_id
+        self.exchange.cancel_order(config.symbol, previous_order_id)
+        missing.entry_order_id = None
+        missing.entry_client_id = ""
+        self.store.save_cell(missing)
+        self.assertEqual(
+            sum(cell.entry_order_id is not None for cell in self.store.list_cells(config.strategy_id)
+                if cell.stage == CellStage.PENDING_ENTRY), 9,
+        )
+
+        engine.tick()
+
+        restored = self.store.get_cell(config.strategy_id, missing.cell_id)
+        self.assertIsNotNone(restored.entry_order_id)
+        self.assertNotEqual(restored.entry_order_id, previous_order_id)
+        self.assertEqual(
+            sum(cell.entry_order_id is not None for cell in self.store.list_cells(config.strategy_id)
+                if cell.stage == CellStage.PENDING_ENTRY), 10,
+        )
+        self.assertTrue(any(
+            event["event_type"] == "ORDER_WINDOW_REBALANCED"
+            and event["payload"].get("entry_gap")
+            for event in self.store.list_events(config.strategy_id)
+        ))
+
+    def test_order_window_refills_missing_sell_inside_nine_resting_orders(self) -> None:
+        self.exchange.mark = Decimal("60.23")
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            step_size=Decimal("0.01"), min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"), contract_type="TRADIFI_PERPETUAL",
+        )
+        service = GridService(self.store, SimpleNamespace())
+        config = service.create_fixed(
+            "SOXLUSDT", Decimal("30"), Decimal("150"), 323,
+            Decimal("5000"), Decimal("0.01"),
+        )
+        self.store.mark_started(config.strategy_id)
+        engine = FixedGridEngine(self.store, self.exchange, config.strategy_id)
+        engine.tick()
+        sells = sorted(
+            (cell for cell in self.store.list_cells(config.strategy_id)
+             if cell.stage == CellStage.PENDING_EXIT and cell.exit_order_id is not None),
+            key=lambda cell: cell.sell_price,
+        )
+        self.assertEqual(len(sells), 10)
+        missing = sells[1]
+        previous_order_id = missing.exit_order_id
+        open_qty = missing.open_qty
+        self.exchange.cancel_order(config.symbol, previous_order_id)
+        missing.exit_order_id = None
+        missing.exit_client_id = ""
+        self.store.save_cell(missing)
+
+        engine.tick()
+
+        restored = self.store.get_cell(config.strategy_id, missing.cell_id)
+        self.assertIsNotNone(restored.exit_order_id)
+        self.assertNotEqual(restored.exit_order_id, previous_order_id)
+        self.assertEqual(restored.open_qty, open_qty)
+        self.assertTrue(any(
+            event["event_type"] == "ORDER_WINDOW_REBALANCED"
+            and event["payload"].get("exit_gap")
+            for event in self.store.list_events(config.strategy_id)
+        ))
 
     def test_order_window_trims_excess_orders_in_bounded_batches(self) -> None:
         self.exchange.mark = Decimal("60.23")
@@ -762,11 +1418,12 @@ class FixedEqualUGridTests(unittest.TestCase):
         updated = self.store.get_cell(config.strategy_id, cell.cell_id)
         self.assertIsNotNone(updated.exit_order_id)
         self.assertNotEqual(updated.exit_order_id, old_id)
-        self.assertEqual(
-            sum(event["event_type"] == "ORDER_WINDOW_REBALANCED"
-                for event in self.store.list_events(config.strategy_id)),
-            before,
-        )
+        rebalances = [
+            event for event in self.store.list_events(config.strategy_id)
+            if event["event_type"] == "ORDER_WINDOW_REBALANCED"
+        ]
+        self.assertEqual(len(rebalances), before + 1)
+        self.assertTrue(rebalances[-1]["payload"]["exit_gap"])
 
     def test_failed_initial_seed_cannot_be_restarted_blindly(self) -> None:
         engine = self.make_engine()
@@ -783,6 +1440,7 @@ class FixedEqualUGridTests(unittest.TestCase):
         payload = {
             "symbol": "SOLUSDT", "lower_price": "80", "upper_price": "120",
             "grid_count": 4, "grid_budget_usdt": "400",
+            "auto_reinvest_enabled": True, "auto_reinvest_percent": "25",
         }
         preview = client.post("/fixed-grids/preview", json=payload)
         self.assertEqual(preview.status_code, 200, preview.text)
@@ -791,6 +1449,8 @@ class FixedEqualUGridTests(unittest.TestCase):
         self.assertEqual(created.status_code, 201, created.text)
         self.assertEqual(created.json()["grid_kind"], "fixed_equal_usdt")
         self.assertEqual(created.json()["grid_budget_usdt"], "400")
+        self.assertTrue(created.json()["auto_reinvest_enabled"])
+        self.assertEqual(created.json()["auto_reinvest_percent"], "25")
 
     def test_shared_scheduler_selects_fixed_engine_and_reconciles_position(self) -> None:
         engine = self.make_engine()
