@@ -93,6 +93,7 @@
   cursor: pointer;
   font-size: 15px;
   text-align: left;
+  text-decoration: none;
 }
 
 .nav-item:hover {

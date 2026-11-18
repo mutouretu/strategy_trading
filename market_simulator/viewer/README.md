@@ -36,6 +36,11 @@ python3 scripts/generate_ladder_run.py
 主动/被动意图、成交、账本和回放，不代表任何研究策略。策略运行应从实验结果页面进入，
 或在新的 Rule → Strategy → Application 组合完成实验后再显式导出。
 
+`feat/grid-rule-parity` 另有两份 SOXL 固定网格订单行为样例，可从研究工作台侧栏
+「固定网格 · 人工行情」打开。它们由
+`grid_trading/scripts/export_fixed_grid_replay_viewer.py` 生成，使用实盘固定网格引擎
+和人工 K 线回放；订单与成交可播放，账户权益留空，不表示净收益回测。
+
 COIN-M 强平展示样例位于
 `viewer/data/coinm-liquidation-adverse-extreme-v1.json`。它使用 5 倍杠杆、10 张
 BTCUSD 永续合约和 `ADVERSE_EXTREME` 日线采样，在第 4 根 K 线的 77,000 USD

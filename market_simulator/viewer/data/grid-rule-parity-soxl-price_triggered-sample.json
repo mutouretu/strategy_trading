@@ -1,0 +1,739 @@
+{
+  "schema_version": 1,
+  "manifest": {
+    "run_id": "grid-rule-parity-soxl-price_triggered-sample",
+    "instrument": "SOXLUSDT",
+    "interval": "1m",
+    "source": "fixed_grid_live_engine_replay",
+    "description": "人工 SOXL 震荡样例；使用实盘固定网格引擎回放订单。没有费用、资金费、保证金或收益账本。",
+    "entry_mode": "price_triggered",
+    "replay_only": true,
+    "accounting_available": false,
+    "market_data_kind": "synthetic_sample"
+  },
+  "run_status": {
+    "completed": true,
+    "liquidated": false,
+    "bankrupt": false,
+    "termination_reason": null,
+    "termination_sequence": null
+  },
+  "market": [
+    {
+      "sequence": 0,
+      "timestamp": 1767225600000,
+      "date": "2026-01-01",
+      "instrument": "SOXLUSDT",
+      "open": "50.45",
+      "high": "50.45",
+      "low": "50.45",
+      "close": "50.45"
+    },
+    {
+      "sequence": 1,
+      "timestamp": 1767225660000,
+      "date": "2026-01-01",
+      "instrument": "SOXLUSDT",
+      "open": "50.45",
+      "high": "50.45",
+      "low": "50.25",
+      "close": "50.25"
+    },
+    {
+      "sequence": 2,
+      "timestamp": 1767225720000,
+      "date": "2026-01-01",
+      "instrument": "SOXLUSDT",
+      "open": "50.25",
+      "high": "50.65",
+      "low": "50.25",
+      "close": "50.65"
+    },
+    {
+      "sequence": 3,
+      "timestamp": 1767225780000,
+      "date": "2026-01-01",
+      "instrument": "SOXLUSDT",
+      "open": "50.65",
+      "high": "50.65",
+      "low": "50.25",
+      "close": "50.25"
+    },
+    {
+      "sequence": 4,
+      "timestamp": 1767225840000,
+      "date": "2026-01-01",
+      "instrument": "SOXLUSDT",
+      "open": "50.25",
+      "high": "50.65",
+      "low": "50.25",
+      "close": "50.65"
+    },
+    {
+      "sequence": 5,
+      "timestamp": 1767225900000,
+      "date": "2026-01-01",
+      "instrument": "SOXLUSDT",
+      "open": "50.65",
+      "high": "50.65",
+      "low": "50.25",
+      "close": "50.25"
+    },
+    {
+      "sequence": 6,
+      "timestamp": 1767225960000,
+      "date": "2026-01-01",
+      "instrument": "SOXLUSDT",
+      "open": "50.25",
+      "high": "50.65",
+      "low": "50.25",
+      "close": "50.65"
+    }
+  ],
+  "orders": [
+    {
+      "order_key": "replay:order:1",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.30",
+      "price": "49.06",
+      "reduce_only": false,
+      "active_from_sequence": 0,
+      "active_to_sequence": 2,
+      "status": "CANCELLED",
+      "tags": {
+        "replay_order_id": "1"
+      }
+    },
+    {
+      "order_key": "replay:order:2",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.30",
+      "price": "49.21",
+      "reduce_only": false,
+      "active_from_sequence": 0,
+      "active_to_sequence": null,
+      "status": "ACTIVE",
+      "tags": {
+        "replay_order_id": "2"
+      }
+    },
+    {
+      "order_key": "replay:order:3",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.30",
+      "price": "49.35",
+      "reduce_only": false,
+      "active_from_sequence": 0,
+      "active_to_sequence": null,
+      "status": "ACTIVE",
+      "tags": {
+        "replay_order_id": "3"
+      }
+    },
+    {
+      "order_key": "replay:order:4",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "49.50",
+      "reduce_only": false,
+      "active_from_sequence": 0,
+      "active_to_sequence": null,
+      "status": "ACTIVE",
+      "tags": {
+        "replay_order_id": "4"
+      }
+    },
+    {
+      "order_key": "replay:order:5",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "49.65",
+      "reduce_only": false,
+      "active_from_sequence": 0,
+      "active_to_sequence": null,
+      "status": "ACTIVE",
+      "tags": {
+        "replay_order_id": "5"
+      }
+    },
+    {
+      "order_key": "replay:order:6",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "49.80",
+      "reduce_only": false,
+      "active_from_sequence": 0,
+      "active_to_sequence": null,
+      "status": "ACTIVE",
+      "tags": {
+        "replay_order_id": "6"
+      }
+    },
+    {
+      "order_key": "replay:order:7",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "49.95",
+      "reduce_only": false,
+      "active_from_sequence": 0,
+      "active_to_sequence": null,
+      "status": "ACTIVE",
+      "tags": {
+        "replay_order_id": "7"
+      }
+    },
+    {
+      "order_key": "replay:order:8",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "50.10",
+      "reduce_only": false,
+      "active_from_sequence": 0,
+      "active_to_sequence": null,
+      "status": "ACTIVE",
+      "tags": {
+        "replay_order_id": "8"
+      }
+    },
+    {
+      "order_key": "replay:order:9",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "50.25",
+      "reduce_only": false,
+      "active_from_sequence": 0,
+      "active_to_sequence": 1,
+      "status": "FILLED",
+      "tags": {
+        "replay_order_id": "9"
+      }
+    },
+    {
+      "order_key": "replay:order:10",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "50.40",
+      "reduce_only": false,
+      "active_from_sequence": 0,
+      "active_to_sequence": 1,
+      "status": "FILLED",
+      "tags": {
+        "replay_order_id": "10"
+      }
+    },
+    {
+      "order_key": "replay:order:11",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.30",
+      "price": "48.76",
+      "reduce_only": false,
+      "active_from_sequence": 1,
+      "active_to_sequence": 2,
+      "status": "CANCELLED",
+      "tags": {
+        "replay_order_id": "11"
+      }
+    },
+    {
+      "order_key": "replay:order:12",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.30",
+      "price": "48.91",
+      "reduce_only": false,
+      "active_from_sequence": 1,
+      "active_to_sequence": 2,
+      "status": "CANCELLED",
+      "tags": {
+        "replay_order_id": "12"
+      }
+    },
+    {
+      "order_key": "replay:order:13",
+      "instrument": "SOXLUSDT",
+      "side": "SELL",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "50.40",
+      "reduce_only": true,
+      "active_from_sequence": 1,
+      "active_to_sequence": 2,
+      "status": "FILLED",
+      "tags": {
+        "replay_order_id": "13"
+      }
+    },
+    {
+      "order_key": "replay:order:14",
+      "instrument": "SOXLUSDT",
+      "side": "SELL",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "50.55",
+      "reduce_only": true,
+      "active_from_sequence": 1,
+      "active_to_sequence": 2,
+      "status": "FILLED",
+      "tags": {
+        "replay_order_id": "14"
+      }
+    },
+    {
+      "order_key": "replay:order:15",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "50.25",
+      "reduce_only": false,
+      "active_from_sequence": 2,
+      "active_to_sequence": 3,
+      "status": "FILLED",
+      "tags": {
+        "replay_order_id": "15"
+      }
+    },
+    {
+      "order_key": "replay:order:16",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "50.40",
+      "reduce_only": false,
+      "active_from_sequence": 2,
+      "active_to_sequence": 3,
+      "status": "FILLED",
+      "tags": {
+        "replay_order_id": "16"
+      }
+    },
+    {
+      "order_key": "replay:order:17",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "50.55",
+      "reduce_only": false,
+      "active_from_sequence": 2,
+      "active_to_sequence": 3,
+      "status": "FILLED",
+      "tags": {
+        "replay_order_id": "17"
+      }
+    },
+    {
+      "order_key": "replay:order:18",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.30",
+      "price": "48.76",
+      "reduce_only": false,
+      "active_from_sequence": 3,
+      "active_to_sequence": 4,
+      "status": "CANCELLED",
+      "tags": {
+        "replay_order_id": "18"
+      }
+    },
+    {
+      "order_key": "replay:order:19",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.30",
+      "price": "48.91",
+      "reduce_only": false,
+      "active_from_sequence": 3,
+      "active_to_sequence": 4,
+      "status": "CANCELLED",
+      "tags": {
+        "replay_order_id": "19"
+      }
+    },
+    {
+      "order_key": "replay:order:20",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.30",
+      "price": "49.06",
+      "reduce_only": false,
+      "active_from_sequence": 3,
+      "active_to_sequence": null,
+      "status": "ACTIVE",
+      "tags": {
+        "replay_order_id": "20"
+      }
+    },
+    {
+      "order_key": "replay:order:21",
+      "instrument": "SOXLUSDT",
+      "side": "SELL",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "50.40",
+      "reduce_only": true,
+      "active_from_sequence": 3,
+      "active_to_sequence": 4,
+      "status": "FILLED",
+      "tags": {
+        "replay_order_id": "21"
+      }
+    },
+    {
+      "order_key": "replay:order:22",
+      "instrument": "SOXLUSDT",
+      "side": "SELL",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "50.55",
+      "reduce_only": true,
+      "active_from_sequence": 3,
+      "active_to_sequence": 4,
+      "status": "FILLED",
+      "tags": {
+        "replay_order_id": "22"
+      }
+    },
+    {
+      "order_key": "replay:order:23",
+      "instrument": "SOXLUSDT",
+      "side": "SELL",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "50.71",
+      "reduce_only": true,
+      "active_from_sequence": 3,
+      "active_to_sequence": null,
+      "status": "ACTIVE",
+      "tags": {
+        "replay_order_id": "23"
+      }
+    },
+    {
+      "order_key": "replay:order:24",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "50.25",
+      "reduce_only": false,
+      "active_from_sequence": 4,
+      "active_to_sequence": 5,
+      "status": "FILLED",
+      "tags": {
+        "replay_order_id": "24"
+      }
+    },
+    {
+      "order_key": "replay:order:25",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "50.40",
+      "reduce_only": false,
+      "active_from_sequence": 4,
+      "active_to_sequence": 5,
+      "status": "FILLED",
+      "tags": {
+        "replay_order_id": "25"
+      }
+    },
+    {
+      "order_key": "replay:order:26",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.30",
+      "price": "48.76",
+      "reduce_only": false,
+      "active_from_sequence": 5,
+      "active_to_sequence": 6,
+      "status": "CANCELLED",
+      "tags": {
+        "replay_order_id": "26"
+      }
+    },
+    {
+      "order_key": "replay:order:27",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.30",
+      "price": "48.91",
+      "reduce_only": false,
+      "active_from_sequence": 5,
+      "active_to_sequence": 6,
+      "status": "CANCELLED",
+      "tags": {
+        "replay_order_id": "27"
+      }
+    },
+    {
+      "order_key": "replay:order:28",
+      "instrument": "SOXLUSDT",
+      "side": "SELL",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "50.40",
+      "reduce_only": true,
+      "active_from_sequence": 5,
+      "active_to_sequence": 6,
+      "status": "FILLED",
+      "tags": {
+        "replay_order_id": "28"
+      }
+    },
+    {
+      "order_key": "replay:order:29",
+      "instrument": "SOXLUSDT",
+      "side": "SELL",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "50.55",
+      "reduce_only": true,
+      "active_from_sequence": 5,
+      "active_to_sequence": 6,
+      "status": "FILLED",
+      "tags": {
+        "replay_order_id": "29"
+      }
+    },
+    {
+      "order_key": "replay:order:30",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "50.25",
+      "reduce_only": false,
+      "active_from_sequence": 6,
+      "active_to_sequence": null,
+      "status": "ACTIVE",
+      "tags": {
+        "replay_order_id": "30"
+      }
+    },
+    {
+      "order_key": "replay:order:31",
+      "instrument": "SOXLUSDT",
+      "side": "BUY",
+      "order_type": "LIMIT",
+      "quantity": "0.29",
+      "price": "50.40",
+      "reduce_only": false,
+      "active_from_sequence": 6,
+      "active_to_sequence": null,
+      "status": "ACTIVE",
+      "tags": {
+        "replay_order_id": "31"
+      }
+    }
+  ],
+  "fills": [
+    {
+      "fill_id": "replay:fill:1",
+      "order_key": "replay:order:9",
+      "instrument": "SOXLUSDT",
+      "sequence": 1,
+      "timestamp": 1767225660000,
+      "date": "2026-01-01",
+      "side": "BUY",
+      "price": "50.25",
+      "quantity": "0.29",
+      "liquidity_role": "MAKER",
+      "reduce_only": false
+    },
+    {
+      "fill_id": "replay:fill:2",
+      "order_key": "replay:order:10",
+      "instrument": "SOXLUSDT",
+      "sequence": 1,
+      "timestamp": 1767225660000,
+      "date": "2026-01-01",
+      "side": "BUY",
+      "price": "50.40",
+      "quantity": "0.29",
+      "liquidity_role": "MAKER",
+      "reduce_only": false
+    },
+    {
+      "fill_id": "replay:fill:3",
+      "order_key": "replay:order:13",
+      "instrument": "SOXLUSDT",
+      "sequence": 2,
+      "timestamp": 1767225720000,
+      "date": "2026-01-01",
+      "side": "SELL",
+      "price": "50.40",
+      "quantity": "0.29",
+      "liquidity_role": "MAKER",
+      "reduce_only": true
+    },
+    {
+      "fill_id": "replay:fill:4",
+      "order_key": "replay:order:14",
+      "instrument": "SOXLUSDT",
+      "sequence": 2,
+      "timestamp": 1767225720000,
+      "date": "2026-01-01",
+      "side": "SELL",
+      "price": "50.55",
+      "quantity": "0.29",
+      "liquidity_role": "MAKER",
+      "reduce_only": true
+    },
+    {
+      "fill_id": "replay:fill:5",
+      "order_key": "replay:order:15",
+      "instrument": "SOXLUSDT",
+      "sequence": 3,
+      "timestamp": 1767225780000,
+      "date": "2026-01-01",
+      "side": "BUY",
+      "price": "50.25",
+      "quantity": "0.29",
+      "liquidity_role": "MAKER",
+      "reduce_only": false
+    },
+    {
+      "fill_id": "replay:fill:6",
+      "order_key": "replay:order:16",
+      "instrument": "SOXLUSDT",
+      "sequence": 3,
+      "timestamp": 1767225780000,
+      "date": "2026-01-01",
+      "side": "BUY",
+      "price": "50.40",
+      "quantity": "0.29",
+      "liquidity_role": "MAKER",
+      "reduce_only": false
+    },
+    {
+      "fill_id": "replay:fill:7",
+      "order_key": "replay:order:17",
+      "instrument": "SOXLUSDT",
+      "sequence": 3,
+      "timestamp": 1767225780000,
+      "date": "2026-01-01",
+      "side": "BUY",
+      "price": "50.55",
+      "quantity": "0.29",
+      "liquidity_role": "MAKER",
+      "reduce_only": false
+    },
+    {
+      "fill_id": "replay:fill:8",
+      "order_key": "replay:order:21",
+      "instrument": "SOXLUSDT",
+      "sequence": 4,
+      "timestamp": 1767225840000,
+      "date": "2026-01-01",
+      "side": "SELL",
+      "price": "50.40",
+      "quantity": "0.29",
+      "liquidity_role": "MAKER",
+      "reduce_only": true
+    },
+    {
+      "fill_id": "replay:fill:9",
+      "order_key": "replay:order:22",
+      "instrument": "SOXLUSDT",
+      "sequence": 4,
+      "timestamp": 1767225840000,
+      "date": "2026-01-01",
+      "side": "SELL",
+      "price": "50.55",
+      "quantity": "0.29",
+      "liquidity_role": "MAKER",
+      "reduce_only": true
+    },
+    {
+      "fill_id": "replay:fill:10",
+      "order_key": "replay:order:24",
+      "instrument": "SOXLUSDT",
+      "sequence": 5,
+      "timestamp": 1767225900000,
+      "date": "2026-01-01",
+      "side": "BUY",
+      "price": "50.25",
+      "quantity": "0.29",
+      "liquidity_role": "MAKER",
+      "reduce_only": false
+    },
+    {
+      "fill_id": "replay:fill:11",
+      "order_key": "replay:order:25",
+      "instrument": "SOXLUSDT",
+      "sequence": 5,
+      "timestamp": 1767225900000,
+      "date": "2026-01-01",
+      "side": "BUY",
+      "price": "50.40",
+      "quantity": "0.29",
+      "liquidity_role": "MAKER",
+      "reduce_only": false
+    },
+    {
+      "fill_id": "replay:fill:12",
+      "order_key": "replay:order:28",
+      "instrument": "SOXLUSDT",
+      "sequence": 6,
+      "timestamp": 1767225960000,
+      "date": "2026-01-01",
+      "side": "SELL",
+      "price": "50.40",
+      "quantity": "0.29",
+      "liquidity_role": "MAKER",
+      "reduce_only": true
+    },
+    {
+      "fill_id": "replay:fill:13",
+      "order_key": "replay:order:29",
+      "instrument": "SOXLUSDT",
+      "sequence": 6,
+      "timestamp": 1767225960000,
+      "date": "2026-01-01",
+      "side": "SELL",
+      "price": "50.55",
+      "quantity": "0.29",
+      "liquidity_role": "MAKER",
+      "reduce_only": true
+    }
+  ],
+  "equity": [],
+  "summary": {
+    "replay_only": true,
+    "accounting_available": false,
+    "initial_logical_position": "0",
+    "final_logical_position": "0.29",
+    "completed_cycles": 6
+  }
+}

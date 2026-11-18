@@ -29,7 +29,9 @@ from ..runtime.supervisor import StrategySupervisor
 
 class MarketFrameLike(Protocol):
     sequence: int
+    timestamp: int
     instrument: str
+    open: Decimal
     low: Decimal
     high: Decimal
     close: Decimal
@@ -54,8 +56,46 @@ class ReplayFrame:
 
 
 @dataclass(frozen=True)
+class ReplayMarketBar:
+    sequence: int
+    timestamp: int
+    instrument: str
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+
+
+@dataclass(frozen=True)
+class ReplayOrder:
+    order_id: int
+    client_order_id: str
+    instrument: str
+    side: OrderSide
+    order_type: str
+    price: Decimal
+    quantity: Decimal
+    active_from_sequence: int
+    active_to_sequence: int | None
+    status: OrderStatus
+
+
+@dataclass(frozen=True)
+class ReplayFill:
+    order_id: int
+    sequence: int
+    timestamp: int
+    side: OrderSide
+    price: Decimal
+    quantity: Decimal
+
+
+@dataclass(frozen=True)
 class ReplayResult:
+    market: tuple[ReplayMarketBar, ...]
     frames: tuple[ReplayFrame, ...]
+    orders: tuple[ReplayOrder, ...]
+    fills: tuple[ReplayFill, ...]
     final_cells: tuple[GridCell, ...]
     events: tuple[dict, ...]
 
@@ -63,12 +103,21 @@ class ReplayResult:
 class ReplayExchange:
     """Minimal exchange port with deterministic limit and position behavior."""
 
-    def __init__(self, mark: Decimal, filters: SymbolFilters, balance: Decimal) -> None:
+    def __init__(
+        self, mark: Decimal, filters: SymbolFilters, balance: Decimal,
+        sequence: int = 0, timestamp: int = 0,
+    ) -> None:
         self.mark = mark
         self.filters = filters
         self.available_balance = balance
+        self.sequence = sequence
+        self.timestamp = timestamp
         self.orders: dict[int, OrderSnapshot] = {}
         self.order_symbols: dict[int, str] = {}
+        self.order_types: dict[int, str] = {}
+        self.order_opened_at: dict[int, int] = {}
+        self.order_closed_at: dict[int, int] = {}
+        self.fills: list[ReplayFill] = []
         self.positions: dict[tuple[str, str], Decimal] = {}
         self.next_order_id = 1
 
@@ -96,6 +145,8 @@ class ReplayExchange:
             quantity, position_side=position_side,
         )
         self.order_symbols[order_id] = symbol
+        self.order_types[order_id] = "LIMIT"
+        self.order_opened_at[order_id] = self.sequence
         # A non-post-only catch-up limit is marketable at the observed mark.
         if not post_only and (
             (side == OrderSide.BUY and price >= self.mark)
@@ -112,6 +163,7 @@ class ReplayExchange:
             symbol, side, position_side, quantity, self.mark,
             client_order_id, post_only=True,
         )
+        self.order_types[order_id] = "MARKET"
         self.fill(order_id, self.mark)
         return order_id
 
@@ -164,6 +216,7 @@ class ReplayExchange:
         if order.status in {OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED}:
             order = replace(order, status=OrderStatus.CANCELED)
             self.orders[order_id] = order
+            self.order_closed_at[order_id] = self.sequence
         return order
 
     def execute(self, order_id: int, quantity: Decimal, price: Decimal) -> None:
@@ -190,6 +243,11 @@ class ReplayExchange:
                     else OrderStatus.PARTIALLY_FILLED),
             executed_qty=executed_qty, average_price=average_price,
         )
+        self.fills.append(ReplayFill(
+            order_id, self.sequence, self.timestamp, order.side, price, quantity,
+        ))
+        if executed_qty == order.original_qty:
+            self.order_closed_at[order_id] = self.sequence
 
     def fill(self, order_id: int, price: Decimal) -> None:
         order = self.orders[order_id]
@@ -199,6 +257,8 @@ class ReplayExchange:
         self, frame: MarketFrameLike,
         fill_quantity: Callable[[MarketFrameLike, OrderSnapshot], Decimal] | None = None,
     ) -> tuple[tuple[int, ...], tuple[int, ...]]:
+        self.sequence = frame.sequence
+        self.timestamp = frame.timestamp
         resting = tuple(self.get_open_orders(frame.instrument))
         filled: list[int] = []
         partial: list[int] = []
@@ -218,6 +278,23 @@ class ReplayExchange:
                     partial.append(order.order_id)
         self.mark = frame.close
         return tuple(filled), tuple(partial)
+
+    def order_journal(self) -> tuple[ReplayOrder, ...]:
+        return tuple(
+            ReplayOrder(
+                order_id=order.order_id,
+                client_order_id=order.client_order_id,
+                instrument=self.order_symbols[order.order_id],
+                side=order.side,
+                order_type=self.order_types[order.order_id],
+                price=order.price,
+                quantity=order.original_qty,
+                active_from_sequence=self.order_opened_at[order.order_id],
+                active_to_sequence=self.order_closed_at.get(order.order_id),
+                status=order.status,
+            )
+            for order in sorted(self.orders.values(), key=lambda item: item.order_id)
+        )
 
 
 class FixedGridReplay:
@@ -253,7 +330,10 @@ class FixedGridReplay:
         with tempfile.TemporaryDirectory(prefix="fixed-grid-replay-") as directory:
             root = Path(directory)
             store = SQLiteStore(root / "replay.sqlite3")
-            exchange = ReplayExchange(first.close, self.filters, self.available_balance)
+            exchange = ReplayExchange(
+                first.close, self.filters, self.available_balance,
+                first.sequence, first.timestamp,
+            )
             service = GridService(store, StrategySupervisor(store, root / "logs"))
             config = service.create_fixed(
                 self.symbol, self.lower_price, self.upper_price,
@@ -263,6 +343,7 @@ class FixedGridReplay:
             store.mark_started(config.strategy_id)
             engine = FixedGridEngine(store, exchange, config.strategy_id)
             frames: list[ReplayFrame] = []
+            market: list[ReplayMarketBar] = [self._market_bar(first)]
             engine.tick()
             frames.append(self._snapshot(first, (), (), store, exchange, config.strategy_id))
             while max_frames is None or len(frames) < max_frames:
@@ -271,14 +352,25 @@ class FixedGridReplay:
                 except StopIteration:
                     break
                 self._check_instrument(frame)
+                market.append(self._market_bar(frame))
                 filled, partial = exchange.advance_bar(frame, self.fill_quantity)
                 engine.tick()
                 frames.append(self._snapshot(frame, filled, partial, store, exchange, config.strategy_id))
             return ReplayResult(
+                market=tuple(market),
                 frames=tuple(frames),
+                orders=exchange.order_journal(),
+                fills=tuple(exchange.fills),
                 final_cells=tuple(store.list_cells(config.strategy_id)),
                 events=tuple(store.list_events(config.strategy_id)),
             )
+
+    @staticmethod
+    def _market_bar(frame: MarketFrameLike) -> ReplayMarketBar:
+        return ReplayMarketBar(
+            frame.sequence, frame.timestamp, frame.instrument,
+            frame.open, frame.high, frame.low, frame.close,
+        )
 
     def _check_instrument(self, frame: MarketFrameLike) -> None:
         if frame.instrument != self.symbol:

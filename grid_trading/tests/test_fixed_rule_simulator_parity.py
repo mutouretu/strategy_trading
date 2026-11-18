@@ -31,6 +31,7 @@ from grid_server.domain import CellStage, SymbolFilters  # noqa: E402
 from grid_server.infrastructure.sqlite_store import SQLiteStore  # noqa: E402
 from grid_server.runtime.supervisor import StrategySupervisor  # noqa: E402
 from grid_server.simulation import FixedGridReplay  # noqa: E402
+from grid_server.simulation.viewer_export import to_viewer_run  # noqa: E402
 from tests.fakes import FakeExchange  # noqa: E402
 
 
@@ -168,6 +169,20 @@ def test_market_source_replays_the_live_engine_without_exchange_io() -> None:
     assert all(frame.logical_position_qty == frame.exchange_position_qty
                for frame in result.frames)
     assert any(event["event_type"] == "CYCLE_CLOSED" for event in result.events)
+    document = to_viewer_run(
+        result, run_id="parity-test", description="order replay",
+        entry_mode="seeded",
+    )
+    assert document["schema_version"] == 1
+    assert document["manifest"]["accounting_available"] is False
+    assert document["equity"] == []
+    assert len(document["market"]) == len(result.frames)
+    assert len(document["orders"]) == len(result.orders)
+    assert len(document["fills"]) == len(result.fills)
+    order_keys = {order["order_key"] for order in document["orders"]}
+    assert all(fill["order_key"] in order_keys for fill in document["fills"])
+    assert any(order["active_to_sequence"] is None for order in document["orders"])
+    assert any(order["status"] == "FILLED" for order in document["orders"])
 
 
 def test_triggered_market_source_replays_zero_seed_buy_sell_cycle() -> None:
@@ -230,6 +245,11 @@ def test_triggered_replay_partial_buy_protects_only_executed_quantity() -> None:
     first, second, third = result.frames
     assert first.exchange_position_qty == 0
     assert second.partially_filled_order_ids
+    partial_id = second.partially_filled_order_ids[0]
+    partial_order = next(order for order in result.orders if order.order_id == partial_id)
+    partial_fill = next(fill for fill in result.fills if fill.order_id == partial_id)
+    assert Decimal("0") < partial_fill.quantity < partial_order.quantity
+    assert partial_order.status.value == "CANCELED"
     assert second.exchange_position_qty == second.logical_position_qty > 0
     assert second.exit_order_count >= 1
     assert third.completed_cycles >= 1

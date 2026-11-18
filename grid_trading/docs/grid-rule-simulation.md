@@ -41,6 +41,14 @@ python -m streamlit run simulation_app.py --server.address 127.0.0.1 --server.po
 收益回测。页面合约过滤器采用 SOXL 的示例精度（价格 0.01、数量 0.01、最小名义
 价值 5 U）；上传其他合约数据时也沿用这些示例过滤器。
 
+原有 `market_simulator/viewer` 也能播放这份回放。运行
+`grid_trading/scripts/export_fixed_grid_replay_viewer.py`，会在
+`market_simulator/viewer/data` 生成触发式与预建仓两份 schema v1 run JSON。
+从研究工作台 `experiments.html` 侧栏的「固定网格 · 人工行情」进入，或直接打开
+`index.html?run_api=./data/grid-rule-parity-soxl-price_triggered-sample.json`。
+导出器保存 K 线、订单生命周期和逐笔成交；`equity` 为空，并在页面明确标注没有
+费用或收益账本。这两份样例不会作为研究实验写入 `experiment_results`。
+
 最小回放示例：
 
 ```python

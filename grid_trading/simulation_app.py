@@ -34,17 +34,7 @@ def _load_market_simulator():
 from grid_rule.fixed_equal_usdt import FixedEntryMode  # noqa: E402
 from grid_server.domain import SymbolFilters  # noqa: E402
 from grid_server.simulation import FixedGridReplay  # noqa: E402
-
-
-SAMPLE_BARS = (
-    ("50.45", "50.45", "50.45", "50.45"),
-    ("50.45", "50.45", "50.25", "50.25"),
-    ("50.25", "50.65", "50.25", "50.65"),
-    ("50.65", "50.65", "50.25", "50.25"),
-    ("50.25", "50.65", "50.25", "50.65"),
-    ("50.65", "50.65", "50.25", "50.25"),
-    ("50.25", "50.65", "50.25", "50.65"),
-)
+from grid_server.simulation.sample import SAMPLE_BARS  # noqa: E402
 
 
 def _bars_from_csv(uploaded) -> tuple[tuple[str, str, str, str], ...]:
