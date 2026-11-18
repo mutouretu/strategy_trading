@@ -1,4 +1,11 @@
 from .catalog import build_trading_rule_registry
+from .fixed_equal_usdt_grid import (
+    FixedEqualUsdtGridRule,
+    FixedEqualUsdtGridRuleConfig,
+    FixedEqualUsdtGridRuleState,
+    FixedGridObservationInput,
+    FixedGridObservedCell,
+)
 from .initial_entry import (
     EntryPositionSizer,
     InitialEntryFillInput,
@@ -29,6 +36,11 @@ __all__ = [
     "build_ladder_take_profit_levels",
     "build_trading_rule_registry",
     "EntryPositionSizer",
+    "FixedEqualUsdtGridRule",
+    "FixedEqualUsdtGridRuleConfig",
+    "FixedEqualUsdtGridRuleState",
+    "FixedGridObservationInput",
+    "FixedGridObservedCell",
     "InitialEntryFillInput",
     "InitialEntryFillRecord",
     "InitialEntryInput",

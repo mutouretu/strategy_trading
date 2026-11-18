@@ -356,11 +356,11 @@ class StrategyCompositionTests(unittest.TestCase):
 
         self.assertEqual(
             registry.rule_types,
-            ("initial-entry/v1", "ladder-take-profit/v1"),
+            ("fixed-equal-usdt-grid/v1", "initial-entry/v1", "ladder-take-profit/v1"),
         )
         self.assertEqual(
             {definition.display_name for definition in registry.definitions},
-            {"初始建仓", "阶梯止盈"},
+            {"固定区间等 U 网格", "初始建仓", "阶梯止盈"},
         )
 
     def test_strategy_spec_enforces_a_single_exit_controller(self) -> None:
