@@ -22,6 +22,28 @@ Strategy/Rule 驱动，因此研究页可以查看定义，但旧网格实验不
 `seeded` 模式按现价预建卖侧仓位；`price_triggered` 模式从零仓位启动，价格触及
 单元格买价后才激活该买单。两种模式使用同一套纯规则和执行引擎。
 
+## SOXLUSDT 一分钟历史行情
+
+`strategies_system/scripts/fetch_binance_um_daily_klines.py` 从 Binance Vision 获取
+USD-M 永续合约的逐日 1 分钟成交价 K 线，逐个核对官方 `.CHECKSUM` 的 SHA-256，
+再用现有导入器检查时间戳无重复、无缺分钟，写入仿真使用的内容寻址 Parquet。
+原始 ZIP、来源 URL、校验值和 Parquet 引用保存在本地 `experiments/market_data`
+目录；该目录按项目约定不提交 Git。
+
+2026-11-18 获取的一份 SOXLUSDT 样本覆盖 **2026-11-03 至 2026-11-16** 共 14 个
+完整 UTC 日、20,160 根 1 分钟 K 线。获取时 11 月 17 日的日档案尚未发布，
+因此样本没有拼入其他交易所或其他产品的行情。复现命令：
+
+```bash
+cd strategies_system
+PYTHONPATH=src python scripts/fetch_binance_um_daily_klines.py \
+  --symbol SOXLUSDT --start-date 2026-11-03 --end-date 2026-11-16 \
+  --output-root experiments/market_data
+```
+
+这份数据是合约成交价 OHLC，不是标记价、盘口或逐笔成交；它可以驱动分钟级订单
+行为回放，但无法仅凭 K 线还原同一分钟内的成交先后、排队成交量或资金费。
+
 `grid_server.simulation.FixedGridReplay` 接受 `market_simulator` 的
 `MarketSource`（包括 `FixedBarMarketSource` 和历史行情源），在临时数据库和内存交易所
 中执行同一个 `FixedGridEngine`。第一根 K 线用收盘价启动策略（预建仓模式同时建仓）；之后只让**前一根 K 线
