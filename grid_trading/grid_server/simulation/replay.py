@@ -12,11 +12,16 @@ import tempfile
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
+
+from grid_rule.fixed_equal_usdt import FixedEntryMode as RuleFixedEntryMode
 
 from ..application.fixed_engine import FixedGridEngine
 from ..application.service import GridService
-from ..domain import GridCell, OrderSide, OrderSnapshot, OrderStatus, PositionSnapshot, SymbolFilters
+from ..domain import (
+    FixedEntryMode as StoredFixedEntryMode,
+    GridCell, OrderSide, OrderSnapshot, OrderStatus, PositionSnapshot, SymbolFilters,
+)
 from ..infrastructure.sqlite_store import SQLiteStore
 from ..ports.exchange import OrderNotFoundError
 from ..runtime.supervisor import StrategySupervisor
@@ -40,6 +45,7 @@ class ReplayFrame:
     sequence: int
     mark: Decimal
     filled_order_ids: tuple[int, ...]
+    partially_filled_order_ids: tuple[int, ...]
     entry_order_count: int
     exit_order_count: int
     logical_position_qty: Decimal
@@ -160,30 +166,58 @@ class ReplayExchange:
             self.orders[order_id] = order
         return order
 
-    def fill(self, order_id: int, price: Decimal) -> None:
+    def execute(self, order_id: int, quantity: Decimal, price: Decimal) -> None:
         order = self.orders[order_id]
-        if order.status != OrderStatus.NEW:
-            raise ValueError("only resting new orders can be filled")
+        if order.status not in {OrderStatus.NEW, OrderStatus.PARTIALLY_FILLED}:
+            raise ValueError("only resting orders can be filled")
+        remaining = order.original_qty - order.executed_qty
+        if quantity <= 0 or quantity > remaining:
+            raise ValueError("execution quantity must be positive and no more than remaining")
         symbol = self.order_symbols[order_id]
         key = (symbol, order.position_side)
-        signed_qty = order.original_qty if order.side == OrderSide.BUY else -order.original_qty
-        self.positions[key] = self.positions.get(key, Decimal("0")) + signed_qty
-        if self.positions[key] < 0:
+        signed_qty = quantity if order.side == OrderSide.BUY else -quantity
+        position_qty = self.positions.get(key, Decimal("0")) + signed_qty
+        if position_qty < 0:
             raise ValueError("replay exit exceeded its position")
+        self.positions[key] = position_qty
+        executed_qty = order.executed_qty + quantity
+        average_price = (
+            order.average_price * order.executed_qty + price * quantity
+        ) / executed_qty
         self.orders[order_id] = replace(
-            order, status=OrderStatus.FILLED,
-            executed_qty=order.original_qty, average_price=price,
+            order,
+            status=(OrderStatus.FILLED if executed_qty == order.original_qty
+                    else OrderStatus.PARTIALLY_FILLED),
+            executed_qty=executed_qty, average_price=average_price,
         )
 
-    def advance_bar(self, frame: MarketFrameLike) -> tuple[int, ...]:
+    def fill(self, order_id: int, price: Decimal) -> None:
+        order = self.orders[order_id]
+        self.execute(order_id, order.original_qty - order.executed_qty, price)
+
+    def advance_bar(
+        self, frame: MarketFrameLike,
+        fill_quantity: Callable[[MarketFrameLike, OrderSnapshot], Decimal] | None = None,
+    ) -> tuple[tuple[int, ...], tuple[int, ...]]:
         resting = tuple(self.get_open_orders(frame.instrument))
         filled: list[int] = []
+        partial: list[int] = []
         for order in resting:
             if frame.low <= order.price <= frame.high:
-                self.fill(order.order_id, order.price)
-                filled.append(order.order_id)
+                remaining = order.original_qty - order.executed_qty
+                quantity = (remaining if fill_quantity is None
+                            else fill_quantity(frame, order))
+                if quantity < 0 or quantity > remaining:
+                    raise ValueError("fill quantity must be between zero and remaining")
+                if quantity == 0:
+                    continue
+                self.execute(order.order_id, quantity, order.price)
+                if quantity == remaining:
+                    filled.append(order.order_id)
+                else:
+                    partial.append(order.order_id)
         self.mark = frame.close
-        return tuple(filled)
+        return tuple(filled), tuple(partial)
 
 
 class FixedGridReplay:
@@ -194,6 +228,8 @@ class FixedGridReplay:
         lower_price: Decimal, upper_price: Decimal, grid_count: int,
         grid_budget_usdt: Decimal, filters: SymbolFilters,
         available_balance: Decimal | None = None,
+        entry_mode: RuleFixedEntryMode = RuleFixedEntryMode.SEEDED,
+        fill_quantity: Callable[[MarketFrameLike, OrderSnapshot], Decimal] | None = None,
     ) -> None:
         self.source = source
         self.symbol = symbol
@@ -202,6 +238,8 @@ class FixedGridReplay:
         self.grid_count = grid_count
         self.grid_budget_usdt = grid_budget_usdt
         self.filters = filters
+        self.entry_mode = RuleFixedEntryMode(entry_mode)
+        self.fill_quantity = fill_quantity
         self.available_balance = (
             grid_budget_usdt * 2 if available_balance is None
             else available_balance
@@ -220,21 +258,22 @@ class FixedGridReplay:
             config = service.create_fixed(
                 self.symbol, self.lower_price, self.upper_price,
                 self.grid_count, self.grid_budget_usdt, self.filters.tick_size,
+                fixed_entry_mode=StoredFixedEntryMode(self.entry_mode.value),
             )
             store.mark_started(config.strategy_id)
             engine = FixedGridEngine(store, exchange, config.strategy_id)
             frames: list[ReplayFrame] = []
             engine.tick()
-            frames.append(self._snapshot(first, (), store, exchange, config.strategy_id))
+            frames.append(self._snapshot(first, (), (), store, exchange, config.strategy_id))
             while max_frames is None or len(frames) < max_frames:
                 try:
                     frame = self.source.next()
                 except StopIteration:
                     break
                 self._check_instrument(frame)
-                filled = exchange.advance_bar(frame)
+                filled, partial = exchange.advance_bar(frame, self.fill_quantity)
                 engine.tick()
-                frames.append(self._snapshot(frame, filled, store, exchange, config.strategy_id))
+                frames.append(self._snapshot(frame, filled, partial, store, exchange, config.strategy_id))
             return ReplayResult(
                 frames=tuple(frames),
                 final_cells=tuple(store.list_cells(config.strategy_id)),
@@ -246,13 +285,14 @@ class FixedGridReplay:
             raise ValueError(f"unexpected instrument {frame.instrument}")
 
     def _snapshot(
-        self, frame: MarketFrameLike, filled: tuple[int, ...],
+        self, frame: MarketFrameLike, filled: tuple[int, ...], partial: tuple[int, ...],
         store: SQLiteStore, exchange: ReplayExchange, strategy_id: str,
     ) -> ReplayFrame:
         cells = store.list_cells(strategy_id)
         orders = exchange.get_open_orders(self.symbol)
         return ReplayFrame(
             sequence=frame.sequence, mark=frame.close, filled_order_ids=filled,
+            partially_filled_order_ids=partial,
             entry_order_count=sum(order.side == OrderSide.BUY for order in orders),
             exit_order_count=sum(order.side == OrderSide.SELL for order in orders),
             logical_position_qty=sum((cell.open_qty for cell in cells), Decimal("0")),

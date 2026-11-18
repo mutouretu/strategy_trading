@@ -6,10 +6,14 @@ import os
 from dataclasses import replace
 from decimal import Decimal, ROUND_CEILING
 
-from grid_rule.fixed_equal_usdt import initial_sell_allocations, order_quantity
+from grid_rule.fixed_equal_usdt import (
+    FixedEntryMode as RuleFixedEntryMode,
+    initial_sell_allocations,
+    order_quantity,
+)
 from grid_rule.fixed_window import WindowCell, WindowInput, plan_fixed_window
 
-from ..domain import CellStage, GridCell, OrderSide, OrderStatus, StrategyStatus
+from ..domain import CellStage, FixedEntryMode, GridCell, OrderSide, OrderStatus, StrategyStatus
 from ..domain.grid import fixed_cell_budgets, round_down
 from ..infrastructure.binance import BinanceAPIError, BinanceFuturesExchange
 from ..infrastructure.okx import OkxSwapExchange
@@ -252,11 +256,13 @@ class FixedGridEngine(TradingEngine):
         seed = self.store.get_capital_action(seed_id)
         if seed is None:
             self._preflight_seed()
-            assert config.grid_budget_usdt is not None
-            self.store.create_capital_action(
-                seed_id, self.strategy_id, "seed", config.grid_budget_usdt
-            )
-            seed = self.store.get_capital_action(seed_id)
+            if config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+                seed = self.store.activate_triggered_fixed_grid(self.strategy_id)
+            else:
+                assert config.grid_budget_usdt is not None
+                seed = self.store.create_capital_action(
+                    seed_id, self.strategy_id, "seed", config.grid_budget_usdt
+                )
 
         if seed["status"] == "manual_review":
             raise RuntimeError(f"initial position needs manual review: {seed['message']}")
@@ -289,7 +295,10 @@ class FixedGridEngine(TradingEngine):
                     return mark
 
             self._reinvest_closed_cells()
-            self._arm_untriggered()
+            if config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+                self.store.arm_triggered_fixed_cells(self.strategy_id, mark)
+            else:
+                self._arm_untriggered()
             self.sync_orders_only()
             self._refresh_order_window(mark, prior_entries, before)
             self.sync_orders_only()
@@ -354,6 +363,7 @@ class FixedGridEngine(TradingEngine):
             repair_audit_passed=repair_audit_passed,
             initialized=getattr(self, "_window_initialized", False),
             cleanup_pending=getattr(self, "_window_cleanup_pending", False),
+            entry_mode=RuleFixedEntryMode(self._config().fixed_entry_mode.value),
             orders_per_side=self.ORDERS_PER_SIDE,
             rebalance_below=self.REBALANCE_BELOW,
             rebalance_above=self.REBALANCE_ABOVE,
@@ -545,8 +555,9 @@ class FixedGridEngine(TradingEngine):
             }
             cells = [
                 cell for cell in self.store.list_cells(self.strategy_id)
-                if cell.stage == CellStage.UNTRIGGERED and cell.cycle_count > 0
-                and cell.open_qty == 0 and cell.entry_order_id is None
+                if cell.stage in {CellStage.UNTRIGGERED, CellStage.PENDING_ENTRY}
+                and cell.cycle_count > 0 and cell.open_qty == 0
+                and (cell.entry_order_id is not None or not cell.entry_client_id)
                 and (cell.cell_id, cell.cycle_count) in earned_cycles
             ]
             if not cells:

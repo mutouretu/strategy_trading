@@ -38,6 +38,17 @@ class FixedCellLike(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class TriggerCell:
+    cell_id: str
+    buy_price: Decimal
+
+
+class TriggerCellLike(Protocol):
+    cell_id: str
+    buy_price: Decimal
+
+
+@dataclass(frozen=True, slots=True)
 class FixedGridSpec:
     grid_id: str
     lower_price: Decimal
@@ -138,7 +149,7 @@ def initial_sell_allocations(
 
 
 def triggered_entry_ids(
-    cells: Sequence[FixedCellLike], mark: Decimal,
+    cells: Sequence[TriggerCellLike], mark: Decimal,
     *, already_armed: frozenset[str] = frozenset(),
 ) -> frozenset[str]:
     """Sticky crossing eligibility; order-window selection happens later."""

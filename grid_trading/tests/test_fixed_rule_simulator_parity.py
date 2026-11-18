@@ -168,3 +168,71 @@ def test_market_source_replays_the_live_engine_without_exchange_io() -> None:
     assert all(frame.logical_position_qty == frame.exchange_position_qty
                for frame in result.frames)
     assert any(event["event_type"] == "CYCLE_CLOSED" for event in result.events)
+
+
+def test_triggered_market_source_replays_zero_seed_buy_sell_cycle() -> None:
+    source = FixedBarMarketSource("SOXLUSDT", [
+        ("50.45", "50.45", "50.45", "50.45"),
+        ("50.45", "50.45", "50.25", "50.25"),
+        ("50.25", "50.65", "50.25", "50.65"),
+    ])
+    result = FixedGridReplay(
+        source, symbol="SOXLUSDT",
+        lower_price=Decimal("40"), upper_price=Decimal("60"),
+        grid_count=135, grid_budget_usdt=Decimal("2000"),
+        filters=SymbolFilters(
+            tick_size=Decimal("0.01"), step_size=Decimal("0.01"),
+            min_qty=Decimal("0.01"), min_notional=Decimal("5"),
+            contract_type="TRADIFI_PERPETUAL",
+            percent_price_up=Decimal("1.03"),
+            percent_price_down=Decimal("0.97"),
+        ),
+        entry_mode=FixedEntryMode.PRICE_TRIGGERED,
+    ).run()
+    first, second, third = result.frames
+    assert first.logical_position_qty == first.exchange_position_qty == 0
+    assert first.entry_order_count == 10
+    assert first.exit_order_count == 0
+    assert second.logical_position_qty > 0
+    assert second.logical_position_qty == second.exchange_position_qty
+    assert second.exit_order_count >= 1
+    assert third.completed_cycles >= 1
+    assert third.logical_position_qty == third.exchange_position_qty
+
+
+def test_triggered_replay_partial_buy_protects_only_executed_quantity() -> None:
+    source = FixedBarMarketSource("SOXLUSDT", [
+        ("50.45", "50.45", "50.45", "50.45"),
+        ("50.45", "50.45", "50.25", "50.25"),
+        ("50.25", "50.65", "50.25", "50.65"),
+    ])
+
+    def fill_quantity(frame, order):
+        remaining = order.original_qty - order.executed_qty
+        if frame.sequence == 1 and order.side.value == "BUY":
+            return (remaining / 2).quantize(Decimal("0.01"))
+        return remaining
+
+    result = FixedGridReplay(
+        source, symbol="SOXLUSDT",
+        lower_price=Decimal("40"), upper_price=Decimal("60"),
+        grid_count=135, grid_budget_usdt=Decimal("2000"),
+        filters=SymbolFilters(
+            tick_size=Decimal("0.01"), step_size=Decimal("0.01"),
+            min_qty=Decimal("0.01"), min_notional=Decimal("5"),
+            contract_type="TRADIFI_PERPETUAL",
+            percent_price_up=Decimal("1.03"),
+            percent_price_down=Decimal("0.97"),
+        ),
+        entry_mode=FixedEntryMode.PRICE_TRIGGERED,
+        fill_quantity=fill_quantity,
+    ).run()
+    first, second, third = result.frames
+    assert first.exchange_position_qty == 0
+    assert second.partially_filled_order_ids
+    assert second.exchange_position_qty == second.logical_position_qty > 0
+    assert second.exit_order_count >= 1
+    assert third.completed_cycles >= 1
+    assert third.exchange_position_qty == third.logical_position_qty
+    assert any(event["event_type"] == "ENTRY_PARTIAL_FINALIZED"
+               for event in result.events)

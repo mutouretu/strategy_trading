@@ -9,10 +9,13 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Iterator
 
+from grid_rule.fixed_equal_usdt import TriggerCell, triggered_entry_ids
+
 from ..domain import (
     CellStage,
     ExchangeVenue,
     FuturesMarket,
+    FixedEntryMode,
     GridKind,
     GridCell,
     Mode,
@@ -80,6 +83,7 @@ class SQLiteStore:
                     grid_count INTEGER NOT NULL,
                     order_usdt TEXT NOT NULL,
                     grid_kind TEXT NOT NULL DEFAULT 'triggered',
+                    fixed_entry_mode TEXT NOT NULL DEFAULT 'seeded',
                     lower_price TEXT,
                     upper_price TEXT,
                     grid_budget_usdt TEXT,
@@ -408,6 +412,7 @@ class SQLiteStore:
                 )
             for column, definition in (
                 ("grid_kind", "TEXT NOT NULL DEFAULT 'triggered'"),
+                ("fixed_entry_mode", "TEXT NOT NULL DEFAULT 'seeded'"),
                 ("lower_price", "TEXT"),
                 ("upper_price", "TEXT"),
                 ("grid_budget_usdt", "TEXT"),
@@ -505,12 +510,12 @@ class SQLiteStore:
                 """
                 INSERT INTO strategies (
                     strategy_id, symbol, market_type, venue, mode, anchor_price, grid_ratio, grid_count,
-                    order_usdt, grid_kind, lower_price, upper_price, grid_budget_usdt,
+                    order_usdt, grid_kind, fixed_entry_mode, lower_price, upper_price, grid_budget_usdt,
                     auto_reinvest_enabled, auto_reinvest_percent,
                     order_coin_qty, contract_size, leverage,
                     poll_interval_sec, move_grid, status,
                     has_started, archived, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     config.strategy_id,
@@ -523,6 +528,7 @@ class SQLiteStore:
                     config.grid_count,
                     str(config.order_usdt),
                     config.grid_kind.value,
+                    config.fixed_entry_mode.value,
                     None if config.lower_price is None else str(config.lower_price),
                     None if config.upper_price is None else str(config.upper_price),
                     None if config.grid_budget_usdt is None else str(config.grid_budget_usdt),
@@ -579,7 +585,7 @@ class SQLiteStore:
             conn.execute(
                 """
                 UPDATE strategies SET symbol=?, market_type=?, venue=?, mode=?, anchor_price=?, grid_ratio=?, grid_count=?,
-                    order_usdt=?, grid_kind=?, lower_price=?, upper_price=?, grid_budget_usdt=?,
+                    order_usdt=?, grid_kind=?, fixed_entry_mode=?, lower_price=?, upper_price=?, grid_budget_usdt=?,
                     auto_reinvest_enabled=?, auto_reinvest_percent=?,
                     order_coin_qty=?, contract_size=?, leverage=?,
                     poll_interval_sec=?, move_grid=?, updated_at=?
@@ -595,6 +601,7 @@ class SQLiteStore:
                     config.grid_count,
                     str(config.order_usdt),
                     config.grid_kind.value,
+                    config.fixed_entry_mode.value,
                     None if config.lower_price is None else str(config.lower_price),
                     None if config.upper_price is None else str(config.upper_price),
                     None if config.grid_budget_usdt is None else str(config.grid_budget_usdt),
@@ -1305,6 +1312,85 @@ class SQLiteStore:
             row = conn.execute("SELECT * FROM capital_actions WHERE id=?", (action_id,)).fetchone()
         return dict(row)
 
+    def activate_triggered_fixed_grid(self, strategy_id: str) -> dict:
+        """Record a zero-position seed once, without creating an exchange order."""
+        action_id = f"seed:{strategy_id}"
+        now = utc_now()
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM capital_actions WHERE id=?", (action_id,),
+            ).fetchone()
+            if row is not None:
+                if row["status"] != "applied" or row["order_id"] is not None:
+                    raise ValueError("triggered grid seed conflicts with an existing capital action")
+                return dict(row)
+            config = conn.execute(
+                """SELECT grid_kind, fixed_entry_mode, grid_budget_usdt, status
+                   FROM strategies WHERE strategy_id=? AND deleted_at IS NULL""",
+                (strategy_id,),
+            ).fetchone()
+            if (config is None or config["grid_kind"] != GridKind.FIXED_EQUAL_USDT.value
+                    or config["fixed_entry_mode"] != FixedEntryMode.PRICE_TRIGGERED.value
+                    or config["status"] not in {
+                        StrategyStatus.STARTING.value, StrategyStatus.RUNNING.value,
+                    }):
+                raise ValueError("triggered fixed grid must be active before initialization")
+            conn.execute(
+                """INSERT INTO capital_actions(
+                    id, strategy_id, operation, amount_usdt, status,
+                    planned_allocations_json, target_qty, executed_qty, created_at, updated_at
+                ) VALUES (?, ?, 'seed', ?, 'applied', '{}', '0', '0', ?, ?)""",
+                (action_id, strategy_id, config["grid_budget_usdt"], now, now),
+            )
+            conn.execute(
+                """INSERT INTO events(strategy_id, cell_id, event_type, payload_json, created_at)
+                   VALUES (?, NULL, 'TRIGGERED_GRID_ACTIVATED', ?, ?)""",
+                (strategy_id, json.dumps({"entry_mode": "price_triggered", "initial_position_qty": "0"}), now),
+            )
+            return dict(conn.execute(
+                "SELECT * FROM capital_actions WHERE id=?", (action_id,),
+            ).fetchone())
+
+    def arm_triggered_fixed_cells(self, strategy_id: str, mark: Decimal) -> int:
+        """Persist every crossed buy level; exchange orders use the rolling window."""
+        now = utc_now()
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            config = conn.execute(
+                "SELECT fixed_entry_mode, status FROM strategies WHERE strategy_id=? AND deleted_at IS NULL",
+                (strategy_id,),
+            ).fetchone()
+            if (config is None or config["fixed_entry_mode"] != FixedEntryMode.PRICE_TRIGGERED.value
+                    or config["status"] not in {
+                        StrategyStatus.STARTING.value,
+                        StrategyStatus.RUNNING.value,
+                        StrategyStatus.ERROR.value,
+                    }):
+                raise ValueError("price-triggered fixed grid is not active")
+            cells = conn.execute(
+                "SELECT cell_id, buy_price FROM cells WHERE strategy_id=? AND stage=?",
+                (strategy_id, CellStage.UNTRIGGERED.value),
+            ).fetchall()
+            eligible_ids = triggered_entry_ids(
+                tuple(TriggerCell(row["cell_id"], Decimal(row["buy_price"]))
+                      for row in cells),
+                mark,
+            )
+            armed = [row for row in cells if row["cell_id"] in eligible_ids]
+            conn.executemany(
+                "UPDATE cells SET stage=?, updated_at=? WHERE strategy_id=? AND cell_id=?",
+                [(CellStage.PENDING_ENTRY.value, now, strategy_id, row["cell_id"]) for row in armed],
+            )
+            conn.executemany(
+                """INSERT INTO events(strategy_id, cell_id, event_type, payload_json, created_at)
+                   VALUES (?, ?, 'ENTRY_TRIGGERED', ?, ?)""",
+                [(strategy_id, row["cell_id"],
+                  json.dumps({"buy_price": row["buy_price"], "mark_price": str(mark)}), now)
+                 for row in armed],
+            )
+            return len(armed)
+
     def get_capital_action(self, action_id: str) -> dict | None:
         with self.connection() as conn:
             row = conn.execute("SELECT * FROM capital_actions WHERE id=?", (action_id,)).fetchone()
@@ -1604,8 +1690,11 @@ class SQLiteStore:
                 (strategy_id, cell_id),
             ).fetchone()
             if (
-                cell is None or cell["stage"] != CellStage.UNTRIGGERED.value
-                or Decimal(cell["open_qty"]) != 0 or cell["entry_order_id"] is not None
+                cell is None or cell["stage"] not in {
+                    CellStage.UNTRIGGERED.value, CellStage.PENDING_ENTRY.value,
+                }
+                or Decimal(cell["open_qty"]) != 0
+                or (cell["entry_client_id"] and cell["entry_order_id"] is None)
                 or int(cell["cycle_count"]) != cycle_count
             ):
                 return False
@@ -2265,6 +2354,8 @@ class SQLiteStore:
                 else Decimal("0")
             ),
             grid_kind=GridKind(row["grid_kind"]) if "grid_kind" in row.keys() else GridKind.TRIGGERED,
+            fixed_entry_mode=(FixedEntryMode(row["fixed_entry_mode"])
+                              if "fixed_entry_mode" in row.keys() else FixedEntryMode.SEEDED),
             lower_price=Decimal(row["lower_price"]) if "lower_price" in row.keys() and row["lower_price"] is not None else None,
             upper_price=Decimal(row["upper_price"]) if "upper_price" in row.keys() and row["upper_price"] is not None else None,
             grid_budget_usdt=Decimal(row["grid_budget_usdt"]) if "grid_budget_usdt" in row.keys() and row["grid_budget_usdt"] is not None else None,

@@ -266,11 +266,13 @@ def normalize_strategy(item: dict) -> dict:
         "market_type": market_type,
         "venue": venue,
         "grid_kind": item.get("grid_kind", "triggered"),
+        "fixed_entry_mode": item.get("fixed_entry_mode", "seeded"),
         "grid_budget_usdt": None if item.get("grid_budget_usdt") is None else decimal_number(item["grid_budget_usdt"]),
         "auto_reinvest_enabled": bool(item.get("auto_reinvest_enabled", False)),
         "auto_reinvest_percent": decimal_number(item.get("auto_reinvest_percent"), 100.0),
         "market_label": (
-            f"{'OKX' if venue == 'okx' else '币安'} · 固定等 U · U 本位永续"
+            f"{'OKX' if venue == 'okx' else '币安'} · 固定等 U"
+            f"{' · 回踩触发' if item.get('fixed_entry_mode') == 'price_triggered' else ''} · U 本位永续"
             if item.get("grid_kind") == "fixed_equal_usdt"
             else ("币本位永续" if market_type == "coinm" else "U 本位永续")
         ),
@@ -364,13 +366,17 @@ def display_flash() -> None:
 
 def render_fixed_grid_create() -> None:
     venue = st.session_state.get("exchange_venue", "binance")
-    st.caption(f"{'OKX' if venue == 'okx' else '币安'} U 本位 · 固定天地网格 · 1 倍做多 · 每格等 U")
+    st.caption(f"{'OKX' if venue == 'okx' else '币安'} U 本位 · 固定区间等 U · 1 倍做多")
     with st.form("fixed_grid_preview_form"):
         symbol = st.text_input("交易对", placeholder="例如 SOXL-USDT-SWAP" if venue == "okx" else "例如 SOLUSDT", key="fixed_symbol")
         lower = st.number_input("区间下界", min_value=0.0, value=None, step=0.01, format="%.8f")
         upper = st.number_input("区间上界", min_value=0.0, value=None, step=0.01, format="%.8f")
         count = st.number_input("网格数量", min_value=1, max_value=500, value=20, step=1)
         budget = st.number_input("网格交易预算 (USDT)", min_value=0.01, value=None, step=100.0, format="%.2f")
+        entry_mode_label = st.radio(
+            "启动方式", ["预建仓天地单", "回踩触发（零初始仓位）"], horizontal=True,
+            help="回踩触发会先挂已越过买价的近端买单；高位格子等价格上涨越过买价后才激活。",
+        )
         auto_reinvest = st.checkbox("创建后开启自动复投", value=False)
         reinvest_percent = st.number_input(
             "每格净利复投比例（%）", min_value=0.0, max_value=100.0,
@@ -388,6 +394,7 @@ def render_fixed_grid_create() -> None:
                 "upper_price": str(upper),
                 "grid_count": int(count),
                 "grid_budget_usdt": str(budget),
+                "fixed_entry_mode": "price_triggered" if entry_mode_label.startswith("回踩") else "seeded",
                 "auto_reinvest_enabled": bool(auto_reinvest),
                 "auto_reinvest_percent": str(Decimal(str(reinvest_percent))),
             }
@@ -407,12 +414,20 @@ def render_fixed_grid_create() -> None:
         f"当前价 {allocation['current_price']} · 买格 {allocation['buy_cell_count']} · "
         f"卖格 {allocation['sell_cell_count']}"
     )
-    st.info(
-        f"启动时将按当时市价一次性买入全部 {allocation['sell_cell_count']} 个上方卖格"
-        f"对应的数量，预计花费约 {float(allocation['estimated_seed_market_buy_usdt']):.2f} U；"
-        f"这些格子的预算上限合计 {allocation['seed_notional_usdt']} U。"
-        "下方买格等待价格跌到格线后买入。"
-    )
+    if payload.get("fixed_entry_mode") == "price_triggered":
+        st.info(
+            "启动时不买入仓位，也没有预置卖单。"
+            f"当前已有 {allocation['initial_triggerable_buy_cell_count']} 格满足买价触发条件，"
+            "系统先挂近端买单；更高的格子待价格越过买价后激活。"
+            "买单成交后，才为该格挂配对卖单。"
+        )
+    else:
+        st.info(
+            f"启动时将按当时市价一次性买入全部 {allocation['sell_cell_count']} 个上方卖格"
+            f"对应的数量，预计花费约 {float(allocation['estimated_seed_market_buy_usdt']):.2f} U；"
+            f"这些格子的预算上限合计 {allocation['seed_notional_usdt']} U。"
+            "下方买格等待价格跌到格线后买入。"
+        )
     st.caption(
         "数量按每格预算 ÷ 该格买价计算；完整循环的卖出目标金额理论上约为"
         "单格预算 × (1 + 等比间距)。受交易所数量与价格精度影响，"
