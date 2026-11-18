@@ -442,10 +442,15 @@ class BinanceFuturesExchange:
 
     @staticmethod
     def _order(data: dict) -> OrderSnapshot:
+        # Binance reports self-trade-prevention cancellations as a distinct
+        # terminal status. The grid handles it like any other expired order,
+        # including any executed quantity before expiry.
+        raw_status = str(data["status"])
+        status = OrderStatus.EXPIRED if raw_status == "EXPIRED_IN_MATCH" else OrderStatus(raw_status)
         return OrderSnapshot(
             order_id=int(data["orderId"]),
             client_order_id=str(data.get("clientOrderId", "")),
-            status=OrderStatus(str(data["status"])),
+            status=status,
             side=OrderSide(str(data["side"])),
             price=Decimal(str(data.get("price", "0"))),
             original_qty=Decimal(str(data.get("origQty", "0"))),

@@ -8,7 +8,7 @@ import requests
 
 from grid_server.binance import BinanceAPIError, BinanceFuturesExchange
 from grid_server.infrastructure.binance import BinanceRateLimitError
-from grid_server.domain import OrderSide
+from grid_server.domain import OrderSide, OrderStatus
 from grid_server.exchange import ExchangeExecutionUnknownError, OrderNotFoundError
 
 
@@ -26,6 +26,16 @@ class BinanceFuturesExchangeTests(unittest.TestCase):
             "executedQty": "0",
             "positionSide": "LONG",
         }
+
+    def test_self_trade_prevention_expiry_is_terminal_and_keeps_fill_quantity(self):
+        payload = self.order_payload("EXPIRED_IN_MATCH")
+        payload["executedQty"] = "0.25"
+        payload["avgPrice"] = "100"
+
+        order = BinanceFuturesExchange._order(payload)
+
+        self.assertEqual(order.status, OrderStatus.EXPIRED)
+        self.assertEqual(order.executed_qty, Decimal("0.25"))
 
     def test_http_success_body_with_code_200_is_accepted(self):
         exchange = BinanceFuturesExchange("key", "secret")
