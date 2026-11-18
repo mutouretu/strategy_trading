@@ -1634,7 +1634,7 @@ class SQLiteStore:
                 stage = row["stage"]
                 if new_qty > 0 and added_qty > 0:
                     stage = CellStage.PENDING_EXIT.value
-                elif stage == CellStage.UNTRIGGERED.value:
+                elif stage == CellStage.UNTRIGGERED.value and action["operation"] == "seed":
                     stage = CellStage.PENDING_ENTRY.value
                 conn.execute(
                     "UPDATE cells SET budget_usdt=?, open_qty=?, stage=?, updated_at=? WHERE strategy_id=? AND cell_id=?",

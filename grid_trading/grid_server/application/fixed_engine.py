@@ -9,7 +9,7 @@ from decimal import Decimal, ROUND_CEILING
 from ..domain import CellStage, FixedEntryMode, GridCell, OrderSide, OrderStatus, StrategyStatus
 from ..domain.grid import fixed_cell_budgets, round_down
 from ..infrastructure.binance import BinanceAPIError, BinanceFuturesExchange
-from ..infrastructure.okx import OkxSwapExchange
+from ..infrastructure.okx import OkxAPIError, OkxSwapExchange
 from ..ports.exchange import ExchangeExecutionUnknownError, OrderNotFoundError
 from ..shared.config import fixed_grid_endpoint_allowed, okx_fixed_grid_endpoint_allowed
 from .engine import TradingEngine
@@ -96,7 +96,7 @@ class FixedGridEngine(TradingEngine):
         ):
             # Mark price can cross a grid line while the executable book has not.
             # Keep the catch-up limit on the favorable side of the grid target
-            # while moving it inside Binance's current percent-price band.
+            # while moving it inside the exchange's current price band.
             submitted_price = price
             if isinstance(getattr(self.exchange, "exchange", self.exchange), OkxSwapExchange):
                 buy_limit, sell_limit = self.exchange.get_price_limits(symbol)
@@ -108,7 +108,7 @@ class FixedGridEngine(TradingEngine):
                     submitted_price = max(submitted_price, legal_minimum)
             if side == OrderSide.BUY and self.filters.percent_price_up > 0:
                 submitted_price = min(
-                    price, round_down(mark * self.filters.percent_price_up, self.filters.tick_size)
+                    submitted_price, round_down(mark * self.filters.percent_price_up, self.filters.tick_size)
                 )
             elif side == OrderSide.SELL and self.filters.percent_price_down > 0:
                 minimum = mark * self.filters.percent_price_down
@@ -117,7 +117,7 @@ class FixedGridEngine(TradingEngine):
                     (minimum / tick).to_integral_value(rounding=ROUND_CEILING) * tick
                     if tick > 0 else minimum
                 )
-                submitted_price = max(price, legal_minimum)
+                submitted_price = max(submitted_price, legal_minimum)
             order_id = self.exchange.place_limit_order(
                 symbol, side, position_side, quantity, submitted_price, client_order_id,
                 post_only=False,
@@ -175,7 +175,9 @@ class FixedGridEngine(TradingEngine):
         )
 
     @staticmethod
-    def _retryable_price_rejection(exc: BinanceAPIError) -> bool:
+    def _retryable_price_rejection(exc: BinanceAPIError | OkxAPIError) -> bool:
+        if isinstance(exc, OkxAPIError):
+            return exc.code == "51006"
         return any(code in str(exc) for code in ("-4016", "-4024", "-5022"))
 
     def _place_entry(self, cell: GridCell) -> None:
@@ -214,10 +216,11 @@ class FixedGridEngine(TradingEngine):
                 self._tick_free_cash = available - required
         try:
             super()._place_entry(cell)
-        except BinanceAPIError as exc:
+        except (BinanceAPIError, OkxAPIError) as exc:
             if cash_before is not None:
                 self._tick_free_cash = cash_before
-            if (config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED
+            if (isinstance(exc, BinanceAPIError)
+                    and config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED
                     and any(code in str(exc) for code in ("-2018", "-2019"))):
                 # The exchange's margin check can be stricter than the last
                 # available-balance snapshot. Wait for a fresh next-cycle
@@ -256,7 +259,7 @@ class FixedGridEngine(TradingEngine):
             return
         try:
             super()._ensure_exit(cell, quantity)
-        except BinanceAPIError as exc:
+        except (BinanceAPIError, OkxAPIError) as exc:
             if not self._retryable_price_rejection(exc):
                 raise
 
