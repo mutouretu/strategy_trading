@@ -935,7 +935,7 @@ class SQLiteStore:
     ) -> None:
         """Atomically discard flat old cells while retaining strategy history."""
         config.validate()
-        if (self.venue != ExchangeVenue.BINANCE
+        if (self.venue not in {ExchangeVenue.BINANCE, ExchangeVenue.OKX}
                 or config.venue != self.venue
                 or config.grid_kind != GridKind.FIXED_EQUAL_USDT
                 or config.fixed_entry_mode != FixedEntryMode.PRICE_TRIGGERED
@@ -966,7 +966,7 @@ class SQLiteStore:
                     or not row["has_started"]
                     or row["grid_kind"] != GridKind.FIXED_EQUAL_USDT.value
                     or row["fixed_entry_mode"] != FixedEntryMode.SEEDED.value
-                    or row["venue"] != ExchangeVenue.BINANCE.value
+                    or row["venue"] != self.venue.value
                     or row["symbol"] != config.symbol
                     or int(row["grid_generation"]) != expected_generation):
                 raise ValueError("stopped seeded strategy changed before reset")

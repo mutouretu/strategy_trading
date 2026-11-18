@@ -1,4 +1,4 @@
-"""Rebuild a stopped, externally flattened Binance grid in triggered mode."""
+"""Rebuild a stopped, externally flattened fixed grid in triggered mode."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from grid_server.application.grid_performance import strategy_performance
 from grid_server.application.service import GridService
 from grid_server.domain import CellStage, ExchangeVenue, FixedEntryMode
 from grid_server.infrastructure.binance import BinanceFuturesExchange
+from grid_server.infrastructure.okx import OkxSwapExchange
 from grid_server.infrastructure.sqlite_store import SQLiteStore
 from grid_server.runtime.supervisor import StrategySupervisor
 from grid_server.shared.config import (
@@ -23,11 +24,16 @@ from grid_server.shared.config import (
     binance_credentials,
     fixed_grid_endpoint_allowed,
     load_environment,
+    okx_base_url,
+    okx_credentials,
+    okx_fixed_grid_endpoint_allowed,
+    okx_simulated,
 )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--venue", choices=("binance", "okx"), default="binance")
     parser.add_argument("--db", type=Path, required=True)
     parser.add_argument("--env-file", type=Path, required=True)
     parser.add_argument("--strategy-id", required=True)
@@ -39,12 +45,21 @@ def main() -> int:
     args = parser.parse_args()
 
     load_environment(args.env_file)
-    base_url = binance_base_url()
-    if base_url != "https://fapi.binance.com" or not fixed_grid_endpoint_allowed(base_url):
-        raise SystemExit("explicit Binance production fixed-grid opt-in is required")
-    key, secret = binance_credentials(required=True)
-    exchange = BinanceFuturesExchange(key, secret, base_url)
-    store = SQLiteStore(args.db, venue=ExchangeVenue.BINANCE)
+    venue = ExchangeVenue(args.venue)
+    if venue == ExchangeVenue.BINANCE:
+        base_url = binance_base_url()
+        if base_url != "https://fapi.binance.com" or not fixed_grid_endpoint_allowed(base_url):
+            raise SystemExit("explicit Binance production fixed-grid opt-in is required")
+        key, secret = binance_credentials(required=True)
+        exchange = BinanceFuturesExchange(key, secret, base_url)
+    else:
+        base_url = okx_base_url()
+        if okx_simulated() or not okx_fixed_grid_endpoint_allowed(base_url, simulated=False):
+            raise SystemExit("explicit OKX production fixed-grid opt-in is required")
+        exchange = OkxSwapExchange(
+            *okx_credentials(required=True), base_url, simulated=False,
+        )
+    store = SQLiteStore(args.db, venue=venue)
     service = GridService(
         store, StrategySupervisor(store, Path("/private/tmp/binance-grid-reset-preview-logs")),
     )
@@ -54,6 +69,7 @@ def main() -> int:
     )
     print(json.dumps({
         "action": "apply" if args.apply else "preview",
+        "venue": venue.value,
         "strategy_id": args.strategy_id,
         "old_generation": plan["config"].grid_generation - 1,
         "new_generation": plan["config"].grid_generation,

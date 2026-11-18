@@ -330,10 +330,11 @@ class GridService:
             raise KeyError(strategy_id)
         if (current.grid_kind != GridKind.FIXED_EQUAL_USDT
                 or current.fixed_entry_mode != FixedEntryMode.SEEDED
-                or current.venue != ExchangeVenue.BINANCE
+                or current.venue != self.store.venue
+                or current.venue not in {ExchangeVenue.BINANCE, ExchangeVenue.OKX}
                 or current.status != StrategyStatus.STOPPED
                 or not current.has_started or current.archived):
-            raise ValueError("flat triggered reset requires a stopped seeded Binance fixed grid")
+            raise ValueError("flat triggered reset requires a stopped seeded fixed grid on the selected venue")
         if not 1 <= grid_count <= 500:
             raise ValueError("fixed grid count must be between 1 and 500")
         if any(
