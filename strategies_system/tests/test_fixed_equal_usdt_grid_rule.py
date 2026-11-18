@@ -7,7 +7,7 @@ from decimal import Decimal
 
 import strategy_simulation  # noqa: F401 - activates sibling packages
 
-from grid_rule.fixed_equal_usdt import (
+from trading_strategies.grid_core.fixed_equal_usdt import (
     FixedEntryMode, FixedGridSpec, build_fixed_cells, initial_sell_allocations,
 )
 from grid_server.domain import OrderSide, OrderStatus, SymbolFilters

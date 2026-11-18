@@ -23,7 +23,7 @@ from trading_strategies.rules import (
     InitialEntryRule,
     InitialEntryRuleContext,
 )
-from grid_rule.fixed_equal_usdt import (
+from trading_strategies.grid_core.fixed_equal_usdt import (
     FixedEntryMode, build_fixed_cells, fixed_grid_ratio,
 )
 

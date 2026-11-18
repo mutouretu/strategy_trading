@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Mapping, Sequence
 
-from grid_rule.fixed_equal_usdt import (
+from trading_strategies.grid_core.fixed_equal_usdt import (
     FixedEntryMode,
     FixedCellSpec,
     initial_sell_allocations,

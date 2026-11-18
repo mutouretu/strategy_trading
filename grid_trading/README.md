@@ -72,6 +72,11 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
+固定等 U 网格的纯决策代码位于同一仓库的 `../strategies_system/src/trading_strategies/grid_core`。
+从 `grid_trading` 目录启动时，旧 `grid_rule` 导入路径会读取这个同级源码目录；
+如果单独部署 `grid_trading`，需要先安装包含 `trading_strategies.grid_core` 的
+`strategies-system` 包。
+
 ## 启动后端
 
 项目会从仓库根目录的 `.env` 统一加载配置；已经由 shell/export 提供的变量优先，不会被 `.env` 覆盖。可参考 `.env.example`。因此无需再手动导出币安密钥：

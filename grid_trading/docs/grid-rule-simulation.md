@@ -5,9 +5,12 @@
 这条分支从 `grid` 的 `0111a36` 创建。现有 Binance/OKX 实盘和触发式测试网进程
 仍使用各自原来的工作目录，不读取本分支的改动。
 
-固定网格的价格边界、等 U 预算、下单数量、初始卖侧仓位、触发式买单激活条件和十单窗口选择现已放在
-`grid_rule.fixed_equal_usdt`、`grid_rule.fixed_window`；实盘 `FixedGridEngine`
-调用同一组纯规则。规则接收单元格状态和价格，返回目标挂单集合；交易所价格带、
+在 `feat/strategy-runtime-structure` 中，固定网格的价格边界、等 U 预算、下单数量、
+初始卖侧仓位、触发式买单激活条件和十单窗口选择已迁到
+`trading_strategies.grid_core.fixed_equal_usdt` 与
+`trading_strategies.grid_core.fixed_window`。原 `grid_rule.fixed_equal_usdt` 和
+`grid_rule.fixed_window` 只重导出同一实现，实盘 `FixedGridEngine` 的导入暂时不变。
+规则接收单元格状态和价格，返回目标挂单集合；交易所价格带、
 下单、撤单、恢复、资金和 SQLite 仍由实盘适配层负责。
 
 `strategies_system` 的 TradingRuleRegistry 现已注册

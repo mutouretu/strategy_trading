@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from grid_rule.fixed_equal_usdt import FixedEntryMode, FixedGridSpec
+from .grid_core.fixed_equal_usdt import FixedEntryMode, FixedGridSpec
 
 from .kernel import TradeSide, TradingRuleSpec
 from .rules import (

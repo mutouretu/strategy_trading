@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from functools import lru_cache
 
-from grid_rule.fixed_equal_usdt import (
+from trading_strategies.grid_core.fixed_equal_usdt import (
     FixedEntryMode,
     FixedCellSpec,
     FixedGridSpec,
@@ -15,7 +15,7 @@ from grid_rule.fixed_equal_usdt import (
     order_quantity,
     triggered_entry_ids,
 )
-from grid_rule.fixed_window import WindowCell, WindowInput, plan_fixed_window
+from trading_strategies.grid_core.fixed_window import WindowCell, WindowInput, plan_fixed_window
 
 from ..kernel import (
     PositionEffect,
@@ -143,8 +143,8 @@ class FixedEqualUsdtGridRule(
 ):
     """Pure planner over exchange-confirmed Cell snapshots.
 
-    Geometry, triggering, and order windows delegate to the same grid_rule
-    functions used by the live engine. The runtime owns fills and capital.
+    Geometry, triggering, and order windows use the same pure core as the
+    live engine. The runtime owns fills and capital.
     """
 
     rule_type = "fixed-equal-usdt-grid/v1"
