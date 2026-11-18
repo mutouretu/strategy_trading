@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from functools import lru_cache
 
 from grid_rule.fixed_equal_usdt import (
     FixedEntryMode,
+    FixedCellSpec,
     FixedGridSpec,
     TriggerCell,
     build_fixed_cells,
@@ -27,6 +29,12 @@ from ..kernel import (
 )
 
 
+@lru_cache(maxsize=64)
+def _fixed_cells(spec: FixedGridSpec) -> tuple[FixedCellSpec, ...]:
+    """Reuse immutable grid geometry across high-frequency observations."""
+    return build_fixed_cells(spec)
+
+
 @dataclass(frozen=True, slots=True)
 class FixedEqualUsdtGridRuleConfig:
     spec: FixedGridSpec
@@ -42,7 +50,7 @@ class FixedEqualUsdtGridRuleConfig:
     def __post_init__(self) -> None:
         if not isinstance(self.spec, FixedGridSpec):
             raise TypeError("spec must be a FixedGridSpec")
-        build_fixed_cells(self.spec)
+        _fixed_cells(self.spec)
         if not isinstance(self.entry_mode, FixedEntryMode):
             raise TypeError("entry_mode must be a FixedEntryMode")
         for name in ("step_size", "min_qty", "min_notional"):
@@ -104,11 +112,25 @@ class FixedGridObservationInput:
 
 
 @dataclass(frozen=True, slots=True)
+class FixedGridFillAcknowledgementInput:
+    """Consume one fill identity while a same-frame batch is still pending."""
+
+    fill_id: str
+
+    def __post_init__(self) -> None:
+        if not self.fill_id.strip():
+            raise ValueError("fill_id must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
 class FixedEqualUsdtGridRuleState:
     armed_ids: frozenset[str] = frozenset()
     entry_ids: frozenset[str] = frozenset()
     exit_ids: frozenset[str] = frozenset()
     initialized: bool = False
+    intent_nonce: int = 0
+    entry_intent_keys: tuple[tuple[str, str], ...] = ()
+    exit_intent_keys: tuple[tuple[str, str], ...] = ()
 
 
 class FixedEqualUsdtGridRule(
@@ -139,7 +161,10 @@ class FixedEqualUsdtGridRule(
                 "支持预建卖侧仓位与零预建仓的触价激活；实际建仓、成交、费用与持仓对账由运行时处理。"
             ),
             family="grid",
-            input_types=("FixedGridObservationInput",),
+            input_types=(
+                "FixedGridObservationInput",
+                "FixedGridFillAcknowledgementInput",
+            ),
             config_fields=(
                 RuleConfigFieldDefinition("lower_price", "价格下限", required=True),
                 RuleConfigFieldDefinition("upper_price", "价格上限", required=True),
@@ -192,15 +217,17 @@ class FixedEqualUsdtGridRule(
         self,
         rule_config: FixedEqualUsdtGridRuleConfig,
         state: FixedEqualUsdtGridRuleState,
-        input: FixedGridObservationInput,
+        input: FixedGridObservationInput | FixedGridFillAcknowledgementInput,
         context: None,
     ) -> RuleTransition[FixedEqualUsdtGridRuleState]:
         del context
-        if not isinstance(input, FixedGridObservationInput):
-            raise TypeError("input must be FixedGridObservationInput")
         if not isinstance(state, FixedEqualUsdtGridRuleState):
             raise TypeError("state must be FixedEqualUsdtGridRuleState")
-        specs = build_fixed_cells(rule_config.spec)
+        if isinstance(input, FixedGridFillAcknowledgementInput):
+            return RuleTransition.unchanged(state)
+        if not isinstance(input, FixedGridObservationInput):
+            raise TypeError("input must be FixedGridObservationInput")
+        specs = _fixed_cells(rule_config.spec)
         spec_by_id = {cell.cell_id: cell for cell in specs}
         observed = {cell.cell_id: cell for cell in input.cells}
         if observed.keys() != spec_by_id.keys():
@@ -253,15 +280,30 @@ class FixedEqualUsdtGridRule(
         ))
         intents: list[RuleIntentProposal] = []
         cancellations: list[str] = []
+        entry_keys = dict(state.entry_intent_keys)
+        exit_keys = dict(state.exit_intent_keys)
+        nonce = state.intent_nonce
         for spec in specs:
             cell = observed[spec.cell_id]
             stage = ("pending_entry" if spec.cell_id in armed else cell.stage)
-            entry_key = self._intent_key(spec.cell_id, cell.cycle_count, "entry")
-            exit_key = self._intent_key(spec.cell_id, cell.cycle_count, "exit")
+            entry_key = entry_keys.get(spec.cell_id)
+            exit_key = exit_keys.get(spec.cell_id)
+            if cell.has_entry_order and entry_key is None:
+                raise ValueError("active entry order has no Rule intent identity")
+            if cell.has_exit_order and exit_key is None:
+                raise ValueError("active exit order has no Rule intent identity")
+            if not cell.has_entry_order:
+                entry_keys.pop(spec.cell_id, None)
+            if not cell.has_exit_order:
+                exit_keys.pop(spec.cell_id, None)
             if cell.has_entry_order and spec.cell_id not in decision.entry_ids:
+                assert entry_key is not None
                 cancellations.append(entry_key)
+                entry_keys.pop(spec.cell_id, None)
             if cell.has_exit_order and spec.cell_id not in decision.exit_ids:
+                assert exit_key is not None
                 cancellations.append(exit_key)
+                exit_keys.pop(spec.cell_id, None)
             if (stage == "pending_entry" and not cell.has_entry_order
                     and spec.cell_id in decision.entry_ids and cell.entry_ready):
                 quantity = order_quantity(
@@ -271,6 +313,11 @@ class FixedEqualUsdtGridRule(
                     min_notional=rule_config.min_notional,
                 )
                 if quantity > 0:
+                    nonce += 1
+                    entry_key = self._intent_key(
+                        spec.cell_id, cell.cycle_count, "entry", nonce,
+                    )
+                    entry_keys[spec.cell_id] = entry_key
                     intents.append(self._intent(
                         entry_key, TradeSide.BUY, quantity, spec.buy_price,
                         rule_config.quantity_unit, spec.cell_id, cell.cycle_count,
@@ -278,6 +325,11 @@ class FixedEqualUsdtGridRule(
             if (stage == "pending_exit" and not cell.has_exit_order
                     and spec.cell_id in decision.exit_ids and cell.exit_ready
                     and cell.open_qty > 0):
+                nonce += 1
+                exit_key = self._intent_key(
+                    spec.cell_id, cell.cycle_count, "exit", nonce,
+                )
+                exit_keys[spec.cell_id] = exit_key
                 intents.append(self._intent(
                     exit_key, TradeSide.SELL, cell.open_qty, spec.sell_price,
                     rule_config.quantity_unit, spec.cell_id, cell.cycle_count,
@@ -288,6 +340,9 @@ class FixedEqualUsdtGridRule(
                 entry_ids=decision.entry_ids,
                 exit_ids=decision.exit_ids,
                 initialized=True,
+                intent_nonce=nonce,
+                entry_intent_keys=tuple(sorted(entry_keys.items())),
+                exit_intent_keys=tuple(sorted(exit_keys.items())),
             ),
             intents=tuple(intents),
             cancellations=tuple(cancellations),
@@ -300,8 +355,10 @@ class FixedEqualUsdtGridRule(
         )
 
     @staticmethod
-    def _intent_key(cell_id: str, cycle_count: int, side: str) -> str:
-        return f"{cell_id}:cycle:{cycle_count}:{side}"
+    def _intent_key(
+        cell_id: str, cycle_count: int, side: str, nonce: int,
+    ) -> str:
+        return f"{cell_id}:cycle:{cycle_count}:{side}:attempt:{nonce}"
 
     @staticmethod
     def _intent(

@@ -276,7 +276,7 @@ class StrategyExperimentProviderTests(unittest.TestCase):
             inspect.getmodule(StrategiesSimulationProvider)
         ))
         descriptors = build_provider_registry().component_descriptors
-        self.assertEqual(len(descriptors), 10)
+        self.assertEqual(len(descriptors), 11)
         self.assertEqual(
             {
                 item["type"]

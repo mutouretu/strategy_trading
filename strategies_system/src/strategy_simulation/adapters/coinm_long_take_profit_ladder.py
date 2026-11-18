@@ -27,9 +27,10 @@ from trading_strategies.rules import (
 )
 
 from .coinm_position_sizer import CoinMPositionSizer
+from .strategy_application import StrategyApplicationEventRouter
 
 
-class CoinMLongTakeProfitLadderEventRouter:
+class CoinMLongTakeProfitLadderEventRouter(StrategyApplicationEventRouter):
     def __init__(
         self,
         *,

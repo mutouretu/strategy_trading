@@ -3,6 +3,7 @@ from .fixed_equal_usdt_grid import (
     FixedEqualUsdtGridRule,
     FixedEqualUsdtGridRuleConfig,
     FixedEqualUsdtGridRuleState,
+    FixedGridFillAcknowledgementInput,
     FixedGridObservationInput,
     FixedGridObservedCell,
 )
@@ -39,6 +40,7 @@ __all__ = [
     "FixedEqualUsdtGridRule",
     "FixedEqualUsdtGridRuleConfig",
     "FixedEqualUsdtGridRuleState",
+    "FixedGridFillAcknowledgementInput",
     "FixedGridObservationInput",
     "FixedGridObservedCell",
     "InitialEntryFillInput",

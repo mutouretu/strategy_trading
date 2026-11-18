@@ -29,6 +29,7 @@ from ..components import (
 
 from ..plugins import (
     CoinMLongTakeProfitLadderSimulationPlugin,
+    FixedEqualUsdtGridSimulationPlugin,
     FixedGridSimulationPlugin,
     HoldBtcSimulationPlugin,
     LayeredFollowingGridSimulationPlugin,
@@ -221,6 +222,7 @@ class StrategiesSimulationProvider:
 def build_strategy_registry() -> SimulationStrategyRegistry:
     registry = SimulationStrategyRegistry()
     registry.register(FixedGridSimulationPlugin())
+    registry.register(FixedEqualUsdtGridSimulationPlugin())
     registry.register(HoldBtcSimulationPlugin())
     registry.register(CoinMLongTakeProfitLadderSimulationPlugin())
     registry.register(SingleFollowingGridSimulationPlugin())

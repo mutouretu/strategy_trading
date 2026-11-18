@@ -145,6 +145,45 @@ class FixedEqualUsdtGridRuleTests(unittest.TestCase):
         self.assertEqual(definition["supported_product_types"], ["LINEAR_PERPETUAL"])
         self.assertIn("FixedGridObservationInput", definition["input_types"])
 
+    def test_cancelled_cell_order_gets_new_identity_when_reopened(self) -> None:
+        config = FixedEqualUsdtGridRuleConfig(
+            self.spec, FixedEntryMode.SEEDED,
+            Decimal("0.01"), Decimal("0.01"), Decimal("5"),
+            orders_per_side=1, rebalance_below=1, rebalance_above=2,
+        )
+
+        def observed(mark: str, active_ids: set[str]) -> FixedGridObservationInput:
+            return FixedGridObservationInput(
+                Decimal(mark),
+                tuple(FixedGridObservedCell(
+                    cell.cell_id, "pending_entry",
+                    has_entry_order=cell.cell_id in active_ids,
+                ) for cell in self.cells),
+            )
+
+        first = self.rule.transition(
+            config, self.rule.initial_state(config, None),
+            observed("45", set()), None,
+        )
+        first_key = first.intents[0].intent_key
+        first_id = str(first.intents[0].tags["cell_id"])
+        moved = self.rule.transition(
+            config, first.next_state,
+            observed("59", {first_id}), None,
+        )
+        self.assertIn(first_key, moved.cancellations)
+        moved_id = str(moved.intents[0].tags["cell_id"])
+        reopened = self.rule.transition(
+            config, moved.next_state,
+            observed("45", {moved_id}), None,
+        )
+        same_cell = [
+            intent for intent in reopened.intents
+            if intent.tags["cell_id"] == first_id
+        ]
+        self.assertEqual(len(same_cell), 1)
+        self.assertNotEqual(same_cell[0].intent_key, first_key)
+
     def test_triggered_rule_first_window_matches_live_engine_replay(self) -> None:
         spec = FixedGridSpec(
             "grid-rule-parity", Decimal("40"), Decimal("60"), 135,

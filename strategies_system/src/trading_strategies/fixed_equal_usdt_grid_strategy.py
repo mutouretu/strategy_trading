@@ -7,8 +7,13 @@ from decimal import Decimal
 
 from grid_rule.fixed_equal_usdt import FixedEntryMode, FixedGridSpec
 
-from .kernel import TradingRuleSpec
-from .rules import FixedEqualUsdtGridRule, FixedEqualUsdtGridRuleConfig
+from .kernel import TradeSide, TradingRuleSpec
+from .rules import (
+    FixedEqualUsdtGridRule,
+    FixedEqualUsdtGridRuleConfig,
+    InitialEntryRule,
+    InitialEntryRuleConfig,
+)
 from .strategy import (
     CapitalAllocationSpec,
     ConflictResolution,
@@ -30,6 +35,7 @@ from .strategy.values import positive_decimal, required_text
 
 FIXED_EQUAL_USDT_GRID_STRATEGY_V1 = "fixed-range-equal-usdt-grid/v1"
 GRID_RULE_KEY = "grid"
+SEED_RULE_KEY = "seed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,7 +90,7 @@ class FixedEqualUsdtGridStrategyParameters:
 class FixedEqualUsdtGridStrategyDefinition(
     StrategyDefinition[FixedEqualUsdtGridStrategyParameters]
 ):
-    """Bind one long linear-perpetual grid Rule to one fixed budget."""
+    """Compose seed-entry and fixed-grid Rules under one fixed budget."""
 
     strategy_type = FIXED_EQUAL_USDT_GRID_STRATEGY_V1
 
@@ -118,8 +124,8 @@ class FixedEqualUsdtGridStrategyDefinition(
             family="fixed-grid",
             summary="用一条固定等 U 网格 Rule 管理长期区间内的低买高卖。",
             description=(
-                "Strategy 绑定标的、固定边界、预算与启动模式；Grid Rule 负责单元格触发和买卖挂单计划。"
-                "预算分配给单元格，预建仓与交易所执行由运行时负责。"
+                "Strategy 绑定标的、固定边界、预算与启动模式；初始建仓 Rule 只负责预建仓，"
+                "Grid Rule 负责单元格触发和买卖挂单计划。成交和账户由运行时负责。"
             ),
             parameters=(
                 *(
@@ -153,6 +159,15 @@ class FixedEqualUsdtGridStrategyDefinition(
             ),
             rule_composition=(
                 StrategyRuleCompositionDefinition(
+                    rule_key=SEED_RULE_KEY,
+                    rule_type=InitialEntryRule.rule_type,
+                    role="预建仓",
+                    summary="预建仓模式按当前卖侧单元格的总数量建立一次多仓。",
+                    permissions=(RulePermission.OPEN.value,),
+                    subscriptions=("InitialEntryStartInput", "InitialEntryFillInput"),
+                    parameter_mappings={"entry_mode": "seed activation"},
+                ),
+                StrategyRuleCompositionDefinition(
                     rule_key=GRID_RULE_KEY,
                     rule_type=FixedEqualUsdtGridRule.rule_type,
                     role="单元格买卖规划",
@@ -162,7 +177,10 @@ class FixedEqualUsdtGridStrategyDefinition(
                         RulePermission.REDUCE.value,
                         RulePermission.MANAGE_EXITS.value,
                     ),
-                    subscriptions=("FixedGridObservationInput",),
+                    subscriptions=(
+                        "FixedGridObservationInput",
+                        "FixedGridFillAcknowledgementInput",
+                    ),
                     parameter_mappings={
                         "lower_price": "spec.lower_price",
                         "upper_price": "spec.upper_price",
@@ -178,7 +196,8 @@ class FixedEqualUsdtGridStrategyDefinition(
             lifecycle=("CREATED", "ACTIVE", "STOPPED"),
             constraints=(
                 "网格边界固定",
-                "同一 Rule Slot 同时负责买入和 reduce-only 卖出",
+                "Seed Rule 仅在预建仓模式启动；触发式模式不发送 Seed 事件",
+                "Grid Rule 同时负责买入和 reduce-only 卖出",
                 "同次观测允许买卖两侧意图并存",
                 "仅已确认的 Cell 仓位可生成卖单",
             ),
@@ -233,6 +252,19 @@ class FixedEqualUsdtGridStrategyDefinition(
             ),
             rule_slots=(
                 StrategyRuleSlotSpec(
+                    rule_key=SEED_RULE_KEY,
+                    rule=TradingRuleSpec(
+                        InitialEntryRule.rule_type,
+                        InitialEntryRuleConfig(
+                            intent_key="initial-grid-seed",
+                            side=TradeSide.BUY,
+                            role="grid_seed",
+                        ),
+                    ),
+                    permissions=(RulePermission.OPEN,),
+                    subscriptions=("InitialEntryStartInput", "InitialEntryFillInput"),
+                ),
+                StrategyRuleSlotSpec(
                     rule_key=GRID_RULE_KEY,
                     rule=TradingRuleSpec(FixedEqualUsdtGridRule.rule_type, config),
                     permissions=(
@@ -240,7 +272,10 @@ class FixedEqualUsdtGridStrategyDefinition(
                         RulePermission.REDUCE,
                         RulePermission.MANAGE_EXITS,
                     ),
-                    subscriptions=("FixedGridObservationInput",),
+                    subscriptions=(
+                        "FixedGridObservationInput",
+                        "FixedGridFillAcknowledgementInput",
+                    ),
                 ),
             ),
             coordination_policy=self._policy(),

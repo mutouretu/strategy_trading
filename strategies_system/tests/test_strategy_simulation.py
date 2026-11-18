@@ -195,6 +195,7 @@ class StrategySimulationTests(unittest.TestCase):
             {
                 "coinm-long-take-profit-ladder/v1",
                 "fixed-grid/v1",
+                "fixed-equal-usdt-grid-simulation/v1",
                 "hold-btc/v1",
                 "layered-following-grid/v1",
                 "single-following-grid/v1",

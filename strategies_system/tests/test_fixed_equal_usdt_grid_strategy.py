@@ -25,8 +25,17 @@ from trading_strategies.rules import (
     FixedEqualUsdtGridRule,
     FixedGridObservationInput,
     FixedGridObservedCell,
+    InitialEntryRule,
+    InitialEntryRuleContext,
+    SizedPosition,
 )
 from trading_strategies.strategy import CapitalAllocationSpec, StrategyCoordinationPolicy
+
+
+class _SeedSizer:
+    def size_entry(self, *, reference_price: Decimal) -> SizedPosition:
+        del reference_price
+        return SizedPosition(Decimal("1"), "BASE")
 
 
 class FixedEqualUsdtGridStrategyTests(unittest.TestCase):
@@ -57,8 +66,8 @@ class FixedEqualUsdtGridStrategyTests(unittest.TestCase):
         instance = StrategyInstance(
             strategy_instance_id=parameters.strategy_id,
             spec=spec,
-            rules={"grid": FixedEqualUsdtGridRule()},
-            contexts={"grid": None},
+            rules={"seed": InitialEntryRule(), "grid": FixedEqualUsdtGridRule()},
+            contexts={"seed": InitialEntryRuleContext(_SeedSizer()), "grid": None},
         )
         instance.start()
         return instance
@@ -69,8 +78,9 @@ class FixedEqualUsdtGridStrategyTests(unittest.TestCase):
         )
         spec = definition.bind(self.parameters())
         self.assertEqual(spec.strategy_type, FIXED_EQUAL_USDT_GRID_STRATEGY_V1)
-        self.assertEqual(len(spec.rule_slots), 1)
-        self.assertEqual(spec.rule_slots[0].rule.rule_type, "fixed-equal-usdt-grid/v1")
+        self.assertEqual(len(spec.rule_slots), 2)
+        self.assertEqual(spec.slot("seed").rule.rule_type, "initial-entry/v1")
+        self.assertEqual(spec.slot("grid").rule.rule_type, "fixed-equal-usdt-grid/v1")
         self.assertEqual(spec.capital_allocation, CapitalAllocationSpec("USDT", Decimal("200")))
         self.assertTrue(spec.coordination_policy.allow_simultaneous_entry_exit)
         self.assertTrue(
@@ -80,7 +90,7 @@ class FixedEqualUsdtGridStrategyTests(unittest.TestCase):
 
     def test_seeded_strategy_routes_buy_and_sell_in_one_event(self) -> None:
         instance = self.instance(self.parameters())
-        config = instance.spec.rule_slots[0].rule.config
+        config = instance.spec.slot("grid").rule.config
         cells = build_fixed_cells(config.spec)
         allocations = initial_sell_allocations(
             cells, Decimal("50"), step_size=config.step_size,
@@ -134,7 +144,7 @@ class FixedEqualUsdtGridStrategyTests(unittest.TestCase):
 
     def test_triggered_strategy_starts_without_seed_sells(self) -> None:
         instance = self.instance(self.parameters(FixedEntryMode.PRICE_TRIGGERED))
-        cells = build_fixed_cells(instance.spec.rule_slots[0].rule.config.spec)
+        cells = build_fixed_cells(instance.spec.slot("grid").rule.config.spec)
         event = instance.apply_event({"grid": FixedGridObservationInput(
             Decimal("50"),
             tuple(FixedGridObservedCell(cell.cell_id, "untriggered") for cell in cells),
@@ -152,11 +162,11 @@ class FixedEqualUsdtGridStrategyTests(unittest.TestCase):
         instance = StrategyInstance(
             strategy_instance_id=parameters.strategy_id,
             spec=spec,
-            rules={"grid": FixedEqualUsdtGridRule()},
-            contexts={"grid": None},
+            rules={"seed": InitialEntryRule(), "grid": FixedEqualUsdtGridRule()},
+            contexts={"seed": InitialEntryRuleContext(_SeedSizer()), "grid": None},
         )
         instance.start()
-        config = spec.rule_slots[0].rule.config
+        config = spec.slot("grid").rule.config
         cells = build_fixed_cells(config.spec)
         allocations = initial_sell_allocations(
             cells, Decimal("50"), step_size=config.step_size,
