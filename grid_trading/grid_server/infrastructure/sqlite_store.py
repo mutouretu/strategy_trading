@@ -927,6 +927,155 @@ class SQLiteStore:
                     (now, action_id),
                 )
 
+    def reset_flat_fixed_to_triggered(
+        self, config: StrategyConfig, cells: list[GridCell], *,
+        expected_generation: int, expected_old_cell_count: int,
+        expected_old_qty: Decimal, historical_net_grid_profit: Decimal,
+        mark: Decimal,
+    ) -> None:
+        """Atomically discard flat old cells while retaining strategy history."""
+        config.validate()
+        if (self.venue != ExchangeVenue.BINANCE
+                or config.venue != self.venue
+                or config.grid_kind != GridKind.FIXED_EQUAL_USDT
+                or config.fixed_entry_mode != FixedEntryMode.PRICE_TRIGGERED
+                or config.grid_generation != expected_generation + 1
+                or config.lower_price is None or config.upper_price is None
+                or not config.lower_price <= mark <= config.upper_price):
+            raise ValueError("invalid flat triggered reset configuration")
+        if (len(cells) != config.grid_count
+                or len({cell.cell_id for cell in cells}) != len(cells)
+                or any(cell.strategy_id != config.strategy_id
+                       or cell.open_qty != 0 or cell.cycle_count != 0
+                       or cell.entry_order_id is not None
+                       or cell.exit_order_id is not None for cell in cells)
+                or sum((cell.budget_usdt for cell in cells), Decimal("0"))
+                != config.grid_budget_usdt):
+            raise ValueError("invalid fresh triggered cells")
+        if not historical_net_grid_profit.is_finite() or expected_old_qty < 0:
+            raise ValueError("invalid historical reset snapshot")
+        now = utc_now()
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """SELECT * FROM strategies
+                   WHERE strategy_id=? AND deleted_at IS NULL AND archived=0""",
+                (config.strategy_id,),
+            ).fetchone()
+            if (row is None or row["status"] != StrategyStatus.STOPPED.value
+                    or not row["has_started"]
+                    or row["grid_kind"] != GridKind.FIXED_EQUAL_USDT.value
+                    or row["fixed_entry_mode"] != FixedEntryMode.SEEDED.value
+                    or row["venue"] != ExchangeVenue.BINANCE.value
+                    or row["symbol"] != config.symbol
+                    or int(row["grid_generation"]) != expected_generation):
+                raise ValueError("stopped seeded strategy changed before reset")
+            if conn.execute(
+                """SELECT 1 FROM strategies WHERE strategy_id<>? AND symbol=?
+                   AND market_type=? AND status IN (?, ?, ?) AND deleted_at IS NULL
+                   LIMIT 1""",
+                (config.strategy_id, config.symbol, config.market_type.value,
+                 StrategyStatus.STARTING.value, StrategyStatus.RUNNING.value,
+                 StrategyStatus.ERROR.value),
+            ).fetchone():
+                raise ValueError("another active strategy owns the symbol")
+            if conn.execute(
+                """SELECT 1 FROM capital_actions WHERE strategy_id=?
+                   AND status IN ('requested','planned','submitted','manual_review')
+                   LIMIT 1""",
+                (config.strategy_id,),
+            ).fetchone() or conn.execute(
+                "SELECT 1 FROM cell_actions WHERE strategy_id=? AND status='pending' LIMIT 1",
+                (config.strategy_id,),
+            ).fetchone() or conn.execute(
+                """SELECT 1 FROM fixed_reconfigurations WHERE strategy_id=?
+                   AND status IN ('requested','planned','submitted','manual_review')
+                   LIMIT 1""",
+                (config.strategy_id,),
+            ).fetchone():
+                raise ValueError("a strategy action is still pending")
+            seed = conn.execute(
+                "SELECT status FROM capital_actions WHERE id=?",
+                (f"seed:{config.strategy_id}",),
+            ).fetchone()
+            if seed is None or seed["status"] != "applied":
+                raise ValueError("the old seed action is not complete")
+            old_cells = conn.execute(
+                "SELECT * FROM cells WHERE strategy_id=?", (config.strategy_id,),
+            ).fetchall()
+            old_qty = sum((Decimal(cell["open_qty"]) for cell in old_cells), Decimal("0"))
+            if (len(old_cells) != expected_old_cell_count
+                    or old_qty != expected_old_qty
+                    or {cell["cell_id"] for cell in old_cells}
+                    & {cell.cell_id for cell in cells}):
+                raise ValueError("old cells changed before reset")
+            old_order_references = sum(
+                (cell["entry_order_id"] is not None)
+                + (cell["exit_order_id"] is not None)
+                for cell in old_cells
+            )
+            # Closed generations can no longer reinvest into removed cells.
+            for cell in old_cells:
+                conn.execute(
+                    """INSERT INTO cell_reinvest_checkpoints(
+                         strategy_id, cell_id, last_old_cycle_count,
+                         last_old_reinvestment_id
+                       ) VALUES (?, ?, ?, 0)
+                       ON CONFLICT(strategy_id, cell_id) DO UPDATE SET
+                         last_old_cycle_count=MAX(
+                           cell_reinvest_checkpoints.last_old_cycle_count,
+                           excluded.last_old_cycle_count
+                         )""",
+                    (config.strategy_id, cell["cell_id"], int(cell["cycle_count"])),
+                )
+            conn.execute("DELETE FROM cells WHERE strategy_id=?", (config.strategy_id,))
+            new_cells = [replace(cell, stage=CellStage.UNTRIGGERED) for cell in cells]
+            conn.executemany(
+                """INSERT INTO cells (
+                    strategy_id, cell_id, cell_index, buy_price, sell_price, stage,
+                    entry_order_id, exit_order_id, entry_client_id, exit_client_id,
+                    open_qty, exit_executed_qty, entry_filled_at, cycle_count,
+                    budget_usdt, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [self._cell_values(cell, now) for cell in new_cells],
+            )
+            conn.execute(
+                """UPDATE strategies SET anchor_price=?, grid_ratio=?, grid_count=?,
+                   order_usdt=?, lower_price=?, upper_price=?, grid_budget_usdt=?,
+                   grid_generation=?, fixed_entry_mode=?, updated_at=?
+                   WHERE strategy_id=?""",
+                (str(config.anchor_price), str(config.grid_ratio), config.grid_count,
+                 str(config.order_usdt), str(config.lower_price),
+                 str(config.upper_price), str(config.grid_budget_usdt),
+                 config.grid_generation, config.fixed_entry_mode.value, now,
+                 config.strategy_id),
+            )
+            conn.execute(
+                """UPDATE position_pools SET actual_qty='0', logical_qty='0',
+                   external_reserved_qty='0', unassigned_qty='0', shortage_qty='0',
+                   status='consistent', checked_at=?
+                   WHERE market_type=? AND symbol=? AND position_side='LONG'""",
+                (now, config.market_type.value, config.symbol),
+            )
+            conn.execute(
+                """INSERT INTO events(
+                    strategy_id, run_id, cell_id, event_type, payload_json, created_at
+                ) VALUES (?, NULL, NULL, 'GRID_FLAT_TRIGGERED_RESET', ?, ?)""",
+                (config.strategy_id, json.dumps({
+                    "old_generation": expected_generation,
+                    "new_generation": config.grid_generation,
+                    "old_cell_count": len(old_cells),
+                    "new_cell_count": len(new_cells),
+                    "discarded_old_logical_qty": str(old_qty),
+                    "discarded_old_order_references": old_order_references,
+                    "historical_net_grid_profit_usdt": str(historical_net_grid_profit),
+                    "mark_price": str(mark),
+                    "old_budget_usdt": row["grid_budget_usdt"],
+                    "new_budget_usdt": str(config.grid_budget_usdt),
+                    "entry_mode": config.fixed_entry_mode.value,
+                }), now),
+            )
+
     def settle_reconfiguration_order(
         self, strategy_id: str, cell_id: str, role: str, order: OrderSnapshot,
     ) -> bool:
