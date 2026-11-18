@@ -13,6 +13,7 @@ from grid_server.application.grid_performance import strategy_performance
 from grid_server.application.service import GridService
 from grid_server.domain import CellStage, FixedEntryMode, OrderSide, StrategyStatus
 from grid_server.infrastructure.sqlite_store import SQLiteStore
+from grid_server.infrastructure.binance import BinanceAPIError
 from grid_server.interfaces.api import create_app
 from tests.fakes import FakeExchange
 
@@ -217,3 +218,96 @@ def test_late_fee_history_reinvests_into_already_rearmed_buy() -> None:
         assert after.entry_order_id is not None
         assert exchange.orders[after.entry_order_id].original_qty == original_qty + exchange.filters.step_size
         assert exchange.calls.get("place_market_order", 0) == 0
+
+
+def test_triggered_grid_accepts_funded_downside_without_full_budget() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = SQLiteStore(Path(directory) / "cash-preview.sqlite3")
+        exchange = FakeExchange(Decimal("100"))
+        exchange.available_balance = Decimal("350")
+        config = GridService(store).create_fixed(
+            "SOXLUSDT", Decimal("80"), Decimal("120"), 4,
+            Decimal("400"), Decimal("0.01"),
+            fixed_entry_mode=FixedEntryMode.PRICE_TRIGGERED,
+        )
+        store.mark_started(config.strategy_id)
+        FixedGridEngine(store, exchange, config.strategy_id).tick()
+        assert len(exchange.get_open_orders(config.symbol)) == 3
+        assert exchange.get_positions() == []
+        assert exchange.calls.get("place_market_order", 0) == 0
+
+        with tempfile.TemporaryDirectory() as lower_directory:
+            low_store = SQLiteStore(Path(lower_directory) / "underfunded.sqlite3")
+            low_exchange = FakeExchange(Decimal("100"))
+            low_exchange.available_balance = Decimal("303")
+            low_config = GridService(low_store).create_fixed(
+                "SOXLUSDT", Decimal("80"), Decimal("120"), 4,
+                Decimal("400"), Decimal("0.01"),
+                fixed_entry_mode=FixedEntryMode.PRICE_TRIGGERED,
+            )
+            low_store.mark_started(low_config.strategy_id)
+            with pytest.raises(ValueError, match="triggered downside requirement"):
+                FixedGridEngine(low_store, low_exchange, low_config.strategy_id).tick()
+            assert low_exchange.get_open_orders(low_config.symbol) == []
+
+
+def test_triggered_grid_waits_for_cash_without_stopping_or_overplacing() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = SQLiteStore(Path(directory) / "cash-gate.sqlite3")
+        exchange = FakeExchange(Decimal("100"))
+        exchange.available_balance = Decimal("400")
+        config = GridService(store).create_fixed(
+            "SOXLUSDT", Decimal("80"), Decimal("120"), 4,
+            Decimal("400"), Decimal("0.01"),
+            fixed_entry_mode=FixedEntryMode.PRICE_TRIGGERED,
+        )
+        store.mark_started(config.strategy_id)
+        engine = FixedGridEngine(store, exchange, config.strategy_id)
+        engine.tick()
+        for order in exchange.get_open_orders(config.symbol):
+            exchange.cancel_order(config.symbol, order.order_id)
+        exchange.available_balance = Decimal("250")
+        engine.tick()
+        assert len(exchange.get_open_orders(config.symbol)) == 2
+        assert store.get_strategy(config.strategy_id).status == StrategyStatus.RUNNING
+        assert any(event["event_type"] == "TRIGGERED_ENTRY_FUNDS_WAIT"
+                   for event in store.list_events(config.strategy_id))
+
+        exchange.available_balance = Decimal("50")
+        engine.tick()
+        assert len(exchange.get_open_orders(config.symbol)) == 2
+        exchange.available_balance = Decimal("200")
+        engine.tick()
+        assert len(exchange.get_open_orders(config.symbol)) == 3
+        assert any(event["event_type"] == "TRIGGERED_ENTRY_FUNDS_AVAILABLE"
+                   for event in store.list_events(config.strategy_id))
+
+
+def test_triggered_grid_margin_rejection_waits_for_next_cycle() -> None:
+    class OnceInsufficient(FakeExchange):
+        rejected = False
+
+        def place_limit_order(self, *args, **kwargs):
+            if not self.rejected:
+                self.rejected = True
+                raise BinanceAPIError("Binance -2019: Margin is insufficient")
+            return super().place_limit_order(*args, **kwargs)
+
+    with tempfile.TemporaryDirectory() as directory:
+        store = SQLiteStore(Path(directory) / "margin-reject.sqlite3")
+        exchange = OnceInsufficient(Decimal("100"))
+        exchange.available_balance = Decimal("400")
+        config = GridService(store).create_fixed(
+            "SOXLUSDT", Decimal("80"), Decimal("120"), 4,
+            Decimal("400"), Decimal("0.01"),
+            fixed_entry_mode=FixedEntryMode.PRICE_TRIGGERED,
+        )
+        store.mark_started(config.strategy_id)
+        engine = FixedGridEngine(store, exchange, config.strategy_id)
+        engine.tick()
+        assert store.get_strategy(config.strategy_id).status == StrategyStatus.RUNNING
+        assert exchange.get_open_orders(config.symbol) == []
+        assert any(event["event_type"] == "TRIGGERED_ENTRY_FUNDS_WAIT"
+                   for event in store.list_events(config.strategy_id))
+        engine.tick()
+        assert exchange.get_open_orders(config.symbol)

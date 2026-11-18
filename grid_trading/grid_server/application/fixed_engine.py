@@ -24,6 +24,13 @@ class FixedGridEngine(TradingEngine):
     REBALANCE_ABOVE = 15
     MAX_WINDOW_CANCELS_PER_TICK = 10
 
+    @staticmethod
+    def _triggered_cash_reserve(config) -> Decimal:
+        # Keep a small fee/funding cushion without making tiny test grids
+        # require a full 1,000 USDT reserve.
+        assert config.grid_budget_usdt is not None
+        return min(Decimal("1000"), config.grid_budget_usdt * Decimal("0.01"))
+
     def _event(self, event_type: str, cell: GridCell, payload: dict) -> None:
         if event_type == "CYCLE_CLOSED" or (
             event_type == "EXIT_ENDED" and payload.get("action") == "cycle_closed"
@@ -177,11 +184,69 @@ class FixedGridEngine(TradingEngine):
             return
         if not self._order_is_ready(OrderSide.BUY, cell.buy_price):
             return
+        config = self._config()
+        cash_before = None
+        required = Decimal("0")
+        if config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+            quantity = self._quantity(cell.buy_price, cell)
+            if quantity > 0:
+                available = getattr(self, "_tick_free_cash", None)
+                if available is None:
+                    available = self.exchange.get_available_balance("USDT")
+                required = quantity * cell.buy_price
+                reserve = self._triggered_cash_reserve(config)
+                if available < required + reserve:
+                    if not getattr(self, "_triggered_cash_waiting", False):
+                        self.store.append_event(
+                            self.strategy_id, "TRIGGERED_ENTRY_FUNDS_WAIT", {
+                                "available_usdt": str(available),
+                                "required_order_usdt": str(required),
+                                "reserve_usdt": str(reserve),
+                            }, cell.cell_id, self.run_id,
+                        )
+                    self._triggered_cash_waiting = True
+                    self._tick_free_cash = available
+                    return
+                cash_before = available
+                # The account snapshot may not yet reflect orders submitted in
+                # this tick. Reserve their full notional locally before trying
+                # another cell; an unknown submission remains reserved.
+                self._tick_free_cash = available - required
         try:
             super()._place_entry(cell)
         except BinanceAPIError as exc:
+            if cash_before is not None:
+                self._tick_free_cash = cash_before
+            if (config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED
+                    and any(code in str(exc) for code in ("-2018", "-2019"))):
+                # The exchange's margin check can be stricter than the last
+                # available-balance snapshot. Wait for a fresh next-cycle
+                # balance instead of turning the strategy into an error loop.
+                if not getattr(self, "_triggered_cash_waiting", False):
+                    self.store.append_event(
+                        self.strategy_id, "TRIGGERED_ENTRY_FUNDS_WAIT", {
+                            "available_usdt": str(cash_before),
+                            "required_order_usdt": str(required),
+                            "reason": "exchange_margin_rejection",
+                        }, cell.cell_id, self.run_id,
+                    )
+                self._triggered_cash_waiting = True
+                self._tick_free_cash = Decimal("0")
+                return
             if not self._retryable_price_rejection(exc):
                 raise
+            return
+        except Exception:
+            if cash_before is not None:
+                self._tick_free_cash = cash_before
+            raise
+        if cash_before is not None and getattr(self, "_triggered_cash_waiting", False):
+            self.store.append_event(
+                self.strategy_id, "TRIGGERED_ENTRY_FUNDS_AVAILABLE", {
+                    "available_usdt": str(cash_before),
+                }, cell.cell_id, self.run_id,
+            )
+            self._triggered_cash_waiting = False
 
     def _ensure_exit(self, cell: GridCell, quantity: Decimal | None = None) -> None:
         allowed = getattr(self, "_window_exit_ids", None)
@@ -245,6 +310,7 @@ class FixedGridEngine(TradingEngine):
         mark = self.exchange.get_mark_price(config.symbol)
         self._tick_mark = mark
         self._tick_price_limits = None
+        self._tick_free_cash = None
         seed_id = f"seed:{self.strategy_id}"
         seed = self.store.get_capital_action(seed_id)
         if seed is None:
@@ -695,7 +761,26 @@ class FixedGridEngine(TradingEngine):
         mark = self.exchange.get_mark_price(config.symbol)
         if not config.lower_price <= mark <= config.upper_price:
             raise ValueError("current price is outside fixed grid boundaries")
-        if self.exchange.get_available_balance("USDT") < config.grid_budget_usdt:
+        available = self.exchange.get_available_balance("USDT")
+        if config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+            # Only buy levels at or below the starting mark are exposed on a
+            # direct decline. Require enough cash for that path, then gate
+            # every later buy order against live free margin.
+            downside_budget = sum(
+                (cell.budget_usdt for cell in self.store.list_cells(self.strategy_id)
+                 if cell.buy_price <= mark),
+                Decimal("0"),
+            )
+            required = min(
+                config.grid_budget_usdt,
+                downside_budget + self._triggered_cash_reserve(config),
+            )
+            if available < required:
+                raise ValueError(
+                    f"available USDT {available} is below triggered downside "
+                    f"requirement {required}"
+                )
+        elif available < config.grid_budget_usdt:
             raise ValueError("available USDT is below the grid budget")
         if any(position.symbol == config.symbol for position in self.exchange.get_positions()):
             raise ValueError("existing position on the symbol must be resolved before seeding")
