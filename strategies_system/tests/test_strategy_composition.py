@@ -101,7 +101,7 @@ class StrategyCompositionTests(unittest.TestCase):
 
         self.assertEqual(
             registry.strategy_types,
-            ("entry-then-ladder-exit/v1",),
+            ("entry-then-ladder-exit/v1", "fixed-range-equal-usdt-grid/v1"),
         )
         self.assertIsInstance(
             registry.get("initial-entry-ladder-take-profit/v1"),

@@ -316,7 +316,7 @@ class StrategyInstance:
         effects = {intent.position_effect for intent in intents}
         opening = effects & {PositionEffect.OPEN, PositionEffect.INCREASE}
         reducing = effects & {PositionEffect.REDUCE, PositionEffect.CLOSE}
-        if opening and reducing:
+        if opening and reducing and not policy.allow_simultaneous_entry_exit:
             raise ValueError(
                 "one Strategy event cannot both increase and reduce exposure"
             )

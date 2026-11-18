@@ -30,8 +30,9 @@
 - `AttributionReconciliation`：与 Runtime 权威账户快照对比仓位、资金和盈亏残差；
 - `InitialEntryRule`、`LadderTakeProfitRule` 与 `FixedEqualUsdtGridRule`：内置可复用 TradingRule；
 - `build_trading_rule_registry()`：不依赖实验数据库的内置规则目录。
-- `build_strategy_definition_registry()`：当前注册产品中立的
-  `entry-then-ladder-exit/v1`，由 InitialEntryRule 与 LadderTakeProfitRule 组成。
+- `build_strategy_definition_registry()`：注册产品中立的
+  `entry-then-ladder-exit/v1`，以及由 FixedEqualUsdtGridRule 组成的
+  `fixed-range-equal-usdt-grid/v1`。
 
 Rule Intent 使用明确数量和显式数量单位；当前 COIN-M Ladder 全程以 `contracts` 张数
 表达，不接受“目标仓位”式模糊指令。
@@ -40,12 +41,17 @@ COIN-M 阶梯止盈的 Plugin/Adapter 外部入口保持不变，内部已经运
 `StrategyDefinition → StrategySpec → StrategyInstance → TradingRule` 链路。HODL 和
 Grid 仍使用 v1.0 运行路径；已迁移的阶梯止盈单策略 Plugin 会自动包装为只有一个 Strategy launch 的 Application。
 
-`fixed-equal-usdt-grid/v1` 已进入 TradingRuleRegistry。它以运行时确认的 Cell 状态和
-标记价为输入，调用 `grid_rule.fixed_equal_usdt` 与 `grid_rule.fixed_window` 生成买卖
-意图和撤单计划；触发式与预建仓两种模式使用同一套几何、预算和窗口规则。实盘引擎
-也调用这些纯函数。当前固定网格的种子建仓、成交确认、费用和持仓对账仍在原运行时，
-旧 `fixed-grid/v1` 仿真 Plugin 尚未迁入 `StrategyInstance → TradingRule` 路径；
-因此规则目录能显示定义，但暂时不会把旧网格实验算作这条新 Rule 的实例。
+`fixed-range-equal-usdt-grid/v1` Strategy 接收标的、价格区间、单元格数量、总预算、
+交易精度和启动模式，绑定一条 `fixed-equal-usdt-grid/v1` TradingRule。它以运行时
+确认的 Cell 状态和标记价为输入，调用 `grid_rule.fixed_equal_usdt` 与
+`grid_rule.fixed_window` 生成买卖意图和撤单计划；触发式与预建仓模式使用同一套
+几何、预算和窗口规则。实盘引擎也调用这些纯函数。StrategyInstance 已验证同一次
+观测可接受这条策略的买卖两侧意图；其他策略仍默认拒绝混合开仓与减仓。
+
+当前固定网格的种子建仓、成交确认、费用和持仓对账仍在原运行时。旧
+`fixed-grid/v1` 仿真 Plugin 尚未迁入 `StrategyInstance → TradingRule` 路径；
+因此新 Strategy 已出现在目录，但旧网格实验不会自动归属它，也不能仅凭该目录项
+运行完整收益仿真。
 
 前端的“策略”目录直接读取 StrategyDefinitionRegistry，“交易规则”目录直接读取
 TradingRuleRegistry；清空实验 SQLite 后两类定义仍会显示。仿真 Strategy Component

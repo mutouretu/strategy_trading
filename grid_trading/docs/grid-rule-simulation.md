@@ -12,9 +12,12 @@
 
 `strategies_system` 的 TradingRuleRegistry 现已注册
 `fixed-equal-usdt-grid/v1`。其 `TradingRule.transition` 将已确认 Cell 观测转换成
-`RuleIntentProposal` 和撤单计划，并与实盘引擎共用上述纯函数。现阶段固定网格的
-种子建仓与成交确认仍由运行时负责；旧仿真 Plugin 尚未由这条 Rule 驱动，因此
-研究页会显示规则定义，但旧网格实验不会自动归属它。
+`RuleIntentProposal` 和撤单计划，并与实盘引擎共用上述纯函数。
+`fixed-range-equal-usdt-grid/v1` StrategyDefinition 已把价格范围、预算、格数、
+启动模式和窗口参数解析为这条 Rule 的配置，并注册到研究页的策略目录。
+StrategyInstance 已能在同一次观测中接收该网格的买入与卖出意图。
+现阶段固定网格的种子建仓与成交确认仍由运行时负责；旧仿真 Plugin 尚未由这条
+Strategy/Rule 驱动，因此研究页可以查看定义，但旧网格实验不会自动归属它。
 
 `seeded` 模式按现价预建卖侧仓位；`price_triggered` 模式从零仓位启动，价格触及
 单元格买价后才激活该买单。两种模式使用同一套纯规则和执行引擎。
