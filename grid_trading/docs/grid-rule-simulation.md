@@ -28,6 +28,19 @@
 代表当前等 U 天地网格。后续应把成交状态转换、费用账本和策略组合逐步迁入共享
 规则/运行时，并以同一批行情比较实盘适配层与仿真适配层的事件序列。
 
+只读结果页使用 `grid_trading/simulation_app.py`，可查看内置固定行情样例，或上传
+包含 `open,high,low,close` 四列的 CSV（最多 300 根）。它使用临时数据库和内存
+交易所，不读取交易所 API，也不操作实盘策略。启动示例：
+
+```bash
+cd grid_trading
+python -m streamlit run simulation_app.py --server.address 127.0.0.1 --server.port 8515
+```
+
+页面的 `SOXLUSDT` 样例是人工构造的震荡路径，用于观察订单状态，不是历史行情或
+收益回测。页面合约过滤器采用 SOXL 的示例精度（价格 0.01、数量 0.01、最小名义
+价值 5 U）；上传其他合约数据时也沿用这些示例过滤器。
+
 最小回放示例：
 
 ```python
