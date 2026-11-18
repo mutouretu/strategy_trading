@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import fields, is_dataclass
 from decimal import Decimal
 from enum import Enum
-from typing import Protocol
 
 from market_protocol import MarketFrame
 from simulation_runtime import (
@@ -28,21 +28,42 @@ from strategy_application import (
 from trading_strategies.kernel import RuleIntentMode, TradeSide
 
 
-class StrategyApplicationEventRouter(Protocol):
+class StrategyApplicationEventRouter(ABC):
     """Translate strategy-specific market/fill facts into Rule inputs."""
 
+    def inputs_on_start(
+        self,
+        application: StrategyApplication,
+        frame: MarketFrame,
+    ) -> Mapping[str, Mapping[str, object]]:
+        return {}
+
+    @abstractmethod
     def inputs_before_instructions(
         self,
         application: StrategyApplication,
         frame: MarketFrame,
     ) -> Mapping[str, Mapping[str, object]]: ...
 
+    @abstractmethod
     def inputs_for_fill(
         self,
         application: StrategyApplication,
         fill: SimFill,
         owner: ApplicationIntentOwner,
     ) -> Mapping[str, object]: ...
+
+    def inputs_after_market(
+        self,
+        application: StrategyApplication,
+        frame: MarketFrame,
+    ) -> Mapping[str, Mapping[str, object]]:
+        return {}
+
+    def begin_fill_batch(self, fills: Sequence[SimFill]) -> None:
+        """Allow a router to defer Rule re-planning until all fills are known."""
+
+        return None
 
 
 class StrategyApplicationSimulationAdapter:
@@ -57,6 +78,7 @@ class StrategyApplicationSimulationAdapter:
         settlement_asset: str,
         external_strategy_type: str,
         instruction_tags: Mapping[str, str] | None = None,
+        active_intent_at_open: bool = False,
     ) -> None:
         self.application = application
         self.event_router = event_router
@@ -64,6 +86,9 @@ class StrategyApplicationSimulationAdapter:
         self.settlement_asset = settlement_asset.strip().upper()
         self.external_strategy_type = external_strategy_type.strip()
         self.instruction_tags = dict(instruction_tags or {})
+        if not isinstance(active_intent_at_open, bool):
+            raise TypeError("active_intent_at_open must be a bool")
+        self.active_intent_at_open = active_intent_at_open
         if self.contract_size <= 0:
             raise ValueError("contract_size must be > 0")
         if not self.settlement_asset:
@@ -88,6 +113,9 @@ class StrategyApplicationSimulationAdapter:
     def initialize(self, frame: MarketFrame) -> None:
         self._validate_frame(frame)
         self.application.start()
+        routed = self.event_router.inputs_on_start(self.application, frame)
+        if routed:
+            self.application.dispatch_batch(routed)
 
     def instructions_for(self, frame: MarketFrame) -> tuple[TradeInstruction, ...]:
         self._validate_frame(frame)
@@ -104,7 +132,10 @@ class StrategyApplicationSimulationAdapter:
                 if intent.intent_key in self._issued_active_intents:
                     continue
                 self._issued_active_intents.add(intent.intent_key)
-                price = intent.target_price or frame.open
+                price = (
+                    frame.open if self.active_intent_at_open
+                    else (intent.target_price or frame.open)
+                )
             else:
                 assert intent.target_price is not None
                 if not frame.low <= intent.target_price <= frame.high:
@@ -143,6 +174,7 @@ class StrategyApplicationSimulationAdapter:
             self.on_funding(funding)
 
     def _route_fills(self, fills: Sequence[SimFill]) -> None:
+        self.event_router.begin_fill_batch(fills)
         for fill in fills:
             owner = self.application.resolve_intent(fill.source_intent_key)
             inputs = self.event_router.inputs_for_fill(
@@ -186,6 +218,9 @@ class StrategyApplicationSimulationAdapter:
 
     def on_market(self, frame: MarketFrame) -> None:
         self._validate_frame(frame)
+        routed = self.event_router.inputs_after_market(self.application, frame)
+        if routed:
+            self.application.dispatch_batch(routed)
 
     def visible_intents(self) -> tuple[IntentSnapshot, ...]:
         return tuple(

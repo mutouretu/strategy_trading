@@ -178,6 +178,12 @@
           ? `${nextRun.intents.length} 条意图生命周期 · ${nextRun.instructions.length} 条交易指令 · ${nextRun.fills.length} 条成交 · ${nextRun.funding_events.length} 次资金费`
           : `${nextRun.orders.length} 条订单生命周期 · ${nextRun.fills.length} 条成交 · ${nextRun.equity.length} 个账户快照`
         : "市场数据已载入；当前 run 尚无策略成交";
+    if (nextRun.manifest.replay_only && nextRun.manifest.accounting_available === false) {
+      const sourceLabel = nextRun.manifest.market_data_kind === "synthetic_sample"
+        ? "人工行情 · "
+        : "";
+      elements.message.textContent = `订单行为回放 · ${sourceLabel}未计算手续费、资金费或收益。${elements.message.textContent}`;
+    }
     const settlementAsset = String(
       nextRun.summary.equity_asset ||
         nextRun.equity[0]?.equity_asset ||
@@ -836,7 +842,7 @@
         const side = intent.side.toLowerCase();
         const target =
           intent.target_price === null
-            ? "下一根开盘"
+            ? (run.manifest.replay_only ? "当根标记价" : "下一根开盘")
             : money(intent.target_price);
         return `
           <tr>

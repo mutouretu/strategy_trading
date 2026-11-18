@@ -93,6 +93,7 @@ class StrategyCoordinationPolicy:
     proposal_batch: ProposalBatchMode = ProposalBatchMode.ATOMIC_PER_EVENT
     conflict_resolution: ConflictResolution = ConflictResolution.FAIL_FAST
     exit_controller_rule_key: str | None = None
+    allow_simultaneous_entry_exit: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.proposal_batch, ProposalBatchMode):
@@ -101,6 +102,8 @@ class StrategyCoordinationPolicy:
             raise TypeError(
                 "conflict_resolution must be a ConflictResolution"
             )
+        if not isinstance(self.allow_simultaneous_entry_exit, bool):
+            raise TypeError("allow_simultaneous_entry_exit must be a bool")
         if self.exit_controller_rule_key is not None:
             object.__setattr__(
                 self,
@@ -111,11 +114,14 @@ class StrategyCoordinationPolicy:
                 ),
             )
 
-    def to_document(self) -> dict[str, str | None]:
+    def to_document(self) -> dict[str, str | bool | None]:
         """Return the stable JSON-compatible policy payload."""
 
-        return {
+        document: dict[str, str | bool | None] = {
             "proposal_batch": self.proposal_batch.value,
             "conflict_resolution": self.conflict_resolution.value,
             "exit_controller_rule_key": self.exit_controller_rule_key,
         }
+        if self.allow_simultaneous_entry_exit:
+            document["allow_simultaneous_entry_exit"] = True
+        return document

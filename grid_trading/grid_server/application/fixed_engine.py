@@ -6,7 +6,14 @@ import os
 from dataclasses import replace
 from decimal import Decimal, ROUND_CEILING
 
-from ..domain import CellStage, GridCell, OrderSide, OrderStatus, StrategyStatus
+from grid_rule.fixed_equal_usdt import (
+    FixedEntryMode as RuleFixedEntryMode,
+    initial_sell_allocations,
+    order_quantity,
+)
+from grid_rule.fixed_window import WindowCell, WindowInput, plan_fixed_window
+
+from ..domain import CellStage, FixedEntryMode, GridCell, OrderSide, OrderStatus, StrategyStatus
 from ..domain.grid import fixed_cell_budgets, round_down
 from ..infrastructure.binance import BinanceAPIError, BinanceFuturesExchange
 from ..infrastructure.okx import OkxSwapExchange
@@ -68,10 +75,10 @@ class FixedGridEngine(TradingEngine):
         assert self.filters is not None
         if cell is None:
             raise ValueError("fixed grid sizing requires a cell")
-        quantity = round_down(cell.budget_usdt / price, self.filters.step_size)
-        if quantity < self.filters.min_qty or quantity * price < self.filters.min_notional:
-            return Decimal("0")
-        return quantity
+        return order_quantity(
+            cell, step_size=self.filters.step_size,
+            min_qty=self.filters.min_qty, min_notional=self.filters.min_notional,
+        )
 
     def _submit_limit_order(
         self,
@@ -249,11 +256,13 @@ class FixedGridEngine(TradingEngine):
         seed = self.store.get_capital_action(seed_id)
         if seed is None:
             self._preflight_seed()
-            assert config.grid_budget_usdt is not None
-            self.store.create_capital_action(
-                seed_id, self.strategy_id, "seed", config.grid_budget_usdt
-            )
-            seed = self.store.get_capital_action(seed_id)
+            if config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+                seed = self.store.activate_triggered_fixed_grid(self.strategy_id)
+            else:
+                assert config.grid_budget_usdt is not None
+                seed = self.store.create_capital_action(
+                    seed_id, self.strategy_id, "seed", config.grid_budget_usdt
+                )
 
         if seed["status"] == "manual_review":
             raise RuntimeError(f"initial position needs manual review: {seed['message']}")
@@ -286,7 +295,10 @@ class FixedGridEngine(TradingEngine):
                     return mark
 
             self._reinvest_closed_cells()
-            self._arm_untriggered()
+            if config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+                self.store.arm_triggered_fixed_cells(self.strategy_id, mark)
+            else:
+                self._arm_untriggered()
             self.sync_orders_only()
             self._refresh_order_window(mark, prior_entries, before)
             self.sync_orders_only()
@@ -315,162 +327,75 @@ class FixedGridEngine(TradingEngine):
             and cell.stage in {CellStage.MANUAL_REVIEW, CellStage.PENDING_EXIT}
         )
         self._exit_repair_ids = repair_ids
-        entries = [cell for cell in cells if cell.stage == CellStage.PENDING_ENTRY]
-        exits = [cell for cell in cells if cell.stage == CellStage.PENDING_EXIT and cell.open_qty > 0]
-        active_entries = {cell.cell_id for cell in entries if cell.entry_order_id is not None}
-        active_exits = {cell.cell_id for cell in exits if cell.exit_order_id is not None}
-        ready_entry_cells = [
-            cell for cell in entries if self._order_is_ready(OrderSide.BUY, cell.buy_price)
-        ]
-        ready_exit_cells = [
-            cell for cell in exits if self._order_is_ready(OrderSide.SELL, cell.sell_price)
-        ]
-        ready_entries = sum(cell.cell_id in active_entries for cell in ready_entry_cells)
-        ready_exits = sum(cell.cell_id in active_exits for cell in ready_exit_cells)
-        # ready_entry_cells has already passed the exchange price-band check.
-        # A buy line crossed during the separate position patrol has priority
-        # within the same ten-order target, even if mark has moved far below it.
-        crossed_entry_cells = sorted(
-            (
-                cell for cell in ready_entry_cells
-                if cell.entry_order_id is None
-                and cell.cell_id not in prior_exits
-                and cell.buy_price >= mark
-            ),
-            key=lambda cell: (abs(cell.buy_price - mark), cell.index),
-        )[:self.ORDERS_PER_SIDE]
-        crossed_entry_ids = {cell.cell_id for cell in crossed_entry_cells}
-        preferred_entry_cells = crossed_entry_cells + [
-            cell for cell in sorted(
-                ready_entry_cells, key=lambda item: (abs(item.buy_price - mark), item.index)
-            )
-            if cell.cell_id not in crossed_entry_ids
-        ][:self.ORDERS_PER_SIDE - len(crossed_entry_cells)]
-        preferred_entries = {cell.cell_id for cell in preferred_entry_cells}
-        preferred_exit_cells = sorted(
-            ready_exit_cells, key=lambda cell: (abs(cell.sell_price - mark), cell.index)
-        )[:self.ORDERS_PER_SIDE]
-        preferred_exits = {cell.cell_id for cell in preferred_exit_cells}
-        paired_entries = {
-            cell.cell_id for cell in entries
-            if cell.entry_order_id is None and cell.cell_id in prior_exits
-        }
-        paired_exits = {
-            cell.cell_id for cell in exits
-            if cell.exit_order_id is None and cell.cell_id in prior_entries
-        }
-        price_priority_changed = (
-            bool((preferred_entries - active_entries - paired_entries)
-                 and (active_entries - preferred_entries))
-            or bool((preferred_exits - active_exits - paired_exits)
-                    and (active_exits - preferred_exits))
-        )
-        repair_candidates = (repair_ids & preferred_exits) - active_exits
-        audited_repair_exits = set()
-        if repair_candidates:
+        repair_audit_passed = False
+        if repair_ids:
             config = self._config()
             pool = self.store.get_position_pool(
                 config.symbol, self._position_side(), config.market_type,
             )
-            if (pool is not None and pool["status"] == "consistent"
-                    and Decimal(pool["external_reserved_qty"]) == 0):
-                audited_repair_exits = repair_candidates
-        # A side may still have 5-9 orders while a closer Cell is unarmed
-        # between them. Refill that interior gap; keep the usual threshold
-        # for a missing Cell only at the far edge of the window.
-        def has_interior_gap(preferred: list[GridCell], active: set[str],
-                             paired: set[str], blocked: set[str] | None = None) -> bool:
-            blocked_ids = blocked if blocked is not None else set()
-            farthest_active = max(
-                (index for index, cell in enumerate(preferred) if cell.cell_id in active),
-                default=-1,
+            repair_audit_passed = (
+                pool is not None and pool["status"] == "consistent"
+                and Decimal(pool["external_reserved_qty"]) == 0
             )
-            return any(
-                index < farthest_active and cell.cell_id not in active
-                and cell.cell_id not in paired
-                and cell.cell_id not in blocked_ids
-                for index, cell in enumerate(preferred)
-            )
-
-        entry_gap = has_interior_gap(preferred_entry_cells, active_entries, paired_entries)
-        exit_gap = has_interior_gap(
-            preferred_exit_cells, active_exits, paired_exits,
-            repair_ids - audited_repair_exits,
-        )
-        # Rebuild when one side is sparse, an old window has grown too large,
-        # a price gap leaves an entire side outside the executable band, or a
-        # closer executable cell is waiting while a farther order uses its slot,
-        # or a nearer Cell is missing inside an otherwise populated window.
-        # A bounded cleanup can span several ticks and must finish even if
-        # its first batch brings the count below the upper threshold.
-        if (not getattr(self, "_window_initialized", False)
-                or min(len(active_entries), len(active_exits)) < self.REBALANCE_BELOW
-                or max(len(active_entries), len(active_exits)) > self.REBALANCE_ABOVE
-                or getattr(self, "_window_cleanup_pending", False)
-                or min(ready_entries, ready_exits) == 0
-                or price_priority_changed
-                or entry_gap or exit_gap
-                or bool(audited_repair_exits)
-                or bool(crossed_entry_ids)):
-            # A newly completed buy or sell keeps its paired order even when
-            # the price-priority window is already full.
-            self._window_entry_ids = preferred_entries | paired_entries
-            self._window_exit_ids = preferred_exits | paired_exits
-            self._window_cleanup_pending = True
-            self._window_cleanup_pending = not self._defer_far_orders(
-                mark, self._window_entry_ids, self._window_exit_ids
-            )
-            signature = (
-                frozenset(self._window_entry_ids), frozenset(self._window_exit_ids),
-                frozenset(active_entries), frozenset(active_exits),
-            )
-            if signature != getattr(self, "_last_window_signature", None):
-                self.store.append_event(
-                    self.strategy_id, "ORDER_WINDOW_REBALANCED", {
-                        "mark": str(mark),
-                        "entries_before": len(active_entries),
-                        "exits_before": len(active_exits),
-                        "entry_target": self.ORDERS_PER_SIDE,
-                        "exit_target": self.ORDERS_PER_SIDE,
-                        "price_priority": price_priority_changed,
-                        "entry_gap": entry_gap,
-                        "exit_gap": exit_gap,
-                        "audited_exit_repair": bool(audited_repair_exits),
-                        "crossed_entry_priority": bool(crossed_entry_ids),
-                    }, run_id=self.run_id,
-                )
-                self._last_window_signature = signature
-        else:
-            # Keep existing limits in place. Paired orders take priority over
-            # the window target so a newly filled cell can complete its cycle.
-            # The next batch rebalance returns both sides to ten.
-            self._window_entry_ids = active_entries
-            self._window_exit_ids = active_exits
-            new_entries = [
-                cell for cell in entries
-                if cell.entry_order_id is None and cell.cell_id in prior_exits
-            ]
-            # A fresh buy gets its paired sell. Previously deferred held cells
-            # are also caught up after mark crosses their sell target; ordinary
-            # far cells wait for the next batch rebalance.
-            new_exits = [
-                cell for cell in exits
-                if cell.exit_order_id is None and cell.cell_id in prior_entries
-            ]
-            crossed_exits = sorted(
-                (
-                    cell for cell in exits
-                    if cell.exit_order_id is None
-                    and cell.cell_id not in prior_entries
-                    and cell.sell_price <= mark
+        observations = tuple(
+            WindowCell(
+                cell_id=cell.cell_id, index=cell.index,
+                buy_price=cell.buy_price, sell_price=cell.sell_price,
+                stage=cell.stage.value, open_qty=cell.open_qty,
+                has_entry_order=cell.entry_order_id is not None,
+                has_exit_order=cell.exit_order_id is not None,
+                entry_ready=(
+                    cell.stage == CellStage.PENDING_ENTRY
+                    and self._order_is_ready(OrderSide.BUY, cell.buy_price)
                 ),
-                key=lambda cell: abs(cell.sell_price - mark),
-            )[:self.ORDERS_PER_SIDE]
-            new_exits.extend(crossed_exits)
-            for cell in sorted(new_entries, key=lambda item: abs(item.buy_price - mark)):
-                self._window_entry_ids.add(cell.cell_id)
-            for cell in sorted(new_exits, key=lambda item: abs(item.sell_price - mark)):
-                self._window_exit_ids.add(cell.cell_id)
+                exit_ready=(
+                    cell.stage == CellStage.PENDING_EXIT and cell.open_qty > 0
+                    and self._order_is_ready(OrderSide.SELL, cell.sell_price)
+                ),
+            )
+            for cell in cells
+        )
+        decision = plan_fixed_window(WindowInput(
+            cells=observations, mark=mark,
+            prior_entry_ids=frozenset(prior_entries),
+            prior_exit_ids=frozenset(prior_exits),
+            repair_ids=frozenset(repair_ids),
+            repair_audit_passed=repair_audit_passed,
+            initialized=getattr(self, "_window_initialized", False),
+            cleanup_pending=getattr(self, "_window_cleanup_pending", False),
+            entry_mode=RuleFixedEntryMode(self._config().fixed_entry_mode.value),
+            orders_per_side=self.ORDERS_PER_SIDE,
+            rebalance_below=self.REBALANCE_BELOW,
+            rebalance_above=self.REBALANCE_ABOVE,
+        ))
+        self._window_entry_ids = set(decision.entry_ids)
+        self._window_exit_ids = set(decision.exit_ids)
+        if not decision.rebalance:
+            return
+        self._window_cleanup_pending = True
+        self._window_cleanup_pending = not self._defer_far_orders(
+            mark, self._window_entry_ids, self._window_exit_ids
+        )
+        signature = (
+            frozenset(self._window_entry_ids), frozenset(self._window_exit_ids),
+            decision.active_entry_ids, decision.active_exit_ids,
+        )
+        if signature != getattr(self, "_last_window_signature", None):
+            self.store.append_event(
+                self.strategy_id, "ORDER_WINDOW_REBALANCED", {
+                    "mark": str(mark),
+                    "entries_before": len(decision.active_entry_ids),
+                    "exits_before": len(decision.active_exit_ids),
+                    "entry_target": self.ORDERS_PER_SIDE,
+                    "exit_target": self.ORDERS_PER_SIDE,
+                    "price_priority": decision.price_priority_changed,
+                    "entry_gap": decision.entry_gap,
+                    "exit_gap": decision.exit_gap,
+                    "audited_exit_repair": bool(decision.audited_repair_exits),
+                    "crossed_entry_priority": bool(decision.crossed_entry_ids),
+                }, run_id=self.run_id,
+            )
+            self._last_window_signature = signature
 
     def _defer_far_orders(self, mark: Decimal, entry_ids: set[str], exit_ids: set[str]) -> bool:
         """Cancel far limits in bounded batches; return whether cleanup finished."""
@@ -630,8 +555,9 @@ class FixedGridEngine(TradingEngine):
             }
             cells = [
                 cell for cell in self.store.list_cells(self.strategy_id)
-                if cell.stage == CellStage.UNTRIGGERED and cell.cycle_count > 0
-                and cell.open_qty == 0 and cell.entry_order_id is None
+                if cell.stage in {CellStage.UNTRIGGERED, CellStage.PENDING_ENTRY}
+                and cell.cycle_count > 0 and cell.open_qty == 0
+                and (cell.entry_order_id is not None or not cell.entry_client_id)
                 and (cell.cell_id, cell.cycle_count) in earned_cycles
             ]
             if not cells:
@@ -756,10 +682,12 @@ class FixedGridEngine(TradingEngine):
             raise ValueError("cannot add capital while a grid cell requires manual review")
         if action["operation"] == "seed":
             sell_cells = [cell for cell in cells if cell.sell_price > mark]
-            allocations = {
-                cell.cell_id: self._quantity(cell.buy_price, cell)
-                for cell in sell_cells
-            }
+            allocations = initial_sell_allocations(
+                cells, mark,
+                step_size=self.filters.step_size,
+                min_qty=self.filters.min_qty,
+                min_notional=self.filters.min_notional,
+            )
             if any(qty == 0 for qty in allocations.values()):
                 raise ValueError("initial sell-side cell is below exchange minimum")
         else:

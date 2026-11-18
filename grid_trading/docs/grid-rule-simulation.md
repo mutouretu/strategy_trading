@@ -1,5 +1,130 @@
 # Grid Rule 仿真雏形
 
+## 固定区间等 U 网格与实盘引擎对照（`feat/grid-rule-parity`）
+
+这条分支从 `grid` 的 `0111a36` 创建。现有 Binance/OKX 实盘和触发式测试网进程
+仍使用各自原来的工作目录，不读取本分支的改动。
+
+固定网格的价格边界、等 U 预算、下单数量、初始卖侧仓位、触发式买单激活条件和十单窗口选择现已放在
+`grid_rule.fixed_equal_usdt`、`grid_rule.fixed_window`；实盘 `FixedGridEngine`
+调用同一组纯规则。规则接收单元格状态和价格，返回目标挂单集合；交易所价格带、
+下单、撤单、恢复、资金和 SQLite 仍由实盘适配层负责。
+
+`strategies_system` 的 TradingRuleRegistry 现已注册
+`fixed-equal-usdt-grid/v1`。其 `TradingRule.transition` 将已确认 Cell 观测转换成
+`RuleIntentProposal` 和撤单计划，并与实盘引擎共用上述纯函数。
+`fixed-range-equal-usdt-grid/v1` StrategyDefinition 已把价格范围、预算、格数、
+启动模式和窗口参数解析为这条 Rule 的配置，并注册到研究页的策略目录。
+StrategyInstance 已能在同一次观测中接收该网格的买入与卖出意图。
+`fixed-equal-usdt-grid-simulation/v1` Plugin 通过通用
+`StrategyApplicationSimulationAdapter` 运行这条 Strategy。网格事件路由器只将
+行情与成交变成单元格观测；初始建仓由 `initial-entry/v1` Rule 发出一次建仓意图，
+网格挂单意图由 `fixed-equal-usdt-grid/v1` Rule 发出。旧 `fixed-grid/v1` 仿真 Plugin
+仍保留早期语义，其旧实验不会自动归属于新策略。
+
+通用适配器只负责市场事件、成交和 Rule 意图之间的通用执行流程，不保存网格单元格，
+也不按网格价格选择订单。`StrategyApplicationEventRouter` 定义事件转换接口；
+`FixedGridEventRouter` 实现网格专用的单元格状态、批量成交确认和 Rule 输入转换。
+其他策略可实现自己的路由器，无需在通用适配器中增加网格分支。
+
+样本实验配置 `strategies_system/experiments/soxl_equal_usdt_grid_15_90_1m_20261103_16_v1.json`
+使用下面的 Binance SOXLUSDT 分钟行情，预建仓、15–90、359 个等比单元格、
+50,000 U 总预算；约 0.5003% 格距。该结构实验按用户要求将手续费与资金费设为零，
+并暂不做自动复投或真实排队成交量模拟；报告分别列出种子仓位卖出收益、后续单元格
+配对收益、期末未实现盈亏与账户总盈亏。
+
+这份两周样本的零费用回放完成 3,620 次单元格买卖配对，配对收益 **2,516.8218 U**；
+初始卖侧仓位分批卖出 24 次，收益 **195.2864 U**；期末按单元格成本计的持仓
+浮亏 **3,598.8795 U**，合计 **-886.7713 U**（相对 50,000 U 为 **-1.7735%**）。
+单元格盈亏与账户权益变动精确对账。期间最大持仓名义价值约 **14,558.10 U**，
+因此 50,000 U 主要是覆盖下方格子的预算，并非全程投入的仓位。该实验不含手续费、
+资金费、复投、盘口排队和真实价格带，不能把收益数字直接当作实盘预测。
+
+`seeded` 模式按现价预建卖侧仓位；`price_triggered` 模式从零仓位启动，价格触及
+单元格买价后才激活该买单。两种模式使用同一套纯规则和执行引擎。
+
+## SOXLUSDT 一分钟历史行情
+
+`strategies_system/scripts/fetch_binance_um_daily_klines.py` 从 Binance Vision 获取
+USD-M 永续合约的逐日 1 分钟成交价 K 线，逐个核对官方 `.CHECKSUM` 的 SHA-256，
+再用现有导入器检查时间戳无重复、无缺分钟，写入仿真使用的内容寻址 Parquet。
+原始 ZIP、来源 URL、校验值和 Parquet 引用保存在本地 `experiments/market_data`
+目录；该目录按项目约定不提交 Git。
+
+2026-11-18 获取的一份 SOXLUSDT 样本覆盖 **2026-11-03 至 2026-11-16** 共 14 个
+完整 UTC 日、20,160 根 1 分钟 K 线。获取时 11 月 17 日的日档案尚未发布，
+因此样本没有拼入其他交易所或其他产品的行情。复现命令：
+
+```bash
+cd strategies_system
+PYTHONPATH=src python scripts/fetch_binance_um_daily_klines.py \
+  --symbol SOXLUSDT --start-date 2026-11-03 --end-date 2026-11-16 \
+  --output-root experiments/market_data
+```
+
+这份数据是合约成交价 OHLC，不是标记价、盘口或逐笔成交；它可以驱动分钟级订单
+行为回放，但无法仅凭 K 线还原同一分钟内的成交先后、排队成交量或资金费。
+
+`grid_server.simulation.FixedGridReplay` 接受 `market_simulator` 的
+`MarketSource`（包括 `FixedBarMarketSource` 和历史行情源），在临时数据库和内存交易所
+中执行同一个 `FixedGridEngine`。第一根 K 线用收盘价启动策略（预建仓模式同时建仓）；之后只让**前一根 K 线
+已经存在**的限价单按 OHLC 范围成交，再以本根收盘价运行下一次策略决策。
+同一根 K 线内新挂的限价单不会回填成交，避免用未知的盘中路径制造交易。
+回放结果逐根给出买卖挂单数、全量或部分成交订单、逻辑与交易所仓位、完成周期数。
+默认触价即全量成交；可注入 `fill_quantity(frame, order)`，返回这一根 K 线的
+增量成交量，以验证部分成交、撤余量及后续配对卖单。
+
+该回放是**订单行为对照**，还不能用于净收益结论：部分成交量须由调用方提供；
+它没有模拟盘口深度、真实价格带变化、手续费、资金费、保证金和经费用核实后的自动复投。旧的
+`FixedGridSimulationAdapter` 仍对应早期 `GridRuleEngine` 的固定网格语义，不能用它
+代表当前等 U 天地网格。后续应把成交状态转换、费用账本和策略组合逐步迁入共享
+规则/运行时，并以同一批行情比较实盘适配层与仿真适配层的事件序列。
+
+只读结果页使用 `grid_trading/simulation_app.py`，可查看内置固定行情样例，或上传
+包含 `open,high,low,close` 四列的 CSV（最多 300 根）。它使用临时数据库和内存
+交易所，不读取交易所 API，也不操作实盘策略。启动示例：
+
+```bash
+cd grid_trading
+python -m streamlit run simulation_app.py --server.address 127.0.0.1 --server.port 8515
+```
+
+页面的 `SOXLUSDT` 样例是人工构造的震荡路径，用于观察订单状态，不是历史行情或
+收益回测。页面合约过滤器采用 SOXL 的示例精度（价格 0.01、数量 0.01、最小名义
+价值 5 U）；上传其他合约数据时也沿用这些示例过滤器。
+
+原有 `market_simulator/viewer` 也能播放这份回放。运行
+`grid_trading/scripts/export_fixed_grid_replay_viewer.py`，会在
+`market_simulator/viewer/data` 生成触发式与预建仓两份 schema v1 run JSON。
+从研究工作台 `experiments.html` 侧栏的「固定网格 · 人工行情」进入，或直接打开
+`index.html?run_api=./data/grid-rule-parity-soxl-price_triggered-sample.json`。
+导出器保存 K 线、订单生命周期和逐笔成交；`equity` 为空，并在页面明确标注没有
+费用或收益账本。这两份样例不会作为研究实验写入 `experiment_results`。
+
+最小回放示例：
+
+```python
+from decimal import Decimal
+from market_simulator import FixedBarMarketSource
+from grid_server.domain import SymbolFilters
+from grid_server.simulation import FixedGridReplay
+
+source = FixedBarMarketSource("SOXLUSDT", [
+    ("50.45", "50.45", "50.45", "50.45"),
+    ("50.45", "50.45", "50.25", "50.25"),
+])
+result = FixedGridReplay(
+    source, symbol="SOXLUSDT", lower_price=Decimal("40"),
+    upper_price=Decimal("60"), grid_count=135,
+    grid_budget_usdt=Decimal("2000"),
+    filters=SymbolFilters(
+        tick_size=Decimal("0.01"), step_size=Decimal("0.01"),
+        min_qty=Decimal("0.01"), min_notional=Decimal("5"),
+        contract_type="TRADIFI_PERPETUAL",
+    ),
+).run()
+```
+
 当前分支将网格规则组织为一个独立 Python 命名空间：
 
 ```text

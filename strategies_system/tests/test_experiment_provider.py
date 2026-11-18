@@ -276,18 +276,18 @@ class StrategyExperimentProviderTests(unittest.TestCase):
             inspect.getmodule(StrategiesSimulationProvider)
         ))
         descriptors = build_provider_registry().component_descriptors
-        self.assertEqual(len(descriptors), 8)
+        self.assertEqual(len(descriptors), 11)
         self.assertEqual(
             {
                 item["type"]
                 for item in descriptors
                 if item["kind"] == "strategy-definition"
             },
-            {"entry-then-ladder-exit/v1"},
+            {"entry-then-ladder-exit/v1", "fixed-range-equal-usdt-grid/v1"},
         )
         self.assertEqual(
             {item["type"] for item in descriptors if item["kind"] == "trading-rule"},
-            {"initial-entry/v1", "ladder-take-profit/v1"},
+            {"initial-entry/v1", "ladder-take-profit/v1", "fixed-equal-usdt-grid/v1"},
         )
         self.assertTrue(
             all(

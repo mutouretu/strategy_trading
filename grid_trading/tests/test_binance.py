@@ -4,9 +4,11 @@ import unittest
 from decimal import Decimal
 from unittest.mock import Mock
 
+import requests
+
 from grid_server.binance import BinanceAPIError, BinanceFuturesExchange
 from grid_server.infrastructure.binance import BinanceRateLimitError
-from grid_server.domain import OrderSide
+from grid_server.domain import OrderSide, OrderStatus
 from grid_server.exchange import ExchangeExecutionUnknownError, OrderNotFoundError
 
 
@@ -24,6 +26,16 @@ class BinanceFuturesExchangeTests(unittest.TestCase):
             "executedQty": "0",
             "positionSide": "LONG",
         }
+
+    def test_self_trade_prevention_expiry_is_terminal_and_keeps_fill_quantity(self):
+        payload = self.order_payload("EXPIRED_IN_MATCH")
+        payload["executedQty"] = "0.25"
+        payload["avgPrice"] = "100"
+
+        order = BinanceFuturesExchange._order(payload)
+
+        self.assertEqual(order.status, OrderStatus.EXPIRED)
+        self.assertEqual(order.executed_qty, Decimal("0.25"))
 
     def test_http_success_body_with_code_200_is_accepted(self):
         exchange = BinanceFuturesExchange("key", "secret")
@@ -78,6 +90,17 @@ class BinanceFuturesExchangeTests(unittest.TestCase):
         response.status_code = 408
         response.text = '{"code":-1007,"msg":"execution status unknown"}'
         exchange.session.request = Mock(return_value=response)
+
+        with self.assertRaises(ExchangeExecutionUnknownError):
+            exchange._request("POST", "/fapi/v1/order", signed=True)
+
+    def test_truncated_order_response_is_unknown_execution(self):
+        exchange = BinanceFuturesExchange("key", "secret")
+        exchange.session.request = Mock(
+            side_effect=requests.exceptions.ChunkedEncodingError(
+                "response ended prematurely"
+            )
+        )
 
         with self.assertRaises(ExchangeExecutionUnknownError):
             exchange._request("POST", "/fapi/v1/order", signed=True)
