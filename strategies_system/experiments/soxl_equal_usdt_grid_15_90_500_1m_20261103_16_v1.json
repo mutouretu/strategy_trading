@@ -1,0 +1,95 @@
+{
+  "schema_version": "experiment-spec/v1",
+  "experiment_id": "soxl-equal-usdt-grid-15-90-500-1m-20261103-16-v1",
+  "description": "币安 SOXLUSDT 永续 1 分钟行情，15–90、500 格（约 0.359% 等比间距）、50,000 U 预建仓天地网格；零手续费、零资金费、无复投的结构实验",
+  "scenario_groups": [
+    {
+      "key": "soxl-binance-usdm-two-week",
+      "run_provider": "strategies-simulation/v1",
+      "markets": [
+        {
+          "key": "soxlusdt-2026-11-03-to-16-1m",
+          "type": "historical-parquet/v1",
+          "parameters": {
+            "path": "experiments/market_data/57ee5a18d868fe22ec8c.parquet",
+            "instrument": "SOXLUSDT",
+            "interval": "1m",
+            "frame_count": 20160,
+            "file_sha256": "d77e9668cee4962e2fdfef4ce31a8d129f65513780d9cf8c770e787e7d054790",
+            "content_sha256": "57ee5a18d868fe22ec8c94b742294f9e09f9e4b7171d5c1b073714219cc706c8"
+          }
+        }
+      ],
+      "strategies": [
+        {
+          "key": "fixed-grid-seeded-15-90-500",
+          "type": "fixed-equal-usdt-grid-simulation/v1",
+          "parameters": {
+            "strategy_definition_type": "fixed-range-equal-usdt-grid/v1",
+            "strategy_id": "soxl-grid-15-90-500-20261103",
+            "instrument": "SOXLUSDT",
+            "lower_price": "15",
+            "upper_price": "90",
+            "grid_count": 500,
+            "grid_budget_usdt": "50000",
+            "tick_size": "0.01",
+            "step_size": "0.01",
+            "min_qty": "0.01",
+            "min_notional": "5",
+            "entry_mode": "seeded",
+            "orders_per_side": 10,
+            "rebalance_below": 5,
+            "rebalance_above": 15
+          }
+        }
+      ],
+      "executions": [
+        {
+          "key": "zero-cost-minute-bar",
+          "type": "daily-bar-execution/v1",
+          "parameters": {
+            "maker_fee_rate": "0",
+            "taker_fee_rate": "0",
+            "fee_asset": "USDT",
+            "funding_model": "none"
+          }
+        }
+      ],
+      "accounts": [
+        {
+          "key": "usdm-50000-no-margin-model",
+          "type": "usdm-linear/v1",
+          "parameters": {
+            "instrument": "SOXLUSDT",
+            "futures_wallet_usdt": "50000",
+            "settlement_asset": "USDT",
+            "notional_asset": "USDT",
+            "margin_model": "none"
+          }
+        }
+      ]
+    }
+  ],
+  "seeds": [
+    0
+  ],
+  "output": {
+    "root": "experiment_results",
+    "default_retention_class": "standard"
+  },
+  "controls": {
+    "max_runs": 1,
+    "continue_on_error": false
+  },
+  "metadata": {
+    "experiment_kind": "BASELINE",
+    "purpose": "fixed-grid-rule-parity-500-cell-comparison",
+    "data_venue": "binance-usdm",
+    "data_interval": "1m",
+    "data_timezone": "UTC",
+    "fee_assumption": "zero",
+    "funding_assumption": "zero",
+    "reinvestment_assumption": "disabled",
+    "intrabar_fill_assumption": "resting limits touched by a minute bar fill at limit price; gap-through fills at open; new orders become eligible next minute"
+  }
+}
