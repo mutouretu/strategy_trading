@@ -95,6 +95,26 @@ def test_triggered_fixed_grid_starts_without_position_and_pairs_fills() -> None:
         )
 
 
+def test_triggered_grid_recovers_initialization_after_transient_error() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = SQLiteStore(Path(directory) / "retry.sqlite3")
+        exchange = FakeExchange(Decimal("100"))
+        config = GridService(store).create_fixed(
+            "SOLUSDT", Decimal("80"), Decimal("120"), 40,
+            Decimal("4000"), Decimal("0.01"),
+            fixed_entry_mode=FixedEntryMode.PRICE_TRIGGERED,
+            upper_seed_count=3,
+        )
+        store.mark_started(config.strategy_id)
+        store.set_status(config.strategy_id, StrategyStatus.ERROR)
+        engine = FixedGridEngine(store, exchange, config.strategy_id)
+        engine.tick()
+        seed = store.get_capital_action(f"seed:{config.strategy_id}")
+        assert seed is not None and seed["status"] == "applied"
+        assert store.upper_seed_active_count(config.strategy_id) == 3
+        assert exchange.calls.get("place_market_order", 0) == 0
+
+
 def test_triggered_topup_preserves_uncrossed_buy_levels() -> None:
     with tempfile.TemporaryDirectory() as directory:
         store = SQLiteStore(Path(directory) / "triggered-topup.sqlite3")

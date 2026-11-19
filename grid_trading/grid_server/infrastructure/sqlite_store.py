@@ -1499,6 +1499,7 @@ class SQLiteStore:
                     or config["fixed_entry_mode"] != FixedEntryMode.PRICE_TRIGGERED.value
                     or config["status"] not in {
                         StrategyStatus.STARTING.value, StrategyStatus.RUNNING.value,
+                        StrategyStatus.ERROR.value,
                     }):
                 raise ValueError("triggered fixed grid must be active before initialization")
             conn.execute(
