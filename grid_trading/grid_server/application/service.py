@@ -107,6 +107,7 @@ class GridService:
         auto_reinvest_enabled: bool = False,
         auto_reinvest_percent: Decimal = Decimal("100"),
         fixed_entry_mode: FixedEntryMode = FixedEntryMode.SEEDED,
+        upper_seed_count: int = 0,
     ) -> tuple[StrategyConfig, list]:
         budgets = fixed_cell_budgets(grid_budget_usdt, grid_count)
         config = StrategyConfig(
@@ -124,6 +125,7 @@ class GridService:
             move_grid=False,
             grid_kind=GridKind.FIXED_EQUAL_USDT,
             fixed_entry_mode=fixed_entry_mode,
+            upper_seed_count=upper_seed_count,
             lower_price=lower_price,
             upper_price=upper_price,
             grid_budget_usdt=grid_budget_usdt,
@@ -146,6 +148,7 @@ class GridService:
         auto_reinvest_enabled: bool = False,
         auto_reinvest_percent: Decimal = Decimal("100"),
         fixed_entry_mode: FixedEntryMode = FixedEntryMode.SEEDED,
+        upper_seed_count: int = 0,
     ) -> StrategyConfig:
         clean_symbol = symbol.strip().upper()
         slug = re.sub(r"[^a-z0-9]+", "-", clean_symbol.lower()).strip("-")
@@ -163,6 +166,7 @@ class GridService:
             auto_reinvest_enabled=auto_reinvest_enabled,
             auto_reinvest_percent=auto_reinvest_percent,
             fixed_entry_mode=fixed_entry_mode,
+            upper_seed_count=upper_seed_count,
         )
         self.store.create_strategy(config)
         self.store.replace_cells(strategy_id, cells)

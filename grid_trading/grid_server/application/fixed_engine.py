@@ -359,6 +359,7 @@ class FixedGridEngine(TradingEngine):
             self._reinvest_closed_cells()
             if config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
                 self.store.arm_triggered_fixed_cells(self.strategy_id, mark)
+                self.store.arm_upper_seed_cells(self.strategy_id, mark)
             else:
                 self._arm_untriggered()
             self.sync_orders_only()
@@ -769,14 +770,15 @@ class FixedGridEngine(TradingEngine):
             # Only buy levels at or below the starting mark are exposed on a
             # direct decline. Require enough cash for that path, then gate
             # every later buy order against live free margin.
+            cells = self.store.list_cells(self.strategy_id)
             downside_budget = sum(
-                (cell.budget_usdt for cell in self.store.list_cells(self.strategy_id)
-                 if cell.buy_price <= mark),
-                Decimal("0"),
+                (cell.budget_usdt for cell in cells if cell.buy_price <= mark), Decimal("0")
             )
+            upper_seed_cells = [cell for cell in cells if cell.buy_price > mark][:config.upper_seed_count]
+            upper_seed_budget = sum((cell.budget_usdt for cell in upper_seed_cells), Decimal("0"))
             required = min(
                 config.grid_budget_usdt,
-                downside_budget + self._triggered_cash_reserve(config),
+                downside_budget + upper_seed_budget + self._triggered_cash_reserve(config),
             )
             if available < required:
                 raise ValueError(

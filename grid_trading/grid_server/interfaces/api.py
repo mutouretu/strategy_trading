@@ -61,6 +61,7 @@ class FixedGridInput(BaseModel):
     grid_count: int = Field(ge=1, le=500)
     grid_budget_usdt: Decimal = Field(gt=0)
     fixed_entry_mode: FixedEntryMode = FixedEntryMode.SEEDED
+    upper_seed_count: int = Field(default=0, ge=0, le=5)
     poll_interval_sec: float = Field(default=1.0, ge=0.2)
     auto_reinvest_enabled: bool = False
     auto_reinvest_percent: Decimal = Field(default=Decimal("100"), ge=0, le=100)
@@ -92,6 +93,10 @@ class AutoReinvestInput(BaseModel):
     auto_reinvest_percent: Decimal | None = Field(default=None, ge=0, le=100)
 
 
+class UpperSeedInput(BaseModel):
+    count: int = Field(ge=0, le=5)
+
+
 def strategy_payload(config: StrategyConfig, store: SQLiteStore) -> dict:
     cells = store.list_cells(config.strategy_id)
     runtime = store.get_runtime(config.strategy_id)
@@ -104,6 +109,12 @@ def strategy_payload(config: StrategyConfig, store: SQLiteStore) -> dict:
         "market_type": config.market_type.value,
         "grid_kind": config.grid_kind.value,
         "fixed_entry_mode": config.fixed_entry_mode.value,
+        "upper_seed_count": config.upper_seed_count,
+        "upper_seed_frontier": config.upper_seed_frontier,
+        "upper_seed_active_count": (
+            store.upper_seed_active_count(config.strategy_id)
+            if hasattr(store, "upper_seed_active_count") else 0
+        ),
         "grid_budget_usdt": None if config.grid_budget_usdt is None else str(config.grid_budget_usdt),
         "auto_reinvest_enabled": config.auto_reinvest_enabled,
         "auto_reinvest_percent": str(config.auto_reinvest_percent),
@@ -229,6 +240,7 @@ def _strategy_amounts(
 def fixed_grid_preview_details(
     cells, mark: Decimal, filters, maker_rate: Decimal, taker_rate: Decimal,
     fixed_entry_mode: FixedEntryMode = FixedEntryMode.SEEDED,
+    upper_seed_count: int = 0,
 ) -> dict:
     if mark <= 0:
         raise ValueError("invalid current price")
@@ -262,6 +274,11 @@ def fixed_grid_preview_details(
         taker_returns.append(taker_net / (qty * cell.buy_price))
     sell_cells = [cell for cell in cells if cell.sell_price > mark]
     seeded = fixed_entry_mode == FixedEntryMode.SEEDED
+    upper_seed_cells = (
+        [cell for cell in cells if cell.buy_price > mark][:upper_seed_count]
+        if not seeded else []
+    )
+    upper_seed_qty = sum((quantities[cell.cell_id] for cell in upper_seed_cells), Decimal("0"))
     seed_notional = sum((cell.budget_usdt for cell in sell_cells), Decimal("0")) if seeded else Decimal("0")
     seed_qty = sum((quantities[cell.cell_id] for cell in sell_cells), Decimal("0")) if seeded else Decimal("0")
     seed_market_buy = seed_qty * mark
@@ -282,7 +299,10 @@ def fixed_grid_preview_details(
         "current_price": str(mark),
         "buy_cell_count": len(cells) - len(sell_cells),
         "sell_cell_count": len(sell_cells),
-        "initial_sell_order_count": len(sell_cells) if seeded else 0,
+        "initial_sell_order_count": len(sell_cells) if seeded else len(upper_seed_cells),
+        "initial_upper_seed_cell_count": len(upper_seed_cells),
+        "initial_upper_seed_quantity": str(upper_seed_qty),
+        "estimated_upper_seed_buy_usdt": str(upper_seed_qty * mark),
         "initial_triggerable_buy_cell_count": sum(cell.buy_price <= mark for cell in cells),
         "seed_notional_usdt": str(seed_notional),
         "seed_quantity": str(seed_qty),
@@ -290,7 +310,8 @@ def fixed_grid_preview_details(
         "minimum_sell_order_notional_usdt": str(min(sell_order_notionals)),
         "maximum_sell_order_notional_usdt": str(max(sell_order_notionals)),
         "buy_budget_usdt": str(sum((cell.budget_usdt for cell in cells
-                                    if not seeded or cell not in sell_cells), Decimal("0"))),
+                                    if (not seeded and cell not in upper_seed_cells)
+                                    or (seeded and cell not in sell_cells)), Decimal("0"))),
         "inside_range": cells[0].buy_price <= mark <= cells[-1].sell_price,
         "maker_fee_rate": str(maker_rate),
         "taker_fee_rate": str(taker_rate),
@@ -302,7 +323,7 @@ def fixed_grid_preview_details(
         "deferred_sell_cell_count": deferred_sell,
         "percent_price_up": str(filters.percent_price_up),
         "percent_price_down": str(filters.percent_price_down),
-        "estimated_seed_opening_fee_usdt": str(seed_market_buy * taker_rate),
+        "estimated_seed_opening_fee_usdt": str((seed_market_buy + upper_seed_qty * mark) * taker_rate),
         "seed_cells_below_fee_break_even": sum(
             cell.sell_price <= mark * (Decimal("1") + taker_rate) / (Decimal("1") - maker_rate)
             for cell in sell_cells
@@ -500,11 +521,12 @@ def create_app(
                 auto_reinvest_enabled=data.auto_reinvest_enabled,
                 auto_reinvest_percent=data.auto_reinvest_percent,
                 fixed_entry_mode=data.fixed_entry_mode,
+                upper_seed_count=data.upper_seed_count,
             )
             maker_rate, taker_rate = exchange.get_commission_rates(symbol)
             details = fixed_grid_preview_details(
                 cells, exchange.get_mark_price(symbol), filters, maker_rate, taker_rate,
-                data.fixed_entry_mode,
+                data.fixed_entry_mode, data.upper_seed_count,
             )
             return {
                 "config": strategy_payload(config, _PreviewStore(cells)),
@@ -529,11 +551,12 @@ def create_app(
                 auto_reinvest_enabled=data.auto_reinvest_enabled,
                 auto_reinvest_percent=data.auto_reinvest_percent,
                 fixed_entry_mode=data.fixed_entry_mode,
+                upper_seed_count=data.upper_seed_count,
             )
             maker_rate, taker_rate = exchange.get_commission_rates(symbol)
             fixed_grid_preview_details(
                 preview_cells, exchange.get_mark_price(symbol), filters, maker_rate, taker_rate,
-                data.fixed_entry_mode,
+                data.fixed_entry_mode, data.upper_seed_count,
             )
             config = service.create_fixed(
                 symbol, data.lower_price, data.upper_price,
@@ -542,6 +565,7 @@ def create_app(
                 auto_reinvest_enabled=data.auto_reinvest_enabled,
                 auto_reinvest_percent=data.auto_reinvest_percent,
                 fixed_entry_mode=data.fixed_entry_mode,
+                upper_seed_count=data.upper_seed_count,
             )
             return strategy_payload(config, store)
         except Exception as exc:
@@ -781,6 +805,16 @@ def create_app(
                     estimated_buy * exchange.get_commission_rates(config.symbol)[1]
                 ),
             }
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="strategy not found") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/strategies/{strategy_id}/upper-seed")
+    def set_upper_seed(strategy_id: str, data: UpperSeedInput) -> dict:
+        try:
+            config = store.set_upper_seed_count(strategy_id, data.count)
+            return strategy_payload(config, store)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="strategy not found") from exc
         except Exception as exc:

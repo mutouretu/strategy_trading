@@ -119,6 +119,159 @@ def test_triggered_topup_preserves_uncrossed_buy_levels() -> None:
         assert exchange.calls.get("place_market_order", 0) == 0
 
 
+def test_upper_seed_frontier_never_spreads_on_flat_or_falling_price() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "upper-seed.sqlite3"
+        store = SQLiteStore(path)
+        config = GridService(store).create_fixed(
+            "SOLUSDT", Decimal("80"), Decimal("120"), 40,
+            Decimal("4000"), Decimal("0.01"),
+            fixed_entry_mode=FixedEntryMode.PRICE_TRIGGERED,
+            upper_seed_count=3,
+        )
+        store.mark_started(config.strategy_id)
+        assert store.arm_upper_seed_cells(config.strategy_id, Decimal("100")) == 3
+        first = [e for e in store.list_events(config.strategy_id)
+                 if e["event_type"] == "UPPER_SEED_TRIGGERED"]
+        assert len(first) == 3
+        frontier = store.get_strategy(config.strategy_id).upper_seed_frontier
+        assert frontier is not None
+        assert store.arm_upper_seed_cells(config.strategy_id, Decimal("100")) == 0
+        assert store.arm_upper_seed_cells(config.strategy_id, Decimal("90")) == 0
+        restarted = SQLiteStore(path)
+        assert restarted.arm_upper_seed_cells(config.strategy_id, Decimal("90")) == 0
+        assert restarted.get_strategy(config.strategy_id).upper_seed_frontier == frontier
+        assert restarted.arm_upper_seed_cells(config.strategy_id, Decimal("105")) == 0
+        assert sum(e["event_type"] == "UPPER_SEED_TRIGGERED"
+                   for e in restarted.list_events(config.strategy_id)) == 3
+
+        # A completed sale releases only one slot. A new cell is preactivated
+        # only after price has reached a higher frontier.
+        old = restarted.get_cell(config.strategy_id, first[0]["cell_id"])
+        assert old is not None
+        old.cycle_count += 1
+        old.stage = CellStage.PENDING_ENTRY
+        restarted.save_cell(old)
+        assert restarted.arm_upper_seed_cells(config.strategy_id, Decimal("105")) == 1
+        assert sum(e["event_type"] == "UPPER_SEED_TRIGGERED"
+                   for e in restarted.list_events(config.strategy_id)) == 4
+
+
+def test_upper_seed_uses_three_price_protected_buys_and_pairs_sells() -> None:
+    class CrossingExchange(FakeExchange):
+        def place_limit_order(self, symbol, side, position_side, quantity, price, client_order_id, post_only=False):
+            order_id = super().place_limit_order(
+                symbol, side, position_side, quantity, price, client_order_id, post_only,
+            )
+            if side == OrderSide.BUY and not post_only and Decimal(price) >= self.mark:
+                self.fill(order_id, self.mark)
+            return order_id
+
+    with tempfile.TemporaryDirectory() as directory:
+        store = SQLiteStore(Path(directory) / "upper-seed-orders.sqlite3")
+        exchange = CrossingExchange(Decimal("100"))
+        config = GridService(store).create_fixed(
+            "SOLUSDT", Decimal("80"), Decimal("120"), 40,
+            Decimal("4000"), Decimal("0.01"),
+            fixed_entry_mode=FixedEntryMode.PRICE_TRIGGERED,
+            upper_seed_count=3,
+        )
+        store.mark_started(config.strategy_id)
+        engine = FixedGridEngine(store, exchange, config.strategy_id)
+        engine.tick()
+        upper_buys = [order for order in exchange.placed
+                      if order["side"] == OrderSide.BUY and not order["post_only"]]
+        assert len(upper_buys) == 3
+        assert exchange.calls.get("place_market_order", 0) == 0
+        engine.tick()
+        seeded = [cell for cell in store.list_cells(config.strategy_id)
+                  if cell.stage == CellStage.PENDING_EXIT and cell.buy_price > Decimal("100")]
+        assert len(seeded) == 3
+        assert all(cell.exit_order_id is not None for cell in seeded)
+        first = seeded[0]
+        exchange.fill(first.exit_order_id, first.sell_price)
+        exchange.mark = first.sell_price
+        engine.tick()
+        assert store.upper_seed_active_count(config.strategy_id) <= 3
+        assert sum(e["event_type"] == "UPPER_SEED_TRIGGERED"
+                   for e in store.list_events(config.strategy_id)) == 4
+        exchange.mark = Decimal("90")
+        engine.tick()
+        assert sum((cell.open_qty for cell in store.list_cells(config.strategy_id)), Decimal("0")) > 0
+        assert store.upper_seed_active_count(config.strategy_id) <= 3
+        assert sum(e["event_type"] == "UPPER_SEED_TRIGGERED"
+                   for e in store.list_events(config.strategy_id)) == 4
+
+
+def test_upper_seed_topup_does_not_activate_the_rest_of_the_range() -> None:
+    class CrossingExchange(FakeExchange):
+        def place_limit_order(self, symbol, side, position_side, quantity, price, client_order_id, post_only=False):
+            order_id = super().place_limit_order(
+                symbol, side, position_side, quantity, price, client_order_id, post_only,
+            )
+            if side == OrderSide.BUY and not post_only and Decimal(price) >= self.mark:
+                self.fill(order_id, self.mark)
+            return order_id
+
+    with tempfile.TemporaryDirectory() as directory:
+        store = SQLiteStore(Path(directory) / "upper-seed-topup.sqlite3")
+        exchange = CrossingExchange(Decimal("100"))
+        config = GridService(store).create_fixed(
+            "SOLUSDT", Decimal("80"), Decimal("120"), 40,
+            Decimal("4000"), Decimal("0.01"),
+            fixed_entry_mode=FixedEntryMode.PRICE_TRIGGERED,
+            upper_seed_count=3,
+        )
+        store.mark_started(config.strategy_id)
+        engine = FixedGridEngine(store, exchange, config.strategy_id)
+        engine.tick()
+        engine.tick()
+        untouched = {
+            cell.cell_id for cell in store.list_cells(config.strategy_id)
+            if cell.stage == CellStage.UNTRIGGERED
+        }
+        assert untouched
+        store.create_capital_action("upper-seed-topup", config.strategy_id, "topup", Decimal("400"))
+        engine.tick()
+        for mark in (Decimal("100"), Decimal("90"), Decimal("100")) * 5:
+            exchange.mark = mark
+            engine.tick()
+        cells = store.list_cells(config.strategy_id)
+        assert untouched.issubset({cell.cell_id for cell in cells if cell.stage == CellStage.UNTRIGGERED})
+        assert store.upper_seed_active_count(config.strategy_id) == 3
+        assert sum(e["event_type"] == "UPPER_SEED_TRIGGERED"
+                   for e in store.list_events(config.strategy_id)) == 3
+        assert store.get_strategy(config.strategy_id).grid_budget_usdt == Decimal("4400")
+        assert exchange.calls.get("place_market_order", 0) == 1  # Aggregate top-up only.
+
+
+def test_upper_seed_preview_and_running_setting_are_persisted() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        exchange = FakeExchange(Decimal("100"))
+        client = TestClient(create_app(Path(directory) / "upper-seed-api.sqlite3", lambda: exchange))
+        payload = {
+            "symbol": "SOLUSDT", "lower_price": "80", "upper_price": "120",
+            "grid_count": 40, "grid_budget_usdt": "4000",
+            "fixed_entry_mode": "price_triggered", "upper_seed_count": 3,
+        }
+        preview = client.post("/fixed-grids/preview", json=payload)
+        assert preview.status_code == 200, preview.text
+        assert preview.json()["allocation"]["initial_upper_seed_cell_count"] == 3
+        assert Decimal(preview.json()["allocation"]["estimated_upper_seed_buy_usdt"]) > 0
+        created = client.post("/fixed-grids", json=payload)
+        assert created.status_code == 201, created.text
+        sid = created.json()["strategy_id"]
+        assert created.json()["upper_seed_count"] == 3
+        disabled = client.post(f"/strategies/{sid}/upper-seed", json={"count": 0})
+        assert disabled.status_code == 200, disabled.text
+        assert disabled.json()["upper_seed_count"] == 0
+        enabled = client.post(f"/strategies/{sid}/upper-seed", json={"count": 3})
+        assert enabled.status_code == 200, enabled.text
+        assert enabled.json()["upper_seed_count"] == 3
+        invalid = client.post(f"/strategies/{sid}/upper-seed", json={"count": 2})
+        assert invalid.status_code == 400
+
+
 def test_triggered_fixed_grid_preview_has_no_seed_buy() -> None:
     with tempfile.TemporaryDirectory() as directory:
         exchange = FakeExchange(Decimal("100"))

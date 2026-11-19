@@ -267,6 +267,9 @@ def normalize_strategy(item: dict) -> dict:
         "venue": venue,
         "grid_kind": item.get("grid_kind", "triggered"),
         "fixed_entry_mode": item.get("fixed_entry_mode", "seeded"),
+        "upper_seed_count": int(item.get("upper_seed_count", 0)),
+        "upper_seed_frontier": item.get("upper_seed_frontier"),
+        "upper_seed_active_count": int(item.get("upper_seed_active_count", 0)),
         "grid_budget_usdt": None if item.get("grid_budget_usdt") is None else decimal_number(item["grid_budget_usdt"]),
         "auto_reinvest_enabled": bool(item.get("auto_reinvest_enabled", False)),
         "auto_reinvest_percent": decimal_number(item.get("auto_reinvest_percent"), 100.0),
@@ -374,8 +377,12 @@ def render_fixed_grid_create() -> None:
         count = st.number_input("网格数量", min_value=1, max_value=500, value=20, step=1)
         budget = st.number_input("网格交易预算 (USDT)", min_value=0.01, value=None, step=100.0, format="%.2f")
         entry_mode_label = st.radio(
-            "启动方式", ["预建仓天地单", "回踩触发（零初始仓位）"], horizontal=True,
+            "启动方式", ["预建仓天地单", "回踩触发"], horizontal=True,
             help="回踩触发会先挂已越过买价的近端买单；高位格子等价格上涨越过买价后才激活。",
+        )
+        upper_seed_count = st.selectbox(
+            "上方预买卖格", [0, 3, 4, 5], index=1,
+            help="仅回踩触发时生效。默认预买现价上方最近 3 格；价格向上推进后补新格，未完成的预买格总数不超过设定值。",
         )
         auto_reinvest = st.checkbox("创建后开启自动复投", value=False)
         reinvest_percent = st.number_input(
@@ -395,6 +402,7 @@ def render_fixed_grid_create() -> None:
                 "grid_count": int(count),
                 "grid_budget_usdt": str(budget),
                 "fixed_entry_mode": "price_triggered" if entry_mode_label.startswith("回踩") else "seeded",
+                "upper_seed_count": int(upper_seed_count) if entry_mode_label.startswith("回踩") else 0,
                 "auto_reinvest_enabled": bool(auto_reinvest),
                 "auto_reinvest_percent": str(Decimal(str(reinvest_percent))),
             }
@@ -415,11 +423,12 @@ def render_fixed_grid_create() -> None:
         f"卖格 {allocation['sell_cell_count']}"
     )
     if payload.get("fixed_entry_mode") == "price_triggered":
+        upper_count = allocation["initial_upper_seed_cell_count"]
         st.info(
-            "启动时不买入仓位，也没有预置卖单。"
-            f"当前已有 {allocation['initial_triggerable_buy_cell_count']} 格满足买价触发条件，"
-            "系统先挂近端买单；更高的格子待价格越过买价后激活。"
-            "买单成交后，才为该格挂配对卖单。"
+            f"启动时预买上方 {upper_count} 格，预计约 "
+            f"{float(allocation['estimated_upper_seed_buy_usdt']):.2f} U；"
+            f"当前有 {allocation['initial_triggerable_buy_cell_count']} 格满足买价触发条件。"
+            "价格向上推进时只补新进入窗口的格子，价格回落不扩展预买范围。"
         )
     else:
         st.info(
@@ -1308,6 +1317,29 @@ def render_fixed_reconfiguration(grid: dict) -> None:
                 st.rerun()
 
 
+def render_upper_seed(grid: dict) -> None:
+    if grid.get("fixed_entry_mode") != "price_triggered":
+        return
+    strategy_id = grid["id"]
+    current = int(grid.get("upper_seed_count", 0))
+    active = int(grid.get("upper_seed_active_count", 0))
+    with st.expander(f"上方预买卖格 · {active}/{current} 格", expanded=False):
+        st.caption("只预买价格上方最近的格子；价格向上进入新区域时补新格。价格回落不扩展预买范围，未完成的预买格最多为设定数量。")
+        with st.form(f"upper_seed_form_{strategy_id}"):
+            selected = st.selectbox(
+                "预买格数", [0, 3, 4, 5], index=[0, 3, 4, 5].index(current),
+                key=f"upper_seed_count_{strategy_id}",
+            )
+            save = st.form_submit_button("保存预买格数")
+        if save:
+            try:
+                backend().set_upper_seed_count(strategy_id, int(selected))
+            except GridApiError as exc:
+                st.error(str(exc))
+            else:
+                st.rerun()
+
+
 def render_fixed_reinvestment(grid: dict, cells: list[dict]) -> dict[str, int] | None:
     strategy_id = grid["id"]
     try:
@@ -1467,6 +1499,7 @@ def _render_detail_live(strategy_id: str) -> None:
     if grid["grid_kind"] == "fixed_equal_usdt":
         render_fixed_topup(grid, cells)
         render_fixed_reconfiguration(grid)
+        render_upper_seed(grid)
         reinvest_counts = render_fixed_reinvestment(grid, cells)
     try:
         actions = backend().cell_actions(grid["id"])
