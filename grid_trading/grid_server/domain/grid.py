@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from decimal import Decimal, ROUND_DOWN, localcontext
+from decimal import Decimal, ROUND_CEILING, ROUND_DOWN, localcontext
 
 from .models import GridCell, GridKind, Mode, StrategyConfig
 
@@ -83,6 +83,16 @@ def fixed_grid_ratio(lower: Decimal, upper: Decimal, count: int) -> Decimal:
     with localcontext() as context:
         context.prec = 40
         return +(((upper / lower).ln() / Decimal(count)).exp() - Decimal("1"))
+
+
+def fixed_grid_count_for_ratio(lower: Decimal, upper: Decimal, maximum_ratio: Decimal) -> int:
+    """Choose the fewest cells whose actual geometric gap is at most the target."""
+    if lower <= 0 or upper <= lower or not maximum_ratio.is_finite() or maximum_ratio <= 0:
+        raise ValueError("fixed grid requires 0 < lower < upper and a positive ratio")
+    with localcontext() as context:
+        context.prec = 40
+        intervals = (upper / lower).ln() / (Decimal("1") + maximum_ratio).ln()
+        return int(intervals.to_integral_value(rounding=ROUND_CEILING))
 
 
 def fixed_cell_budgets(total: Decimal, count: int) -> list[Decimal]:

@@ -13,6 +13,7 @@ import streamlit as st
 from dotenv import dotenv_values
 
 from grid_server.interfaces.web_client import GridApiClient, GridApiError
+from grid_server.domain.grid import fixed_grid_count_for_ratio, fixed_grid_ratio
 from grid_server.shared.config import DEFAULT_ENV_FILE, api_base_url
 from grid_server.shared.price_format import format_price, infer_price_precision
 
@@ -374,10 +375,14 @@ def render_fixed_grid_create() -> None:
         symbol = st.text_input("交易对", placeholder="例如 SOXL-USDT-SWAP" if venue == "okx" else "例如 SOLUSDT", key="fixed_symbol")
         lower = st.number_input("区间下界", min_value=0.0, value=None, step=0.01, format="%.8f")
         upper = st.number_input("区间上界", min_value=0.0, value=None, step=0.01, format="%.8f")
-        count = st.number_input("网格数量", min_value=1, max_value=500, value=20, step=1)
+        ratio_percent = st.number_input(
+            "目标等比间距（%）", min_value=0.001, value=0.50,
+            step=0.01, format="%.3f",
+            help="根据区间自动计算网格数量；为覆盖完整区间，实际间距不超过此值。",
+        )
         budget = st.number_input("网格交易预算 (USDT)", min_value=0.01, value=None, step=100.0, format="%.2f")
         entry_mode_label = st.radio(
-            "启动方式", ["预建仓天地单", "回踩触发"], horizontal=True,
+            "启动方式", ["回踩触发", "预建仓天地单"], horizontal=True,
             help="回踩触发会先挂已越过买价的近端买单；高位格子等价格上涨越过买价后才激活。",
         )
         upper_seed_count = st.selectbox(
@@ -392,23 +397,34 @@ def render_fixed_grid_create() -> None:
         )
         preview_clicked = st.form_submit_button("生成预览", type="primary")
     if preview_clicked:
+        reset_create_preview()
         if not symbol.strip() or lower is None or upper is None or budget is None:
-            st.error("请填写交易对、上下界和交易预算。")
+            st.error("请填写交易对、价格区间和交易预算。")
         else:
-            payload = {
-                "symbol": symbol.strip().upper(),
-                "lower_price": str(lower),
-                "upper_price": str(upper),
-                "grid_count": int(count),
-                "grid_budget_usdt": str(budget),
-                "fixed_entry_mode": "price_triggered" if entry_mode_label.startswith("回踩") else "seeded",
-                "upper_seed_count": int(upper_seed_count) if entry_mode_label.startswith("回踩") else 0,
-                "auto_reinvest_enabled": bool(auto_reinvest),
-                "auto_reinvest_percent": str(Decimal(str(reinvest_percent))),
-            }
             try:
+                lower_price = Decimal(str(lower))
+                upper_price = Decimal(str(upper))
+                target_ratio = Decimal(str(ratio_percent)) / Decimal("100")
+                count = fixed_grid_count_for_ratio(lower_price, upper_price, target_ratio)
+                if count > 500:
+                    minimum_percent = fixed_grid_ratio(lower_price, upper_price, 500) * Decimal("100")
+                    raise ValueError(
+                        f"此区间需要 {count} 格，超过当前 500 格上限；"
+                        f"目标间距至少设为 {minimum_percent:.4f}%。"
+                    )
+                payload = {
+                    "symbol": symbol.strip().upper(),
+                    "lower_price": str(lower_price),
+                    "upper_price": str(upper_price),
+                    "grid_count": count,
+                    "grid_budget_usdt": str(budget),
+                    "fixed_entry_mode": "price_triggered" if entry_mode_label.startswith("回踩") else "seeded",
+                    "upper_seed_count": int(upper_seed_count) if entry_mode_label.startswith("回踩") else 0,
+                    "auto_reinvest_enabled": bool(auto_reinvest),
+                    "auto_reinvest_percent": str(Decimal(str(reinvest_percent))),
+                }
                 preview = backend().preview_fixed_grid(payload)
-            except GridApiError as exc:
+            except (GridApiError, ValueError) as exc:
                 st.error(str(exc))
             else:
                 st.session_state["fixed_create_payload"] = payload
@@ -418,6 +434,14 @@ def render_fixed_grid_create() -> None:
     if not preview or not payload:
         return
     allocation = preview["allocation"]
+    actual_ratio = fixed_grid_ratio(
+        Decimal(payload["lower_price"]), Decimal(payload["upper_price"]),
+        int(payload["grid_count"]),
+    )
+    st.write(
+        f"自动计算：{payload['grid_count']} 格 · 实际等比间距 {actual_ratio * 100:.4f}% · "
+        f"单格约 {Decimal(payload['grid_budget_usdt']) / Decimal(payload['grid_count']):.4f} U"
+    )
     st.write(
         f"当前价 {allocation['current_price']} · 买格 {allocation['buy_cell_count']} · "
         f"卖格 {allocation['sell_cell_count']}"
@@ -489,11 +513,17 @@ def render_fixed_grid_create() -> None:
         else:
             st.session_state.pop("fixed_create_payload", None)
             st.session_state.pop("fixed_create_preview", None)
+            st.session_state["create_grid_dialog_open"] = False
             st.session_state["api_flash_success"] = f"{created['symbol']} 固定网格已创建"
             st.rerun()
 
 
-@st.dialog("新增币对网格")
+def dismiss_create_grid_dialog() -> None:
+    st.session_state["create_grid_dialog_open"] = False
+    reset_create_preview()
+
+
+@st.dialog("新增币对网格", on_dismiss=dismiss_create_grid_dialog)
 def create_grid_dialog() -> None:
     venues = list(st.session_state.get("venue_api_urls", {}))
     if not venues:
@@ -516,8 +546,9 @@ def create_grid_dialog() -> None:
         return
     kind = st.segmented_control(
         "策略类型", ["触发式网格", "固定区间等 U"],
-        default="触发式网格", selection_mode="single", key="create_grid_kind",
-    ) or "触发式网格"
+        default="固定区间等 U", selection_mode="single", key="create_grid_kind_v2",
+        on_change=reset_create_preview,
+    ) or "固定区间等 U"
     if kind == "固定区间等 U":
         render_fixed_grid_create()
         return
@@ -634,6 +665,7 @@ def create_grid_dialog() -> None:
         else:
             st.session_state.pop("grid_create_preview", None)
             st.session_state.pop("grid_create_payload", None)
+            st.session_state["create_grid_dialog_open"] = False
             st.session_state["api_flash_success"] = f"{created['symbol']} 网格已创建"
             st.rerun()
 
@@ -800,6 +832,8 @@ def change_run_toggle(strategy_id: str, venue: str, fixed_grid: bool = False) ->
 def render_add_button() -> None:
     add_col, _ = st.columns([0.42, 8])
     if add_col.button("＋", width="stretch", help="新增币对网格"):
+        st.session_state["create_grid_dialog_open"] = True
+    if st.session_state.get("create_grid_dialog_open"):
         create_grid_dialog()
 
 
