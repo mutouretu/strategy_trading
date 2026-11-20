@@ -29,10 +29,12 @@ def test_triggered_fixed_grid_starts_without_position_and_pairs_fills() -> None:
         )
         store.mark_started(config.strategy_id)
         engine = FixedGridEngine(store, exchange, config.strategy_id)
-        with pytest.raises(ValueError, match="not yet supported"):
-            GridService(store).preview_fixed_reconfiguration(
-                config.strategy_id, Decimal("81"), Decimal("121"), 4, exchange,
-            )
+        preview = GridService(store).preview_fixed_reconfiguration(
+            config.strategy_id, Decimal("81"), Decimal("121"), 4, exchange,
+            require_quiesced=False,
+        )
+        assert preview["target_qty"] == 0
+        assert preview["upper_seed_cell_ids"] == []
 
         engine.tick()
         cells = store.list_cells(config.strategy_id)
@@ -93,6 +95,60 @@ def test_triggered_fixed_grid_starts_without_position_and_pairs_fills() -> None:
         assert Decimal(performance["net_grid_profit_usdt"]) == (
             filled_qty * (sell_price - upper.buy_price) - Decimal("0.03")
         )
+
+
+def test_triggered_reconfiguration_carries_only_held_cells_and_bounded_upper_seeds() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = SQLiteStore(Path(directory) / "triggered-reconfiguration.sqlite3")
+        exchange = FakeExchange(Decimal("100"))
+        service = GridService(store)
+        config = service.create_fixed(
+            "SOXLUSDT", Decimal("80"), Decimal("120"), 20,
+            Decimal("2000"), Decimal("0.01"),
+            fixed_entry_mode=FixedEntryMode.PRICE_TRIGGERED, upper_seed_count=3,
+        )
+        store.mark_started(config.strategy_id)
+        store.activate_triggered_fixed_grid(config.strategy_id)
+        assert store.arm_upper_seed_cells(config.strategy_id, exchange.mark) == 3
+        old = store.list_cells(config.strategy_id)
+        seed_ids = set(store.list_active_upper_seed_cell_ids(config.strategy_id))
+        assert len(seed_ids) == 3
+        lower = max((cell for cell in old if cell.sell_price <= exchange.mark),
+                    key=lambda cell: cell.index)
+        held = [cell for cell in old if cell.cell_id in seed_ids] + [lower]
+        for cell in held:
+            cell.open_qty = (cell.budget_usdt / cell.buy_price // Decimal("0.001")) * Decimal("0.001")
+            cell.stage = CellStage.PENDING_EXIT
+            store.save_cell(cell)
+        old_qty = sum((cell.open_qty for cell in held), Decimal("0"))
+        exchange.positions[(config.symbol, "LONG")] = old_qty
+        store.set_status(config.strategy_id, StrategyStatus.STOPPED)
+
+        plan = service.preview_fixed_reconfiguration(
+            config.strategy_id, Decimal("70"), Decimal("130"), 20, exchange,
+            grid_budget_usdt=Decimal("2400"),
+        )
+        assert len(plan["allocations"]) <= len(held)
+        assert len(plan["upper_seed_cell_ids"]) <= 3
+        assert plan["target_qty"] < Decimal("10")
+        delta = plan["delta_qty"]
+        store.reconfigure_fixed_cells(
+            plan["config"], plan["cells"], plan["allocations"],
+            {cell_id: Decimal("0") for cell_id in plan["allocations"]},
+            expected_generation=0, mark=exchange.mark,
+            position_delta_qty=delta,
+            position_delta_order_id=123 if delta else None,
+            upper_seed_cell_ids=plan["upper_seed_cell_ids"],
+        )
+        new = store.list_cells(config.strategy_id)
+        assert all(cell.stage == CellStage.UNTRIGGERED for cell in new
+                   if cell.buy_price > exchange.mark and cell.cell_id not in plan["allocations"])
+        assert store.upper_seed_active_count(config.strategy_id) == len(plan["upper_seed_cell_ids"])
+        store.set_status(config.strategy_id, StrategyStatus.RUNNING)
+        assert store.arm_upper_seed_cells(config.strategy_id, exchange.mark) <= 3
+        assert store.upper_seed_active_count(config.strategy_id) <= 3
+        assert len([cell for cell in store.list_cells(config.strategy_id)
+                    if cell.buy_price > exchange.mark and cell.stage == CellStage.PENDING_ENTRY]) <= 3
 
 
 def test_triggered_grid_recovers_initialization_after_transient_error() -> None:

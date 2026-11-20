@@ -6,7 +6,7 @@ import hashlib
 import json
 from decimal import Decimal
 
-from ..domain import OrderSide, OrderStatus, StrategyStatus
+from ..domain import FixedEntryMode, OrderSide, OrderStatus, StrategyStatus
 from ..ports.exchange import Exchange, ExchangeExecutionUnknownError, OrderNotFoundError
 from ..infrastructure.okx import OkxAPIError
 from ..infrastructure.sqlite_store import SQLiteStore
@@ -62,6 +62,10 @@ class FixedReconfigurationWorkflow:
             "delta_notional_usdt": str(plan["delta_qty"] * plan["mark"]),
             "sell_cell_count": len(plan["allocations"]),
             "buy_cell_count": len(plan["cells"]) - len(plan["allocations"]),
+            "unallocated_downside_usdt": str(plan["unallocated_downside_usdt"]),
+            "immediate_buy_usdt": str(plan["immediate_buy_usdt"]),
+            "upper_seed_cell_count": len(plan["upper_seed_cell_ids"]),
+            "upper_seed_frontier": config.upper_seed_frontier,
         }
 
     def _quiesce_orders(self, strategy_id: str) -> None:
@@ -115,6 +119,18 @@ class FixedReconfigurationWorkflow:
         current = self.store.get_strategy(strategy_id)
         if current is None or current.grid_generation != int(action["expected_generation"]):
             raise ValueError("strategy generation changed before reconfiguration")
+        if current.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+            preflight = self.service.preview_fixed_reconfiguration(
+                strategy_id, Decimal(action["lower_price"]), Decimal(action["upper_price"]),
+                int(action["grid_count"]), self.exchange,
+                grid_budget_usdt=Decimal(action["grid_budget_usdt"]),
+                require_quiesced=False,
+            )
+            required = (preflight["immediate_buy_usdt"]
+                        + max(preflight["delta_qty"], Decimal("0")) * preflight["mark"]
+                        + Decimal("1000"))
+            if self.exchange.get_available_balance("USDT") < required:
+                raise ValueError(f"available USDT is below the immediate migration requirement {required}")
         active = {StrategyStatus.STARTING, StrategyStatus.RUNNING, StrategyStatus.ERROR}
         if any(item.status in active and item.strategy_id != strategy_id
                for item in self.store.list_strategies()):
@@ -138,6 +154,7 @@ class FixedReconfigurationWorkflow:
         frozen = {
             **self._public_plan(plan),
             "new_sell_cell_ids": plan["new_sell_cell_ids"],
+            "upper_seed_cell_ids": plan["upper_seed_cell_ids"],
             "baseline_net_grid_profit_usdt": performance["net_grid_profit_usdt"],
             "baseline_completed_cycles": performance["completed_cycles"],
             "baseline_started_at": performance["started_at"],
@@ -158,6 +175,8 @@ class FixedReconfigurationWorkflow:
         if (str(plan["old_qty"]) != frozen["old_qty"]
                 or str(plan["target_qty"]) != frozen["target_qty"]
                 or plan["new_sell_cell_ids"] != frozen["new_sell_cell_ids"]
+                or plan["upper_seed_cell_ids"] != frozen["upper_seed_cell_ids"]
+                or plan["config"].upper_seed_frontier != frozen["upper_seed_frontier"]
                 or plan["config"].grid_generation != int(frozen["grid_generation"])):
             raise ValueError("frozen migration plan no longer matches old cells")
         return plan
@@ -174,6 +193,13 @@ class FixedReconfigurationWorkflow:
             action = self._prepare(action)
         plan = self._frozen_plan(action)
         delta = plan["delta_qty"]
+        if (action["status"] == "planned"
+                and plan["config"].fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED):
+            required = (plan["immediate_buy_usdt"]
+                        + max(delta, Decimal("0")) * plan["mark"]
+                        + Decimal("1000"))
+            if self.exchange.get_available_balance("USDT") < required:
+                raise ValueError(f"available USDT is below the immediate migration requirement {required}")
         if action["status"] == "planned" and delta:
             if delta > 0 and self.exchange.get_available_balance("USDT") < delta * plan["mark"]:
                 raise ValueError("available USDT is below the required additional position")

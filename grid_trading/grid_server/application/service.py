@@ -191,8 +191,6 @@ class GridService:
             raise KeyError(strategy_id)
         if current.grid_kind != GridKind.FIXED_EQUAL_USDT or current.grid_budget_usdt is None:
             raise ValueError("reconfiguration requires a fixed equal-USDT grid")
-        if current.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
-            raise ValueError("reconfiguration of a price-triggered grid is not yet supported")
         if not 1 <= grid_count <= 500:
             raise ValueError("fixed grid count must be between 1 and 500")
         if not current.has_started:
@@ -233,14 +231,63 @@ class GridService:
             grid_generation=current.grid_generation + 1,
         )
         cells = build_cells(config, filters.tick_size)
-        allocations = {
-            cell.cell_id: round_down(cell.budget_usdt / cell.buy_price, filters.step_size)
-            for cell in cells if cell.sell_price > mark
-        }
+        upper_seed_cell_ids: list[str] = []
+        if current.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+            # Existing inventory is the only source of new sell cells.  A
+            # sell-side price above mark does not authorize a new seed buy.
+            mapped: dict[str, str] = {}
+            allocations = {}
+            for old in old_cells:
+                if old.open_qty <= 0:
+                    continue
+                new = next((cell for cell in cells
+                            if cell.buy_price <= old.buy_price < cell.sell_price), None)
+                if new is None:
+                    raise ValueError(f"held cell {old.cell_id} is outside the new range")
+                mapped[old.cell_id] = new.cell_id
+                allocations[new.cell_id] = round_down(
+                    new.budget_usdt / new.buy_price, filters.step_size
+                )
+            active_old_seed_ids = self.store.list_active_upper_seed_cell_ids(strategy_id)
+            if len(active_old_seed_ids) > current.upper_seed_count:
+                raise ValueError("upper seed slots exceed the configured limit")
+            if any(old_id not in mapped for old_id in active_old_seed_ids):
+                raise ValueError("an upper seed slot has no held position to migrate")
+            upper_seed_cell_ids = list(dict.fromkeys(mapped[old_id] for old_id in active_old_seed_ids))
+            frontier = max(
+                (cell.index for cell in cells if cell.cell_id in upper_seed_cell_ids),
+                default=None,
+            )
+            config = replace(config, upper_seed_frontier=frontier)
+        else:
+            allocations = {
+                cell.cell_id: round_down(cell.budget_usdt / cell.buy_price, filters.step_size)
+                for cell in cells if cell.sell_price > mark
+            }
         if any(qty < filters.min_qty or qty * cell.buy_price < filters.min_notional
                for cell in cells if (qty := allocations.get(cell.cell_id)) is not None):
             raise ValueError("a new sell-side cell is below the exchange minimum")
         target_qty = sum(allocations.values(), Decimal("0"))
+        unallocated_downside_usdt = sum(
+            (cell.budget_usdt for cell in cells
+             if cell.buy_price <= mark and cell.cell_id not in allocations),
+            Decimal("0"),
+        ) if current.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED else Decimal("0")
+        immediate_buy_usdt = sum(
+            (cell.budget_usdt for cell in sorted(
+                (cell for cell in cells
+                 if cell.buy_price <= mark and cell.cell_id not in allocations),
+                key=lambda cell: cell.buy_price, reverse=True,
+            )[:10]),
+            Decimal("0"),
+        ) if current.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED else Decimal("0")
+        if current.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+            # Keep enough for a fresh three-slot turnover as well as the
+            # nearest rolling buy window. Future buys are cash-gated per order.
+            immediate_buy_usdt += sum(
+                (cell.budget_usdt for cell in cells[:current.upper_seed_count]),
+                Decimal("0"),
+            )
         return {
             "config": config, "cells": cells, "allocations": allocations,
             "mark": mark, "old_qty": old_qty, "target_qty": target_qty,
@@ -248,6 +295,9 @@ class GridService:
             "old_budget_usdt": current.grid_budget_usdt,
             "delta_qty": target_qty - old_qty,
             "new_sell_cell_ids": list(allocations),
+            "upper_seed_cell_ids": upper_seed_cell_ids,
+            "unallocated_downside_usdt": unallocated_downside_usdt,
+            "immediate_buy_usdt": immediate_buy_usdt,
         }
 
     def apply_fixed_reconfiguration(
@@ -265,6 +315,8 @@ class GridService:
         if (fresh["old_qty"] != plan["old_qty"]
                 or fresh["target_qty"] != plan["target_qty"]
                 or fresh["new_sell_cell_ids"] != plan["new_sell_cell_ids"]
+                or fresh["upper_seed_cell_ids"] != plan["upper_seed_cell_ids"]
+                or fresh["config"].upper_seed_frontier != config.upper_seed_frontier
                 or fresh["config"].grid_generation != config.grid_generation):
             raise ValueError("reconfiguration preview is stale")
         delta = plan["delta_qty"]
@@ -320,7 +372,7 @@ class GridService:
             config, plan["cells"], plan["allocations"], opening_fees,
             expected_generation=old_config.grid_generation, mark=plan["mark"],
             position_delta_qty=delta, position_delta_order_id=adjustment_order_id,
-            action_id=action_id,
+            action_id=action_id, upper_seed_cell_ids=plan["upper_seed_cell_ids"],
         )
         return self.store.get_strategy(config.strategy_id)
 

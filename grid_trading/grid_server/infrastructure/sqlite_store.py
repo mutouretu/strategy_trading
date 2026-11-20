@@ -820,6 +820,7 @@ class SQLiteStore:
         *, expected_generation: int, mark: Decimal,
         position_delta_qty: Decimal = Decimal("0"), position_delta_order_id: int | None = None,
         action_id: str | None = None,
+        upper_seed_cell_ids: list[str] | None = None,
     ) -> None:
         """Atomically advance one stopped strategy to a fresh cell generation."""
         config.validate()
@@ -835,6 +836,18 @@ class SQLiteStore:
             raise ValueError("invalid replacement cells")
         if not set(allocations).issubset({cell.cell_id for cell in cells}):
             raise ValueError("allocation refers to an unknown new cell")
+        seed_ids = upper_seed_cell_ids or []
+        if (len(seed_ids) != len(set(seed_ids))
+                or not set(seed_ids).issubset(allocations)
+                or len(seed_ids) > config.upper_seed_count
+                or (config.fixed_entry_mode != FixedEntryMode.PRICE_TRIGGERED and seed_ids)):
+            raise ValueError("invalid upper seed slots for replacement cells")
+        if config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+            expected_frontier = max(
+                (cell.index for cell in cells if cell.cell_id in seed_ids), default=None
+            )
+            if config.upper_seed_frontier != expected_frontier:
+                raise ValueError("upper seed frontier does not match migrated slots")
         if set(opening_fees) != set(allocations):
             raise ValueError("opening fee allocation does not match position allocation")
         if any(qty <= 0 for qty in allocations.values()) or any(fee < 0 for fee in opening_fees.values()):
@@ -876,7 +889,9 @@ class SQLiteStore:
                 if (Decimal(frozen.get("mark", "0")) != mark
                         or Decimal(frozen.get("target_qty", "-1")) != sum(allocations.values(), Decimal("0"))
                         or Decimal(frozen.get("delta_qty", "NaN")) != position_delta_qty
-                        or frozen.get("new_sell_cell_ids") != list(allocations)):
+                        or frozen.get("new_sell_cell_ids") != list(allocations)
+                        or frozen.get("upper_seed_cell_ids", []) != seed_ids
+                        or frozen.get("upper_seed_frontier") != config.upper_seed_frontier):
                     raise ValueError("persisted reconfiguration plan changed")
             if conn.execute(
                 "SELECT 1 FROM capital_actions WHERE strategy_id=? AND status IN ('requested','planned','submitted','manual_review') LIMIT 1",
@@ -896,13 +911,16 @@ class SQLiteStore:
             new_qty = sum(allocations.values(), Decimal("0"))
             if old_qty + position_delta_qty != new_qty:
                 raise ValueError("position adjustment does not reconcile old and new cells")
+            conn.execute("DELETE FROM upper_seed_slots WHERE strategy_id=?", (config.strategy_id,))
             conn.execute("DELETE FROM cells WHERE strategy_id=?", (config.strategy_id,))
             allocated_cells = [
                 replace(
                     cell,
                     open_qty=allocations.get(cell.cell_id, Decimal("0")),
                     stage=(CellStage.PENDING_EXIT if allocations.get(cell.cell_id, Decimal("0")) > 0
-                           else CellStage.PENDING_ENTRY),
+                           else (CellStage.UNTRIGGERED
+                                 if config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED
+                                 and cell.buy_price > mark else CellStage.PENDING_ENTRY)),
                 )
                 for cell in cells
             ]
@@ -914,13 +932,19 @@ class SQLiteStore:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 [self._cell_values(cell, now) for cell in allocated_cells],
             )
+            conn.executemany(
+                "INSERT INTO upper_seed_slots(strategy_id, cell_id, cycle_count, created_at) VALUES (?, ?, 0, ?)",
+                [(config.strategy_id, cell_id, now) for cell_id in seed_ids],
+            )
             conn.execute(
                 """UPDATE strategies SET anchor_price=?, grid_ratio=?, grid_count=?, order_usdt=?,
-                    lower_price=?, upper_price=?, grid_budget_usdt=?, grid_generation=?, updated_at=?
+                    lower_price=?, upper_price=?, grid_budget_usdt=?, grid_generation=?,
+                    upper_seed_frontier=?, updated_at=?
                    WHERE strategy_id=?""",
                 (str(config.anchor_price), str(config.grid_ratio), config.grid_count,
                  str(config.order_usdt), str(config.lower_price), str(config.upper_price),
-                 str(config.grid_budget_usdt), config.grid_generation, now, config.strategy_id),
+                 str(config.grid_budget_usdt), config.grid_generation,
+                 config.upper_seed_frontier, now, config.strategy_id),
             )
             conn.execute(
                 "INSERT INTO events(strategy_id, run_id, cell_id, event_type, payload_json, created_at) VALUES (?, ?, NULL, ?, ?, ?)",
@@ -937,6 +961,8 @@ class SQLiteStore:
                     "position_delta_order_id": position_delta_order_id,
                     "old_cell_count": len(old_cells),
                     "new_cell_count": len(cells),
+                    "upper_seed_cell_ids": seed_ids,
+                    "upper_seed_frontier": config.upper_seed_frontier,
                 }), now),
             )
             if action_id is not None:
@@ -1592,6 +1618,16 @@ class SQLiteStore:
                    WHERE slot.strategy_id=? AND cell.cycle_count=slot.cycle_count""",
                 (strategy_id,),
             ).fetchone()[0])
+
+    def list_active_upper_seed_cell_ids(self, strategy_id: str) -> list[str]:
+        with self.connection() as conn:
+            return [row[0] for row in conn.execute(
+                """SELECT slot.cell_id FROM upper_seed_slots AS slot
+                   JOIN cells AS cell ON cell.strategy_id=slot.strategy_id AND cell.cell_id=slot.cell_id
+                   WHERE slot.strategy_id=? AND cell.cycle_count=slot.cycle_count
+                   ORDER BY cell.cell_index""",
+                (strategy_id,),
+            )]
 
     def arm_upper_seed_cells(self, strategy_id: str, mark: Decimal) -> int:
         """Arm only the next few cells above the highest observed buy level.

@@ -9,7 +9,7 @@ from grid_server.application.fixed_reconfiguration import FixedReconfigurationWo
 from grid_server.application.grid_performance import strategy_performance
 from grid_server.application.service import GridService
 from grid_server.domain import (
-    CellStage, ExchangeVenue, OrderSide, OrderSnapshot, OrderStatus, PositionSnapshot,
+    CellStage, ExchangeVenue, FixedEntryMode, OrderSide, OrderSnapshot, OrderStatus, PositionSnapshot,
     StrategyStatus, SymbolFilters,
 )
 from grid_server.infrastructure.sqlite_store import SQLiteStore
@@ -203,3 +203,56 @@ def test_workflow_quiesces_partial_orders_then_reconfigures_and_restarts() -> No
         assert Decimal(performance["net_grid_profit_usdt"]) > 0
         assert workflow.execute(action["id"])["status"] == "applied"
         assert exchange.market_calls == 1
+
+
+def test_triggered_workflow_keeps_history_without_prebuying_upper_range() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = SQLiteStore(Path(directory) / "triggered-workflow.sqlite3", venue=ExchangeVenue.OKX)
+        supervisor = Supervisor(store)
+        service = GridService(store, supervisor)
+        config = service.create_fixed(
+            "SOL-USDT-SWAP", Decimal("70"), Decimal("90"), 20,
+            Decimal("2000"), Decimal("0.01"), venue=ExchangeVenue.OKX,
+            fixed_entry_mode=FixedEntryMode.PRICE_TRIGGERED, upper_seed_count=3,
+        )
+        store.mark_started(config.strategy_id)
+        started_at = store.get_first_started_at(config.strategy_id)
+        store.activate_triggered_fixed_grid(config.strategy_id)
+        assert store.arm_upper_seed_cells(config.strategy_id, Decimal("80")) == 3
+        seed_ids = store.list_active_upper_seed_cell_ids(config.strategy_id)
+        quantities = []
+        for number, cell_id in enumerate(seed_ids, start=1):
+            cell = store.get_cell(config.strategy_id, cell_id)
+            assert cell is not None
+            cell.stage = CellStage.PENDING_EXIT
+            cell.open_qty = (cell.budget_usdt / cell.buy_price // Decimal("0.01")) * Decimal("0.01")
+            store.save_cell(cell)
+            store.append_event(config.strategy_id, "ENTRY_PLACED", {"order_id": 100 + number}, cell_id)
+            store.save_strategy_trades(config.strategy_id, [
+                fill(number, 100 + number, "BUY", cell.open_qty, cell.buy_price, "0.001")
+            ])
+            quantities.append(cell.open_qty)
+        old_qty = sum(quantities, Decimal("0"))
+        store.set_status(config.strategy_id, StrategyStatus.STOPPED)
+        exchange = Exchange(old_qty)
+        exchange.get_available_balance = lambda _asset: Decimal("10000")
+        workflow = FixedReconfigurationWorkflow(store, service, exchange)
+        preview = workflow.preview(config.strategy_id, Decimal("60"), Decimal("100"), 24, Decimal("2400"))
+        assert preview["upper_seed_cell_count"] <= 3
+        assert preview["sell_cell_count"] <= 3
+        action = workflow.request(
+            "triggered-migration-1", config.strategy_id,
+            Decimal("60"), Decimal("100"), 24, Decimal("2400"),
+        )
+        result = workflow.execute(action["id"])
+        assert result["status"] == "applied"
+        assert result["strategy_status"] == "starting"
+        assert store.get_first_started_at(config.strategy_id) == started_at
+        assert store.get_strategy(config.strategy_id).grid_generation == 1
+        assert store.upper_seed_active_count(config.strategy_id) <= 3
+        assert all(cell.stage == CellStage.UNTRIGGERED for cell in store.list_cells(config.strategy_id)
+                   if cell.buy_price > exchange.mark and cell.open_qty == 0)
+        performance = strategy_performance(store, store.get_strategy(config.strategy_id), coverage_complete=True)
+        assert performance["accounting_complete"]
+        assert workflow.execute(action["id"])["status"] == "applied"
+        assert exchange.market_calls <= 1
