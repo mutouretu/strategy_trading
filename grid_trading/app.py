@@ -1675,7 +1675,7 @@ def render_detail_live(strategy_id: str) -> None:
     _render_detail_live(strategy_id)
 
 
-@st.fragment(run_every="1s")
+@st.fragment(run_every="30s")
 def render_pending_detail_live(strategy_id: str) -> None:
     _render_detail_live(strategy_id)
 
