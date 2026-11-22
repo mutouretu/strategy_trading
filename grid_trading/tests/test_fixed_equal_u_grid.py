@@ -115,7 +115,7 @@ class FixedEqualUGridTests(unittest.TestCase):
         engine.tick()
         self.assertEqual(self.exchange.calls["place_market_order"], 1)
 
-    def test_auto_reinvests_one_quantity_step_after_sell_without_extra_market_buy(self) -> None:
+    def test_auto_reinvests_all_affordable_steps_after_sell_without_extra_market_buy(self) -> None:
         engine = self.make_engine()
         engine.tick()
         cell = self.store.list_cells(engine.strategy_id)[0]
@@ -143,19 +143,24 @@ class FixedEqualUGridTests(unittest.TestCase):
         before_total = self.store.get_strategy(engine.strategy_id).grid_budget_usdt
         market_buys = self.exchange.calls["place_market_order"]
 
-        engine.tick()
+        for _ in range(engine.REINVEST_EVERY_TICKS):
+            engine.tick()
 
         updated = next(item for item in self.store.list_cells(engine.strategy_id) if item.cell_id == cell.cell_id)
         step = self.exchange.filters.step_size
-        amount = cell.buy_price * step
+        unit_amount = cell.buy_price * step
+        earned = entry_order.original_qty * (cell.sell_price - cell.buy_price)
+        units = int(earned / unit_amount)
+        amount = unit_amount * units
         self.assertEqual(updated.budget_usdt, old_budget + amount)
         self.assertEqual(self.store.get_strategy(engine.strategy_id).grid_budget_usdt, before_total + amount)
         self.assertEqual(self.exchange.orders[updated.entry_order_id].original_qty,
-                         entry_order.original_qty + step)
+                         entry_order.original_qty + step * units)
         self.assertEqual(self.exchange.calls["place_market_order"], market_buys)
         entries = self.store.list_cell_reinvestments(engine.strategy_id)
         self.assertEqual(len(entries), 1)
         self.assertEqual(Decimal(entries[0]["amount_usdt"]), amount)
+        self.assertEqual(Decimal(entries[0]["quantity_step"]), step * units)
         engine.tick()
         self.assertEqual(len(self.store.list_cell_reinvestments(engine.strategy_id)), 1)
 
@@ -215,7 +220,8 @@ class FixedEqualUGridTests(unittest.TestCase):
             fill(4, exit_order.order_id, "SELL", exit_order.original_qty - first_sell_qty,
                  cell.sell_price, Decimal("0.02")),
         ])
-        engine.tick()
+        for _ in range(engine.REINVEST_EVERY_TICKS):
+            engine.tick()
 
         earnings = self.store.list_cell_reinvest_earnings(engine.strategy_id)
         self.assertEqual(len(earnings), 1)
@@ -289,8 +295,62 @@ class FixedEqualUGridTests(unittest.TestCase):
             engine.strategy_id, cell.cell_id, 1, self.exchange.filters.step_size, unit * 3
         ))
         updated = next(item for item in self.store.list_cells(engine.strategy_id) if item.cell_id == cell.cell_id)
-        self.assertEqual(updated.budget_usdt, original_budget + unit)
+        self.assertEqual(updated.budget_usdt, original_budget + unit * 3)
+        self.assertEqual(self.store.list_cell_reinvestments(engine.strategy_id)[0]["quantity_step"],
+                         str(self.exchange.filters.step_size * 3))
         self.assertEqual(len(self.store.list_cell_reinvestments(engine.strategy_id)), 1)
+
+    def test_reinvestment_combines_earnings_from_multiple_cycles(self) -> None:
+        engine = self.make_engine()
+        self.store.ensure_reinvest_cutover(engine.strategy_id)
+        self.store.set_auto_reinvest_enabled(engine.strategy_id, True)
+        cell = self.store.list_cells(engine.strategy_id)[0]
+        step = Decimal("0.01")
+        unit = cell.buy_price * step
+        for cycle in (1, 2, 3):
+            cell.cycle_count = cycle
+            self.store.save_cell(cell)
+            self.assertTrue(self.store.book_cell_reinvest_earnings(
+                engine.strategy_id, cell.cell_id, cycle, unit * Decimal("1.1"), Decimal("100")
+            ))
+        invested = self.store.apply_cell_reinvestment(
+            engine.strategy_id, cell.cell_id, 3, step, unit * Decimal("3.3"),
+            max_amount_usdt=unit * 4,
+        )
+        self.assertEqual(invested, unit * 3)
+        entries = self.store.list_cell_reinvestments(engine.strategy_id)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(Decimal(entries[0]["quantity_step"]), Decimal("0.03"))
+        self.assertFalse(self.store.apply_cell_reinvestment(
+            engine.strategy_id, cell.cell_id, 3, step, unit * Decimal("3.3")
+        ))
+
+    def test_reinvestment_scan_runs_once_per_ten_ticks(self) -> None:
+        engine = self.make_engine()
+        with patch.object(engine, "_reinvest_closed_cells", wraps=engine._reinvest_closed_cells) as scan:
+            for _ in range(11):
+                engine.tick()
+        self.assertEqual(scan.call_count, 2)
+
+    def test_reinvestment_respects_available_cash_for_multiple_steps(self) -> None:
+        engine = self.make_engine()
+        self.store.ensure_reinvest_cutover(engine.strategy_id)
+        self.store.set_auto_reinvest_enabled(engine.strategy_id, True)
+        cell = self.store.list_cells(engine.strategy_id)[0]
+        cell.cycle_count = 1
+        self.store.save_cell(cell)
+        step = Decimal("0.01")
+        unit = cell.buy_price * step
+        self.assertTrue(self.store.book_cell_reinvest_earnings(
+            engine.strategy_id, cell.cell_id, 1, unit * 5, Decimal("100")
+        ))
+        invested = self.store.apply_cell_reinvestment(
+            engine.strategy_id, cell.cell_id, 1, step, unit * 5,
+            max_amount_usdt=unit * Decimal("2.5"),
+        )
+        self.assertEqual(invested, unit * 2)
+        self.assertEqual(Decimal(self.store.list_cell_reinvestments(engine.strategy_id)[0]["quantity_step"]),
+                         Decimal("0.02"))
 
     def test_reinvest_percent_is_locked_per_cycle_and_kept_per_cell(self) -> None:
         engine = self.make_engine()
@@ -359,7 +419,7 @@ class FixedEqualUGridTests(unittest.TestCase):
                 engine.strategy_id, cell.cell_id, cycle,
                 self.exchange.filters.step_size, net,
             )
-            self.assertEqual(spent, cycle == 2)
+            self.assertEqual(bool(spent), cycle == 2)
         self.assertEqual(len(self.store.list_cell_reinvestments(engine.strategy_id)), 1)
 
     def test_zero_percent_loss_can_exhaust_earlier_earmarked_profit(self) -> None:

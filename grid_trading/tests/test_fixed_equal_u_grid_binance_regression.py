@@ -200,7 +200,8 @@ class TestBinanceGridRegression(unittest.TestCase):
         self.store.save_strategy_trades(engine.strategy_id, [
             fill(4, exit_order.order_id, "SELL", last_sell_qty, cell.sell_price, "0.03"),
         ])
-        engine.tick()
+        for _ in range(engine.REINVEST_EVERY_TICKS):
+            engine.tick()
         earnings = self.store.list_cell_reinvest_earnings(engine.strategy_id)
         self.assertEqual(len(earnings), 1)
         expected_net = (exit_order.original_qty * (cell.sell_price - cell.buy_price)
@@ -208,6 +209,9 @@ class TestBinanceGridRegression(unittest.TestCase):
         self.assertEqual(Decimal(earnings[0]["net_profit_usdt"]), expected_net)
         self.assertEqual(Decimal(earnings[0]["eligible_profit_usdt"]), expected_net / 2)
         self.assertEqual(earnings[0]["auto_reinvest_percent"], "50")
+        with patch.object(self.store, "book_cell_reinvest_earnings", wraps=self.store.book_cell_reinvest_earnings) as book:
+            engine._reinvest_closed_cells()
+        book.assert_not_called()
 
     def test_reinvest_waits_for_fee_on_prior_partly_filled_exit(self) -> None:
         engine = self.make_engine()

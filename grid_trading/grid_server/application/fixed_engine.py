@@ -24,6 +24,7 @@ class FixedGridEngine(TradingEngine):
     REBALANCE_BELOW = 5
     REBALANCE_ABOVE = 15
     MAX_WINDOW_CANCELS_PER_TICK = 10
+    REINVEST_EVERY_TICKS = 10
 
     @staticmethod
     def _triggered_cash_reserve(config) -> Decimal:
@@ -381,7 +382,14 @@ class FixedGridEngine(TradingEngine):
                     self._heartbeat(mark)
                     return mark
 
-            self._reinvest_closed_cells()
+            ticks_since_reinvest = getattr(
+                self, "_ticks_since_reinvest", self.REINVEST_EVERY_TICKS,
+            )
+            if ticks_since_reinvest >= self.REINVEST_EVERY_TICKS:
+                self._reinvest_closed_cells()
+                self._ticks_since_reinvest = 1
+            else:
+                self._ticks_since_reinvest = ticks_since_reinvest + 1
             if config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
                 self.store.arm_triggered_fixed_cells(self.strategy_id, mark)
                 self.store.arm_upper_seed_cells(
@@ -691,6 +699,10 @@ class FixedGridEngine(TradingEngine):
         if not closing_events:
             return
         try:
+            earned_cycles = {
+                (item["cell_id"], int(item["cycle_count"]))
+                for item in self.store.list_cell_reinvest_earnings(self.strategy_id)
+            }
             raw_exchange = getattr(self.exchange, "exchange", self.exchange)
             coverage = sync_strategy_trades(self.store, raw_exchange, config)
             if not coverage:
@@ -710,6 +722,8 @@ class FixedGridEngine(TradingEngine):
                     filled_qty_by_order.get(key, Decimal("0")) + Decimal(trade["quantity"])
                 )
             for (cell_id, cycle), closing in closing_events.items():
+                if (cell_id, cycle) in earned_cycles:
+                    continue
                 payload = closing["payload"]
                 order_id = payload.get("order_id")
                 if order_id is None:
@@ -726,10 +740,11 @@ class FixedGridEngine(TradingEngine):
                 cycle_profit = cycle_profits.get(cell_id, {}).get(str(cycle))
                 if cycle_profit is None:
                     continue
-                self.store.book_cell_reinvest_earnings(
+                if self.store.book_cell_reinvest_earnings(
                     self.strategy_id, cell_id, cycle, Decimal(cycle_profit),
                     Decimal(str(payload.get("auto_reinvest_percent", "100"))),
-                )
+                ):
+                    earned_cycles.add((cell_id, cycle))
 
             if not config.auto_reinvest_enabled:
                 return
@@ -738,10 +753,6 @@ class FixedGridEngine(TradingEngine):
                 for action in self.store.list_capital_actions(self.strategy_id)
             ):
                 return
-            earned_cycles = {
-                (item["cell_id"], int(item["cycle_count"]))
-                for item in self.store.list_cell_reinvest_earnings(self.strategy_id)
-            }
             cells = [
                 cell for cell in self.store.list_cells(self.strategy_id)
                 if cell.stage in {CellStage.UNTRIGGERED, CellStage.PENDING_ENTRY}
@@ -753,14 +764,15 @@ class FixedGridEngine(TradingEngine):
                 return
             available = self.exchange.get_available_balance("USDT")
             for cell in cells:
-                amount = cell.buy_price * step
-                if available < amount:
+                if available < cell.buy_price * step:
                     continue
                 profit = Decimal(profits.get(cell.cell_id, "0"))
-                if self.store.apply_cell_reinvestment(
-                    self.strategy_id, cell.cell_id, cell.cycle_count, step, profit
-                ):
-                    available -= amount
+                invested = self.store.apply_cell_reinvestment(
+                    self.strategy_id, cell.cell_id, cell.cycle_count, step, profit,
+                    max_amount_usdt=available,
+                )
+                if invested:
+                    available -= invested
                     self.config = None
         except Exception as exc:
             # Reinvestment is optional; a delayed trade-history response must

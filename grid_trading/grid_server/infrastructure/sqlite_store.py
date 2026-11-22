@@ -2004,10 +2004,13 @@ class SQLiteStore:
         cycle_count: int,
         quantity_step: Decimal,
         profit_snapshot_usdt: Decimal,
-    ) -> bool:
-        """Spend one earned quantity step atomically before the next entry."""
+        max_amount_usdt: Decimal | None = None,
+    ) -> Decimal:
+        """Atomically invest every affordable quantity step for this cell."""
         if quantity_step <= 0 or cycle_count < 1:
             raise ValueError("invalid reinvestment step or cycle")
+        if max_amount_usdt is not None and max_amount_usdt < 0:
+            raise ValueError("max_amount_usdt must not be negative")
         with self.connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             strategy = conn.execute(
@@ -2020,7 +2023,7 @@ class SQLiteStore:
                  StrategyStatus.RUNNING.value, StrategyStatus.STARTING.value),
             ).fetchone()
             if strategy is None or not strategy["auto_reinvest_enabled"]:
-                return False
+                return Decimal("0")
             cell = conn.execute(
                 "SELECT * FROM cells WHERE strategy_id=? AND cell_id=?",
                 (strategy_id, cell_id),
@@ -2033,13 +2036,13 @@ class SQLiteStore:
                 or (cell["entry_client_id"] and cell["entry_order_id"] is None)
                 or int(cell["cycle_count"]) != cycle_count
             ):
-                return False
+                return Decimal("0")
             existing_cycle = conn.execute(
                 "SELECT 1 FROM cell_reinvestments WHERE strategy_id=? AND cell_id=? AND cycle_count=?",
                 (strategy_id, cell_id, cycle_count),
             ).fetchone()
             if existing_cycle is not None:
-                return False
+                return Decimal("0")
             earned_rows = conn.execute(
                 "SELECT net_profit_usdt, eligible_profit_usdt FROM cell_reinvest_earnings WHERE strategy_id=? AND cell_id=?",
                 (strategy_id, cell_id),
@@ -2056,9 +2059,15 @@ class SQLiteStore:
                 (strategy_id, cell_id, old_reinvest_id),
             ).fetchall()
             spent = sum((Decimal(row["amount_usdt"]) for row in spent_rows), Decimal("0"))
-            amount = Decimal(cell["buy_price"]) * quantity_step
-            if eligible - spent < amount or net_earned - spent < amount:
-                return False
+            unit_amount = Decimal(cell["buy_price"]) * quantity_step
+            available = min(eligible - spent, net_earned - spent)
+            if max_amount_usdt is not None:
+                available = min(available, max_amount_usdt)
+            units = int(available / unit_amount)
+            if units <= 0:
+                return Decimal("0")
+            quantity_increment = quantity_step * units
+            amount = unit_amount * units
             now = utc_now()
             new_budget = Decimal(cell["budget_usdt"]) + amount
             new_total = Decimal(strategy["grid_budget_usdt"]) + amount
@@ -2077,17 +2086,17 @@ class SQLiteStore:
                     amount_usdt, profit_snapshot_usdt, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (strategy_id, cell_id, cycle_count, str(quantity_step),
+                (strategy_id, cell_id, cycle_count, str(quantity_increment),
                  str(amount), str(profit_snapshot_usdt), now),
             )
             conn.execute(
                 "INSERT INTO events(strategy_id, cell_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",
                 (strategy_id, cell_id, "CELL_PROFIT_REINVESTED",
-                 json.dumps({"cycle_count": cycle_count, "quantity_step": str(quantity_step),
+                 json.dumps({"cycle_count": cycle_count, "quantity_step": str(quantity_increment),
                              "amount_usdt": str(amount), "profit_snapshot_usdt": str(profit_snapshot_usdt),
                              "eligible_profit_usdt": str(eligible)}), now),
             )
-            return True
+            return amount
 
     def append_event(
         self,

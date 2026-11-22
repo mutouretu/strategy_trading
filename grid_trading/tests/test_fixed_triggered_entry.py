@@ -463,13 +463,16 @@ def test_late_fee_history_reinvests_into_already_rearmed_buy() -> None:
              "commissionAsset": "USDT", "time": now_ms + 1},
         ])
         exchange.get_user_trades = lambda symbol, **kwargs: []
-        engine.tick()
+        for _ in range(engine.REINVEST_EVERY_TICKS):
+            engine.tick()
 
         after = store.list_cells(config.strategy_id)[0]
         assert len(store.list_cell_reinvestments(config.strategy_id)) == 1
-        assert after.budget_usdt == Decimal("100") + cell.buy_price * exchange.filters.step_size
+        eligible = (original_qty * (cell.sell_price - cell.buy_price) - Decimal("0.02")) / 2
+        units = int(eligible / (cell.buy_price * exchange.filters.step_size))
+        assert after.budget_usdt == Decimal("100") + units * cell.buy_price * exchange.filters.step_size
         assert after.entry_order_id is not None
-        assert exchange.orders[after.entry_order_id].original_qty == original_qty + exchange.filters.step_size
+        assert exchange.orders[after.entry_order_id].original_qty == original_qty + units * exchange.filters.step_size
         assert exchange.calls.get("place_market_order", 0) == 0
 
 
