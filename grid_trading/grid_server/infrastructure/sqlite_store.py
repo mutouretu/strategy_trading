@@ -1659,6 +1659,19 @@ class SQLiteStore:
             count = int(config["upper_seed_count"])
             if not count or not (Decimal(config["lower_price"]) <= mark <= Decimal(config["upper_price"])):
                 return 0
+            # A completed cycle frees its seed slot. Keep the table in sync
+            # before selecting new cells, since a cell can become eligible
+            # again in a later cycle and the slot key is (strategy, cell).
+            conn.execute(
+                """DELETE FROM upper_seed_slots
+                   WHERE strategy_id=? AND NOT EXISTS (
+                       SELECT 1 FROM cells AS cell
+                       WHERE cell.strategy_id=upper_seed_slots.strategy_id
+                         AND cell.cell_id=upper_seed_slots.cell_id
+                         AND cell.cycle_count=upper_seed_slots.cycle_count
+                   )""",
+                (strategy_id,),
+            )
             cells = conn.execute(
                 "SELECT cell_id, cell_index, buy_price, stage, cycle_count FROM cells WHERE strategy_id=? ORDER BY cell_index",
                 (strategy_id,),

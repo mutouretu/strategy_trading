@@ -233,6 +233,31 @@ def test_upper_seed_frontier_never_spreads_on_flat_or_falling_price() -> None:
                    for e in restarted.list_events(config.strategy_id)) == 4
 
 
+def test_upper_seed_reuses_completed_cell_without_stale_slot_conflict() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = SQLiteStore(Path(directory) / "upper-seed-reuse.sqlite3")
+        config = GridService(store).create_fixed(
+            "SOXLUSDT", Decimal("80"), Decimal("120"), 40,
+            Decimal("4000"), Decimal("0.01"),
+            fixed_entry_mode=FixedEntryMode.PRICE_TRIGGERED,
+            upper_seed_count=3,
+        )
+        store.mark_started(config.strategy_id)
+        assert store.arm_upper_seed_cells(config.strategy_id, Decimal("100")) == 3
+        first_id = store.list_active_upper_seed_cell_ids(config.strategy_id)[0]
+        completed = store.get_cell(config.strategy_id, first_id)
+        assert completed is not None
+        completed.cycle_count += 1
+        completed.stage = CellStage.UNTRIGGERED
+        store.save_cell(completed)
+
+        assert store.arm_upper_seed_cells(config.strategy_id, Decimal("100")) == 1
+        assert store.upper_seed_active_count(config.strategy_id) == 3
+        assert store.list_active_upper_seed_cell_ids(config.strategy_id)[0] == first_id
+        assert sum(event["event_type"] == "UPPER_SEED_TRIGGERED"
+                   for event in store.list_events(config.strategy_id)) == 4
+
+
 def test_upper_seed_uses_three_price_protected_buys_and_pairs_sells() -> None:
     class CrossingExchange(FakeExchange):
         def place_limit_order(self, symbol, side, position_side, quantity, price, client_order_id, post_only=False):
