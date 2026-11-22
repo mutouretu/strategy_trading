@@ -355,14 +355,15 @@ class FixedGridEngine(TradingEngine):
         self._window_entry_ids = set()
         self._window_exit_ids = set()
         try:
+            opening_cells = self.store.list_cells(self.strategy_id)
             prior_entries = {
                 cell.cell_id: cell.entry_order_id
-                for cell in self.store.list_cells(self.strategy_id)
+                for cell in opening_cells
                 if cell.stage == CellStage.PENDING_ENTRY and cell.entry_order_id is not None
             }
             before = {
                 cell.cell_id: cell.exit_order_id
-                for cell in self.store.list_cells(self.strategy_id)
+                for cell in opening_cells
                 if cell.exit_order_id is not None
             }
             if seed["status"] == "applied":
@@ -389,7 +390,6 @@ class FixedGridEngine(TradingEngine):
                 )
             else:
                 self._arm_untriggered()
-            self.sync_orders_only()
             self._refresh_order_window(mark, prior_entries, before)
             self.sync_orders_only()
             self._resize_orders()

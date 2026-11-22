@@ -1360,10 +1360,12 @@ class FixedEqualUGridTests(unittest.TestCase):
         engine = FixedGridEngine(self.store, self.exchange, config.strategy_id)
         engine.tick()
         placements = self.exchange.calls["place_limit_order"]
+        order_reads = self.exchange.calls.get("get_order", 0)
         self.exchange.mark = Decimal("60.35")
         engine.tick()
         self.assertEqual(self.exchange.calls["place_limit_order"], placements)
         self.assertEqual(self.exchange.calls.get("cancel_order", 0), 0)
+        self.assertLessEqual(self.exchange.calls.get("get_order", 0) - order_reads, 60)
 
     def test_filled_buy_gets_paired_sell_even_when_sell_window_is_full(self) -> None:
         self.exchange.mark = Decimal("60.23")
