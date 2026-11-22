@@ -5,7 +5,7 @@ import uuid
 from dataclasses import replace
 from decimal import Decimal
 
-from ..domain import ExchangeVenue, FixedEntryMode, FuturesMarket, GridKind, Mode, OrderSide, OrderStatus, StrategyConfig, StrategyStatus
+from ..domain import DEFAULT_POLL_INTERVAL_SEC, ExchangeVenue, FixedEntryMode, FuturesMarket, GridKind, Mode, OrderSide, OrderStatus, StrategyConfig, StrategyStatus
 from ..ports.exchange import Exchange
 from ..domain.grid import build_cells, fixed_cell_budgets, fixed_grid_ratio, round_down
 from .grid_performance import strategy_performance, sync_strategy_trades
@@ -29,7 +29,7 @@ class GridService:
         leverage: int,
         tick_size: Decimal,
         strategy_id: str = "preview",
-        poll_interval_sec: float = 1.0,
+        poll_interval_sec: float = DEFAULT_POLL_INTERVAL_SEC,
         move_grid: bool = True,
         market_type: FuturesMarket = FuturesMarket.USDM,
         order_coin_qty: Decimal | None = None,
@@ -62,7 +62,7 @@ class GridService:
         order_usdt: Decimal,
         leverage: int,
         tick_size: Decimal,
-        poll_interval_sec: float = 1.0,
+        poll_interval_sec: float = DEFAULT_POLL_INTERVAL_SEC,
         move_grid: bool = True,
         market_type: FuturesMarket = FuturesMarket.USDM,
         order_coin_qty: Decimal | None = None,
@@ -102,7 +102,7 @@ class GridService:
         tick_size: Decimal,
         *,
         strategy_id: str = "preview-fixed",
-        poll_interval_sec: float = 1.0,
+        poll_interval_sec: float = DEFAULT_POLL_INTERVAL_SEC,
         venue: ExchangeVenue = ExchangeVenue.BINANCE,
         auto_reinvest_enabled: bool = False,
         auto_reinvest_percent: Decimal = Decimal("100"),
@@ -143,7 +143,7 @@ class GridService:
         grid_budget_usdt: Decimal,
         tick_size: Decimal,
         *,
-        poll_interval_sec: float = 1.0,
+        poll_interval_sec: float = DEFAULT_POLL_INTERVAL_SEC,
         venue: ExchangeVenue = ExchangeVenue.BINANCE,
         auto_reinvest_enabled: bool = False,
         auto_reinvest_percent: Decimal = Decimal("100"),

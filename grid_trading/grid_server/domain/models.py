@@ -5,6 +5,9 @@ from decimal import Decimal
 from enum import StrEnum
 
 
+DEFAULT_POLL_INTERVAL_SEC = 5.0
+
+
 class Mode(StrEnum):
     LONG = "long"
     SHORT = "short"
@@ -78,7 +81,7 @@ class StrategyConfig:
     market_type: FuturesMarket = FuturesMarket.USDM
     venue: ExchangeVenue = ExchangeVenue.BINANCE
     leverage: int = 3
-    poll_interval_sec: float = 1.0
+    poll_interval_sec: float = DEFAULT_POLL_INTERVAL_SEC
     move_grid: bool = True
     status: StrategyStatus = StrategyStatus.DRAFT
     has_started: bool = False

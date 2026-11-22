@@ -13,6 +13,7 @@ import streamlit as st
 from dotenv import dotenv_values
 
 from grid_server.interfaces.web_client import GridApiClient, GridApiError
+from grid_server.domain import DEFAULT_POLL_INTERVAL_SEC
 from grid_server.domain.grid import fixed_grid_count_for_ratio, fixed_grid_ratio
 from grid_server.shared.config import DEFAULT_ENV_FILE, api_base_url
 from grid_server.shared.price_format import format_price, infer_price_precision
@@ -25,6 +26,7 @@ BINANCE_YELLOW = "#F0B90B"
 BINANCE_GREEN = "#0ECB81"
 BINANCE_RED = "#F6465D"
 BINANCE_TEXT = "#EAECEF"
+DEFAULT_FRONTEND_REFRESH_INTERVAL = "10s"
 
 
 STATUS_LABELS = {
@@ -311,7 +313,7 @@ def normalize_strategy(item: dict) -> dict:
         "updated_at": updated_text(item.get("heartbeat_at"), bool(item.get("has_started"))),
         "runtime": runtime_text(item.get("started_at"), item.get("stopped_at")),
         "anchor_price": decimal_number(item["anchor_price"]),
-        "poll_interval_sec": float(item.get("poll_interval_sec", 50.0)),
+        "poll_interval_sec": float(item.get("poll_interval_sec", DEFAULT_POLL_INTERVAL_SEC)),
         "move_grid": bool(item.get("move_grid", True)),
         "has_started": bool(item.get("has_started")),
         "archived": bool(item.get("archived")),
@@ -337,7 +339,7 @@ def form_payload(
     order_amount: float,
     leverage: int,
     *,
-    poll_interval_sec: float = 50.0,
+    poll_interval_sec: float = DEFAULT_POLL_INTERVAL_SEC,
     move_grid: bool = True,
 ) -> dict:
     ratio = Decimal(str(ratio_percent)) / Decimal("100")
@@ -940,7 +942,7 @@ def render_overview(strategies: list[dict]) -> None:
     render_add_button()
 
 
-@st.fragment(run_every="10s")
+@st.fragment(run_every=DEFAULT_FRONTEND_REFRESH_INTERVAL)
 def render_overview_live(urls: dict[str, str], selected_exchange: str) -> None:
     all_strategies, _, _, errors = load_exchange_data(urls)
     for message in errors:
@@ -1675,7 +1677,7 @@ def render_detail_live(strategy_id: str) -> None:
     _render_detail_live(strategy_id)
 
 
-@st.fragment(run_every="10s")
+@st.fragment(run_every=DEFAULT_FRONTEND_REFRESH_INTERVAL)
 def render_pending_detail_live(strategy_id: str) -> None:
     _render_detail_live(strategy_id)
 

@@ -26,7 +26,7 @@ from ..shared.config import (
     okx_fixed_grid_endpoint_allowed,
     okx_simulated,
 )
-from ..domain import ExchangeVenue, FixedEntryMode, FuturesMarket, GridKind, Mode, StrategyConfig
+from ..domain import DEFAULT_POLL_INTERVAL_SEC, ExchangeVenue, FixedEntryMode, FuturesMarket, GridKind, Mode, StrategyConfig
 from ..domain.grid import fixed_cell_budgets, round_down
 from ..application.service import GridService
 from ..application.fixed_reconfiguration import FixedReconfigurationWorkflow
@@ -46,7 +46,7 @@ class StrategyInput(BaseModel):
     order_usdt: Decimal | None = Field(default=None, gt=0)
     order_coin_qty: Decimal | None = Field(default=None, gt=0)
     leverage: int = Field(ge=1, le=125)
-    poll_interval_sec: float = Field(default=1.0, ge=0.2)
+    poll_interval_sec: float = Field(default=DEFAULT_POLL_INTERVAL_SEC, ge=0.2)
     move_grid: bool = True
 
 
@@ -63,7 +63,7 @@ class FixedGridInput(BaseModel):
     grid_budget_usdt: Decimal = Field(gt=0)
     fixed_entry_mode: FixedEntryMode = FixedEntryMode.SEEDED
     upper_seed_count: int = Field(default=0, ge=0, le=5)
-    poll_interval_sec: float = Field(default=1.0, ge=0.2)
+    poll_interval_sec: float = Field(default=DEFAULT_POLL_INTERVAL_SEC, ge=0.2)
     auto_reinvest_enabled: bool = False
     auto_reinvest_percent: Decimal = Field(default=Decimal("100"), ge=0, le=100)
 
