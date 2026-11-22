@@ -1,6 +1,6 @@
 # 两条实盘网格的订单巡检
 
-macOS LaunchAgent `com.mutouretu.gridtrader.live-maintenance` 每 300 秒（5 分钟）运行一次 `scripts/live_grid_maintenance.py`。它只检查币安 `soxlusdt-fixed-c6ce0449` 和 OKX `soxl-usdt-swap-fixed-197a79bf` 的网格订单：读取各自数据库里的格子与订单引用，再读取交易所的当前挂单和标记价。它不检查进程、开关机、API 健康或账户总仓位，也不会启动或停止策略。
+macOS LaunchAgent `com.mutouretu.gridtrader.live-maintenance` 每 300 秒（5 分钟）运行一次 `scripts/live_grid_maintenance.py`。它从币安和 OKX 数据库发现状态为启动中、运行中或运行异常的策略，逐一读取格子与订单引用，再读取交易所的当前挂单和标记价；已停止、未启动、已归档的策略不会巡检。它不检查进程、开关机、API 健康或账户总仓位，也不会启动或停止策略。
 
 网格调度器本身每约 5 秒同步订单，并负责按原有格子、价格带和最多约 10 单/侧的窗口规则补挂。订单巡检若发现数据库已登记的订单从交易所挂单中消失、格线已穿过却未挂单、持仓格需要人工复核，或发现未被格子记录的托管订单，会在接下来约 60 秒内复查最多三次。已由调度器同步解决的订单问题记为 `resolved_after_sync`；仍未补好的具体格子记入日志，并发本机通知。巡检不另起一套下单逻辑，避免与正在交易的调度器同时下单造成重复仓位。没有挂单的普通窗口外逻辑格不会被当成缺单。
 

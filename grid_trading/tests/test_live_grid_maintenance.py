@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -52,7 +53,7 @@ def test_matching_open_order_clears_gap():
 
 
 def test_recheck_observes_scheduler_replenishment_without_placing_order():
-    target = maintenance.TARGETS[0]
+    target = maintenance.Target("binance", "grid", Path("grid.sqlite3"), Path(".env"))
     initial = {"checked_at": "now", "venue": target.venue,
                "strategy_id": target.strategy_id, "symbol": "SOXLUSDT",
                "open_order_count": 19,
@@ -69,18 +70,33 @@ def test_recheck_observes_scheduler_replenishment_without_placing_order():
     sleep.assert_called_once_with(10)
 
 
-def test_okx_patrol_targets_current_live_grid():
-    okx = next(target for target in maintenance.TARGETS if target.venue == "okx")
-    assert okx.strategy_id == "soxl-usdt-swap-fixed-197a79bf"
-    assert okx.db == maintenance.GRID_RUNTIME / "okx/grid.sqlite3"
-    assert okx.env_file == maintenance.GRID_PACKAGE / "okx.env"
-    binance = next(target for target in maintenance.TARGETS if target.venue == "binance")
-    assert binance.db == maintenance.GRID_RUNTIME / "binance/grid.sqlite3"
-    assert binance.env_file == maintenance.GRID_PACKAGE / ".env"
+def test_patrol_discovers_running_strategies_and_skips_stopped_ones():
+    def database(path):
+        if path == maintenance.GRID_RUNTIME / "binance/grid.sqlite3":
+            return {"strategies": [
+                {"strategy_id": "old-binance", "status": "stopped"},
+                {"strategy_id": "live-binance", "status": "running"},
+            ]}
+        return {"strategies": [
+            {"strategy_id": "live-okx", "status": "error"},
+            {"strategy_id": "draft-okx", "status": "draft"},
+        ]}
+
+    with patch.object(maintenance, "read_database", side_effect=database):
+        targets = maintenance.active_targets()
+    assert [(target.venue, target.strategy_id) for target in targets] == [
+        ("binance", "live-binance"), ("okx", "live-okx")
+    ]
+    assert targets[0].db == maintenance.GRID_RUNTIME / "binance/grid.sqlite3"
+    assert targets[0].env_file == maintenance.GRID_PACKAGE / ".env"
+    assert targets[1].db == maintenance.GRID_RUNTIME / "okx/grid.sqlite3"
+    assert targets[1].env_file == maintenance.GRID_PACKAGE / "okx.env"
 
 
 def test_scan_selects_target_among_other_strategies():
-    target = next(target for target in maintenance.TARGETS if target.venue == "okx")
+    target = maintenance.Target(
+        "okx", "live-okx", Path("grid.sqlite3"), Path("okx.env")
+    )
     database = {
         "strategies": [
             {"strategy_id": "another-draft", "symbol": "BTC-USDT-SWAP"},

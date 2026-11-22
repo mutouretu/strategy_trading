@@ -37,19 +37,25 @@ class Target:
     env_file: Path
 
 
-TARGETS = (
-    Target(
-        "binance", "soxlusdt-fixed-c6ce0449",
-        GRID_RUNTIME / "binance/grid.sqlite3",
-        GRID_PACKAGE / ".env",
-    ),
-    Target(
-        "okx", "soxl-usdt-swap-fixed-197a79bf",
-        GRID_RUNTIME / "okx/grid.sqlite3",
-        GRID_PACKAGE / "okx.env",
-    ),
+VENUE_FILES = (
+    ("binance", GRID_RUNTIME / "binance/grid.sqlite3", GRID_PACKAGE / ".env"),
+    ("okx", GRID_RUNTIME / "okx/grid.sqlite3", GRID_PACKAGE / "okx.env"),
 )
 RUNTIME = GRID_RUNTIME / "live-maintenance"
+ACTIVE_STATUSES = {"starting", "running", "error"}
+
+
+def active_targets() -> tuple[Target, ...]:
+    """Patrol the strategies that currently need order maintenance."""
+    targets = []
+    for venue, db, env_file in VENUE_FILES:
+        database = read_database(db)
+        targets.extend(
+            Target(venue, str(item["strategy_id"]), db, env_file)
+            for item in database["strategies"]
+            if item["status"] in ACTIVE_STATUSES
+        )
+    return tuple(targets)
 
 
 def utc_now() -> str:
@@ -211,7 +217,8 @@ def main() -> int:
     except BlockingIOError:
         print(json.dumps({"status": "already_running"}))
         return 0
-    results = [run_target(target, recheck_delay=args.recheck_delay) for target in TARGETS]
+    results = [run_target(target, recheck_delay=args.recheck_delay)
+               for target in active_targets()]
     state_path = RUNTIME / "last-issues.json"
     try:
         previous = json.loads(state_path.read_text())
