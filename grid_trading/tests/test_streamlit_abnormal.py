@@ -491,6 +491,40 @@ class StreamlitAbnormalTests(unittest.TestCase):
         self.assertEqual(list(app.exception), [])
         self.assertEqual([error.value for error in app.error], ["cells unavailable"])
 
+    def test_upper_seed_selection_survives_detail_rerun_and_saves(self):
+        item = strategy_payload(
+            "binance-upper-seed", symbol="SOXLUSDT", status="running", has_started=True,
+        )
+        item.update({
+            "grid_kind": "fixed_equal_usdt", "fixed_entry_mode": "price_triggered",
+            "grid_budget_usdt": "500", "upper_seed_count": 0,
+            "upper_seed_active_count": 0,
+        })
+        cells = [{
+            "index": 1, "cell_id": "seed-cell-1", "buy_price": "33.5",
+            "sell_price": "33.7", "stage": "pending_entry",
+            "entry_order_id": 101, "exit_order_id": None,
+            "open_qty": "0", "budget_usdt": "10", "cycle_count": 0,
+        }]
+        path = f"/strategies/{item['strategy_id']}/upper-seed"
+        state = StubState(
+            strategies=[item], cells=cells,
+            status_overrides={
+                ("GET", f"/strategies/{item['strategy_id']}/topups"): (200, []),
+                ("GET", f"/strategies/{item['strategy_id']}/reinvestments"): (200, []),
+                ("POST", path): (200, {"upper_seed_count": 3}),
+            },
+        )
+        with stub_api(state):
+            app = AppTest.from_file(APP_FILE, default_timeout=8)
+            app.query_params["strategy"] = item["strategy_id"]
+            app.run()
+            app.selectbox(key=f"upper_seed_count_{item['strategy_id']}").set_value(3).run()
+            app.button(key=f"upper_seed_save_{item['strategy_id']}").click().run()
+
+        self.assertEqual(list(app.exception), [])
+        self.assertIn(("POST", path, {"count": 3}), state.calls)
+
     def test_detail_table_does_not_insert_current_price_row(self):
         item = strategy_payload()
         item["current_price"] = "0.0013333"

@@ -1359,18 +1359,27 @@ def render_upper_seed(grid: dict) -> None:
     active = int(grid.get("upper_seed_active_count", 0))
     with st.expander(f"上方预买卖格 · {active}/{current} 格", expanded=False):
         st.caption("实盘启动或重新启用时只记录价格前沿，不立即预买；价格向上进入新区域后才补至设定格数。回落不扩展预买范围，已有仓位保留。")
-        with st.form(f"upper_seed_form_{strategy_id}"):
-            selected = st.selectbox(
-                "预买格数", [0, 3, 4, 5], index=[0, 3, 4, 5].index(current),
-                key=f"upper_seed_count_{strategy_id}",
-            )
-            save = st.form_submit_button("保存预买格数")
-        if save:
+        choices = [0, 3, 4, 5]
+        selection_key = f"upper_seed_count_{strategy_id}"
+        saved_key = f"upper_seed_saved_{strategy_id}"
+        if st.session_state.get(saved_key) != current:
+            st.session_state[selection_key] = current
+            st.session_state[saved_key] = current
+        selected = st.selectbox("预买格数", choices, key=selection_key)
+        if st.button("保存预买格数", key=f"upper_seed_save_{strategy_id}"):
             try:
-                backend().set_upper_seed_count(strategy_id, int(selected))
+                saved = backend_for(grid["venue"]).set_upper_seed_count(
+                    strategy_id, int(selected)
+                )
+                if int(saved["upper_seed_count"]) != int(selected):
+                    raise GridApiError("预买格数保存后与请求值不一致")
             except GridApiError as exc:
                 st.error(str(exc))
             else:
+                st.session_state["api_flash_success"] = (
+                    f"预买格数已保存为 {selected}；实盘需价格进入新的未激活区后才会补足。"
+                    if selected else "预买格数已关闭；已有预买仓位不会自动平仓。"
+                )
                 st.rerun()
 
 
