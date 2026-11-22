@@ -100,7 +100,7 @@ class TradingEngine:
     def sync_orders_only(self) -> list[GridCell]:
         if not self.initialized:
             self.initialize()
-        for snapshot in self.store.list_cells(self.strategy_id):
+        for snapshot in self._order_sync_candidates(self.store.list_cells(self.strategy_id)):
             cell = self._stored_cell(snapshot.cell_id)
             if cell is None:
                 continue
@@ -130,6 +130,9 @@ class TradingEngine:
                 if self._retry_ready(cell, "place_exit"):
                     self._ensure_exit(cell)
         return self.store.list_cells(self.strategy_id)
+
+    def _order_sync_candidates(self, cells: list[GridCell]) -> list[GridCell]:
+        return cells
 
     def ensure_exit(self, cell: GridCell, quantity: Decimal | None = None) -> None:
         self._ensure_exit(cell, quantity)

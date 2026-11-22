@@ -308,6 +308,25 @@ class FixedGridEngine(TradingEngine):
             self._window_entry_ids = None
             self._window_exit_ids = None
 
+    def _order_sync_candidates(self, cells: list[GridCell]) -> list[GridCell]:
+        # The full, cheap snapshot still drives trigger activation and window
+        # selection. Only cells with an exchange reference, uncertain submit,
+        # manual review, or a selected window slot need per-cell order queries.
+        entry_targets = self._window_entry_ids or set()
+        exit_targets = self._window_exit_ids or set()
+        return [
+            cell for cell in cells
+            if cell.stage == CellStage.MANUAL_REVIEW
+            or (cell.stage == CellStage.PENDING_ENTRY and (
+                cell.entry_order_id is not None or cell.entry_client_id
+                or cell.cell_id in entry_targets
+            ))
+            or (cell.stage == CellStage.PENDING_EXIT and (
+                cell.exit_order_id is not None or cell.exit_client_id
+                or cell.cell_id in exit_targets
+            ))
+        ]
+
     def tick(self) -> Decimal:
         if not self.initialized:
             self.initialize()

@@ -1311,6 +1311,38 @@ class FixedEqualUGridTests(unittest.TestCase):
         self.assertEqual(sum(cell.entry_order_id is not None for cell in cells), 10)
         self.assertEqual(sum(cell.exit_order_id is not None for cell in cells), 10)
 
+    def test_order_patrol_reads_active_cells_and_reconciles_a_fill(self) -> None:
+        self.exchange.mark = Decimal("60.23")
+        self.exchange.filters = replace(
+            self.exchange.filters,
+            step_size=Decimal("0.01"), min_qty=Decimal("0.01"),
+            min_notional=Decimal("5"), contract_type="TRADIFI_PERPETUAL",
+        )
+        config = GridService(self.store, SimpleNamespace()).create_fixed(
+            "SOXLUSDT", Decimal("30"), Decimal("150"), 323,
+            Decimal("5000"), Decimal("0.01"),
+        )
+        self.store.mark_started(config.strategy_id)
+        engine = FixedGridEngine(self.store, self.exchange, config.strategy_id)
+        engine.tick()
+        buy = next(
+            cell for cell in self.store.list_cells(config.strategy_id)
+            if cell.entry_order_id is not None
+        )
+        self.exchange.fill(buy.entry_order_id)
+
+        with patch.object(self.store, "get_cell", wraps=self.store.get_cell) as read_cell:
+            engine.sync_orders_only()
+
+        self.assertLess(read_cell.call_count, 100)
+        filled = self.store.get_cell(config.strategy_id, buy.cell_id)
+        self.assertEqual(filled.stage, CellStage.PENDING_EXIT)
+        self.assertGreater(filled.open_qty, 0)
+        # The separate patrol records the fill; the regular tick selects its
+        # sell window slot before placing the paired order.
+        engine.tick()
+        self.assertIsNotNone(self.store.get_cell(config.strategy_id, buy.cell_id).exit_order_id)
+
     def test_small_price_move_keeps_existing_window(self) -> None:
         self.exchange.mark = Decimal("60.23")
         self.exchange.filters = replace(
