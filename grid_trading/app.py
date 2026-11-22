@@ -387,7 +387,7 @@ def render_fixed_grid_create() -> None:
         )
         upper_seed_count = st.selectbox(
             "上方预买卖格", [0, 3, 4, 5], index=0,
-            help="仅模拟盘可用；实盘必须为 0，不会预买上方未触发单元格。",
+            help="实盘启动时不预买；价格首次进入新的未激活区域后，才向上预买设定格数。",
         )
         auto_reinvest = st.checkbox("创建后开启自动复投", value=False)
         reinvest_percent = st.number_input(
@@ -1358,7 +1358,7 @@ def render_upper_seed(grid: dict) -> None:
     current = int(grid.get("upper_seed_count", 0))
     active = int(grid.get("upper_seed_active_count", 0))
     with st.expander(f"上方预买卖格 · {active}/{current} 格", expanded=False):
-        st.caption("只预买价格上方最近的格子；价格向上进入新区域时补新格。价格回落不扩展预买范围，未完成的预买格最多为设定数量。")
+        st.caption("实盘启动或重新启用时只记录价格前沿，不立即预买；价格向上进入新区域后才补至设定格数。回落不扩展预买范围，已有仓位保留。")
         with st.form(f"upper_seed_form_{strategy_id}"):
             selected = st.selectbox(
                 "预买格数", [0, 3, 4, 5], index=[0, 3, 4, 5].index(current),

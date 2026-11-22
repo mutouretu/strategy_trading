@@ -14,7 +14,7 @@ from ..ports.exchange import ExchangeExecutionUnknownError, OrderNotFoundError
 from ..shared.config import fixed_grid_endpoint_allowed, okx_fixed_grid_endpoint_allowed
 from .engine import TradingEngine
 from .grid_performance import strategy_performance, sync_strategy_trades
-from .live_entry_policy import is_live_exchange, require_live_triggered_without_prebuy
+from .live_entry_policy import is_live_exchange, require_live_triggered_entry
 
 
 class FixedGridEngine(TradingEngine):
@@ -67,7 +67,7 @@ class FixedGridEngine(TradingEngine):
             if not okx_fixed_grid_endpoint_allowed(raw_exchange.base_url, simulated=raw_exchange.simulated):
                 raise ValueError("fixed equal-USDT grid requires explicit OKX live opt-in")
         config = self._config()
-        require_live_triggered_without_prebuy(
+        require_live_triggered_entry(
             raw_exchange, config.fixed_entry_mode, config.upper_seed_count,
         )
         self.store.ensure_reinvest_cutover(self.strategy_id)
@@ -364,8 +364,10 @@ class FixedGridEngine(TradingEngine):
             self._reinvest_closed_cells()
             if config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
                 self.store.arm_triggered_fixed_cells(self.strategy_id, mark)
-                if not is_live_exchange(self.exchange):
-                    self.store.arm_upper_seed_cells(self.strategy_id, mark)
+                self.store.arm_upper_seed_cells(
+                    self.strategy_id, mark,
+                    defer_until_price_advance=is_live_exchange(self.exchange),
+                )
             else:
                 self._arm_untriggered()
             self.sync_orders_only()
@@ -780,7 +782,10 @@ class FixedGridEngine(TradingEngine):
             downside_budget = sum(
                 (cell.budget_usdt for cell in cells if cell.buy_price <= mark), Decimal("0")
             )
-            upper_seed_cells = [cell for cell in cells if cell.buy_price > mark][:config.upper_seed_count]
+            upper_seed_cells = (
+                [] if is_live_exchange(self.exchange) else
+                [cell for cell in cells if cell.buy_price > mark][:config.upper_seed_count]
+            )
             upper_seed_budget = sum((cell.budget_usdt for cell in upper_seed_cells), Decimal("0"))
             required = min(
                 config.grid_budget_usdt,

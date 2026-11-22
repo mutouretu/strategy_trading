@@ -19,12 +19,10 @@ def is_live_exchange(exchange: object) -> bool:
     return False
 
 
-def require_live_triggered_without_prebuy(
+def require_live_triggered_entry(
     exchange: object, entry_mode: FixedEntryMode, upper_seed_count: int,
 ) -> None:
     if not is_live_exchange(exchange):
         return
     if entry_mode != FixedEntryMode.PRICE_TRIGGERED:
         raise ValueError("实盘固定网格必须使用回踩触发模式，禁止初始预建仓")
-    if upper_seed_count:
-        raise ValueError("实盘固定网格禁止预买上方未触发单元格；预买格数必须为 0")

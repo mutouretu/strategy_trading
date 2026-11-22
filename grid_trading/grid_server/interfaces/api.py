@@ -31,7 +31,7 @@ from ..domain.grid import fixed_cell_budgets, round_down
 from ..application.service import GridService
 from ..application.fixed_reconfiguration import FixedReconfigurationWorkflow
 from ..application.grid_performance import strategy_performance, sync_strategy_trades
-from ..application.live_entry_policy import require_live_triggered_without_prebuy
+from ..application.live_entry_policy import is_live_exchange, require_live_triggered_entry
 from ..infrastructure.sqlite_store import SQLiteStore
 from ..runtime.supervisor import StrategySupervisor
 
@@ -511,7 +511,7 @@ def create_app(
     def preview_fixed_grid(data: FixedGridInput) -> dict:
         try:
             exchange = exchange_for(FuturesMarket.USDM)
-            require_live_triggered_without_prebuy(
+            require_live_triggered_entry(
                 exchange, data.fixed_entry_mode, data.upper_seed_count,
             )
             symbol = data.symbol.strip().upper()
@@ -530,7 +530,7 @@ def create_app(
             maker_rate, taker_rate = exchange.get_commission_rates(symbol)
             details = fixed_grid_preview_details(
                 cells, exchange.get_mark_price(symbol), filters, maker_rate, taker_rate,
-                data.fixed_entry_mode, data.upper_seed_count,
+                data.fixed_entry_mode, 0 if is_live_exchange(exchange) else data.upper_seed_count,
             )
             return {
                 "config": strategy_payload(config, _PreviewStore(cells)),
@@ -544,7 +544,7 @@ def create_app(
     def create_fixed_grid(data: FixedGridInput) -> dict:
         try:
             exchange = exchange_for(FuturesMarket.USDM)
-            require_live_triggered_without_prebuy(
+            require_live_triggered_entry(
                 exchange, data.fixed_entry_mode, data.upper_seed_count,
             )
             symbol = data.symbol.strip().upper()
@@ -563,7 +563,7 @@ def create_app(
             maker_rate, taker_rate = exchange.get_commission_rates(symbol)
             fixed_grid_preview_details(
                 preview_cells, exchange.get_mark_price(symbol), filters, maker_rate, taker_rate,
-                data.fixed_entry_mode, data.upper_seed_count,
+                data.fixed_entry_mode, 0 if is_live_exchange(exchange) else data.upper_seed_count,
             )
             config = service.create_fixed(
                 symbol, data.lower_price, data.upper_price,
@@ -823,7 +823,7 @@ def create_app(
             config = store.get_strategy(strategy_id)
             if config is None:
                 raise KeyError(strategy_id)
-            require_live_triggered_without_prebuy(
+            require_live_triggered_entry(
                 exchange_for(FuturesMarket.USDM), config.fixed_entry_mode, data.count,
             )
             config = store.set_upper_seed_count(strategy_id, data.count)
@@ -880,7 +880,7 @@ def create_app(
             config = store.get_strategy(strategy_id)
             if config is not None and config.grid_kind == GridKind.FIXED_EQUAL_USDT:
                 exchange = exchange_for(FuturesMarket.USDM)
-                require_live_triggered_without_prebuy(
+                require_live_triggered_entry(
                     exchange, config.fixed_entry_mode, config.upper_seed_count,
                 )
                 if isinstance(exchange, BinanceFuturesExchange):

@@ -88,6 +88,7 @@ class SQLiteStore:
                     grid_generation INTEGER NOT NULL DEFAULT 0,
                     upper_seed_count INTEGER NOT NULL DEFAULT 0,
                     upper_seed_frontier INTEGER,
+                    upper_seed_activation_baseline INTEGER,
                     auto_reinvest_enabled INTEGER NOT NULL DEFAULT 0,
                     auto_reinvest_percent TEXT NOT NULL DEFAULT '100',
                     order_coin_qty TEXT,
@@ -428,6 +429,7 @@ class SQLiteStore:
                 ("grid_generation", "INTEGER NOT NULL DEFAULT 0"),
                 ("upper_seed_count", "INTEGER NOT NULL DEFAULT 0"),
                 ("upper_seed_frontier", "INTEGER"),
+                ("upper_seed_activation_baseline", "INTEGER"),
                 ("auto_reinvest_enabled", "INTEGER NOT NULL DEFAULT 0"),
                 ("auto_reinvest_percent", "TEXT NOT NULL DEFAULT '100'"),
             ):
@@ -600,7 +602,7 @@ class SQLiteStore:
                 """
                 UPDATE strategies SET symbol=?, market_type=?, venue=?, mode=?, anchor_price=?, grid_ratio=?, grid_count=?,
                     order_usdt=?, grid_kind=?, fixed_entry_mode=?, lower_price=?, upper_price=?, grid_budget_usdt=?,
-                    upper_seed_count=?, upper_seed_frontier=NULL,
+                    upper_seed_count=?, upper_seed_frontier=NULL, upper_seed_activation_baseline=NULL,
                     auto_reinvest_enabled=?, auto_reinvest_percent=?,
                     order_coin_qty=?, contract_size=?, leverage=?,
                     poll_interval_sec=?, move_grid=?, updated_at=?
@@ -1086,7 +1088,8 @@ class SQLiteStore:
             conn.execute(
                 """UPDATE strategies SET anchor_price=?, grid_ratio=?, grid_count=?,
                    order_usdt=?, lower_price=?, upper_price=?, grid_budget_usdt=?,
-                   grid_generation=?, fixed_entry_mode=?, upper_seed_frontier=NULL, updated_at=?
+                   grid_generation=?, fixed_entry_mode=?, upper_seed_frontier=NULL,
+                   upper_seed_activation_baseline=NULL, updated_at=?
                    WHERE strategy_id=?""",
                 (str(config.anchor_price), str(config.grid_ratio), config.grid_count,
                  str(config.order_usdt), str(config.lower_price),
@@ -1598,7 +1601,8 @@ class SQLiteStore:
             if old_count != count:
                 frontier = row["upper_seed_frontier"] if old_count and count else None
                 conn.execute(
-                    "UPDATE strategies SET upper_seed_count=?, upper_seed_frontier=?, updated_at=? WHERE strategy_id=?",
+                    """UPDATE strategies SET upper_seed_count=?, upper_seed_frontier=?,
+                       upper_seed_activation_baseline=NULL, updated_at=? WHERE strategy_id=?""",
                     (count, frontier, now, strategy_id),
                 )
                 conn.execute(
@@ -1629,7 +1633,9 @@ class SQLiteStore:
                 (strategy_id,),
             )]
 
-    def arm_upper_seed_cells(self, strategy_id: str, mark: Decimal) -> int:
+    def arm_upper_seed_cells(
+        self, strategy_id: str, mark: Decimal, *, defer_until_price_advance: bool = False,
+    ) -> int:
         """Arm only the next few cells above the highest observed buy level.
 
         The frontier never moves down, so a price decline cannot repeatedly
@@ -1640,7 +1646,7 @@ class SQLiteStore:
             conn.execute("BEGIN IMMEDIATE")
             config = conn.execute(
                 """SELECT fixed_entry_mode, status, lower_price, upper_price,
-                          upper_seed_count, upper_seed_frontier
+                          upper_seed_count, upper_seed_frontier, upper_seed_activation_baseline
                    FROM strategies WHERE strategy_id=? AND deleted_at IS NULL""",
                 (strategy_id,),
             ).fetchone()
@@ -1662,12 +1668,33 @@ class SQLiteStore:
                 default=0,
             )
             prior = config["upper_seed_frontier"]
+            baseline = config["upper_seed_activation_baseline"]
+            if defer_until_price_advance and baseline is None:
+                # Starting a live strategy or re-enabling prebuy only records
+                # the current boundary. Existing held seed slots also set a
+                # floor, so a price retreat cannot prebuy earlier cells.
+                highest_held_seed = conn.execute(
+                    """SELECT MAX(cell.cell_index) FROM upper_seed_slots AS slot
+                       JOIN cells AS cell ON cell.strategy_id=slot.strategy_id
+                           AND cell.cell_id=slot.cell_id
+                       WHERE slot.strategy_id=? AND cell.cycle_count=slot.cycle_count""",
+                    (strategy_id,),
+                ).fetchone()[0]
+                baseline = max(crossed, int(prior or 0), int(highest_held_seed or 0))
+                conn.execute(
+                    """UPDATE strategies SET upper_seed_frontier=?,
+                       upper_seed_activation_baseline=?, updated_at=? WHERE strategy_id=?""",
+                    (baseline, baseline, now, strategy_id),
+                )
+                return 0
             frontier = max(crossed, int(prior)) if prior is not None else crossed
             if prior is None or frontier != int(prior):
                 conn.execute(
                     "UPDATE strategies SET upper_seed_frontier=?, updated_at=? WHERE strategy_id=?",
                     (frontier, now, strategy_id),
                 )
+            if defer_until_price_advance and frontier <= int(baseline):
+                return 0
             active_slots = conn.execute(
                 """SELECT COUNT(*) FROM upper_seed_slots AS slot
                    JOIN cells AS cell ON cell.strategy_id=slot.strategy_id AND cell.cell_id=slot.cell_id
