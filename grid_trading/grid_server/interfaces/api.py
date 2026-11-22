@@ -31,6 +31,7 @@ from ..domain.grid import fixed_cell_budgets, round_down
 from ..application.service import GridService
 from ..application.fixed_reconfiguration import FixedReconfigurationWorkflow
 from ..application.grid_performance import strategy_performance, sync_strategy_trades
+from ..application.live_entry_policy import require_live_triggered_without_prebuy
 from ..infrastructure.sqlite_store import SQLiteStore
 from ..runtime.supervisor import StrategySupervisor
 
@@ -510,6 +511,9 @@ def create_app(
     def preview_fixed_grid(data: FixedGridInput) -> dict:
         try:
             exchange = exchange_for(FuturesMarket.USDM)
+            require_live_triggered_without_prebuy(
+                exchange, data.fixed_entry_mode, data.upper_seed_count,
+            )
             symbol = data.symbol.strip().upper()
             filters = exchange.get_symbol_filters(symbol)
             if filters.contract_type and filters.contract_type not in {"PERPETUAL", "TRADIFI_PERPETUAL"}:
@@ -540,6 +544,9 @@ def create_app(
     def create_fixed_grid(data: FixedGridInput) -> dict:
         try:
             exchange = exchange_for(FuturesMarket.USDM)
+            require_live_triggered_without_prebuy(
+                exchange, data.fixed_entry_mode, data.upper_seed_count,
+            )
             symbol = data.symbol.strip().upper()
             filters = exchange.get_symbol_filters(symbol)
             if filters.contract_type and filters.contract_type not in {"PERPETUAL", "TRADIFI_PERPETUAL"}:
@@ -813,6 +820,12 @@ def create_app(
     @app.post("/strategies/{strategy_id}/upper-seed")
     def set_upper_seed(strategy_id: str, data: UpperSeedInput) -> dict:
         try:
+            config = store.get_strategy(strategy_id)
+            if config is None:
+                raise KeyError(strategy_id)
+            require_live_triggered_without_prebuy(
+                exchange_for(FuturesMarket.USDM), config.fixed_entry_mode, data.count,
+            )
             config = store.set_upper_seed_count(strategy_id, data.count)
             return strategy_payload(config, store)
         except KeyError as exc:
@@ -867,6 +880,9 @@ def create_app(
             config = store.get_strategy(strategy_id)
             if config is not None and config.grid_kind == GridKind.FIXED_EQUAL_USDT:
                 exchange = exchange_for(FuturesMarket.USDM)
+                require_live_triggered_without_prebuy(
+                    exchange, config.fixed_entry_mode, config.upper_seed_count,
+                )
                 if isinstance(exchange, BinanceFuturesExchange):
                     if not fixed_grid_endpoint_allowed(exchange.base_url):
                         raise ValueError("fixed equal-USDT grid requires an approved Binance endpoint")

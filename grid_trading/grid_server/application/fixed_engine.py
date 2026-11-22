@@ -14,6 +14,7 @@ from ..ports.exchange import ExchangeExecutionUnknownError, OrderNotFoundError
 from ..shared.config import fixed_grid_endpoint_allowed, okx_fixed_grid_endpoint_allowed
 from .engine import TradingEngine
 from .grid_performance import strategy_performance, sync_strategy_trades
+from .live_entry_policy import is_live_exchange, require_live_triggered_without_prebuy
 
 
 class FixedGridEngine(TradingEngine):
@@ -65,6 +66,10 @@ class FixedGridEngine(TradingEngine):
         elif isinstance(raw_exchange, OkxSwapExchange):
             if not okx_fixed_grid_endpoint_allowed(raw_exchange.base_url, simulated=raw_exchange.simulated):
                 raise ValueError("fixed equal-USDT grid requires explicit OKX live opt-in")
+        config = self._config()
+        require_live_triggered_without_prebuy(
+            raw_exchange, config.fixed_entry_mode, config.upper_seed_count,
+        )
         self.store.ensure_reinvest_cutover(self.strategy_id)
         super().initialize()
         assert self.filters is not None
@@ -359,7 +364,8 @@ class FixedGridEngine(TradingEngine):
             self._reinvest_closed_cells()
             if config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
                 self.store.arm_triggered_fixed_cells(self.strategy_id, mark)
-                self.store.arm_upper_seed_cells(self.strategy_id, mark)
+                if not is_live_exchange(self.exchange):
+                    self.store.arm_upper_seed_cells(self.strategy_id, mark)
             else:
                 self._arm_untriggered()
             self.sync_orders_only()

@@ -386,8 +386,8 @@ def render_fixed_grid_create() -> None:
             help="回踩触发会先挂已越过买价的近端买单；高位格子等价格上涨越过买价后才激活。",
         )
         upper_seed_count = st.selectbox(
-            "上方预买卖格", [0, 3, 4, 5], index=1,
-            help="仅回踩触发时生效。默认预买现价上方最近 3 格；价格向上推进后补新格，未完成的预买格总数不超过设定值。",
+            "上方预买卖格", [0, 3, 4, 5], index=0,
+            help="仅模拟盘可用；实盘必须为 0，不会预买上方未触发单元格。",
         )
         auto_reinvest = st.checkbox("创建后开启自动复投", value=False)
         reinvest_percent = st.number_input(
