@@ -92,6 +92,9 @@ class GridApiClient:
     def reinvestments(self, strategy_id: str) -> list[dict]:
         return self._request("GET", f"/strategies/{strategy_id}/reinvestments")
 
+    def set_upper_seed_count(self, strategy_id: str, count: int) -> dict:
+        return self._request("POST", f"/strategies/{strategy_id}/upper-seed", json={"count": count})
+
     def set_auto_reinvest(
         self, strategy_id: str, enabled: bool, percent: str | None = None,
     ) -> dict:

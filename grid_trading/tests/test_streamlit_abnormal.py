@@ -855,34 +855,16 @@ class StreamlitAbnormalTests(unittest.TestCase):
         self.assertTrue(app.exception)
         self.assertIn("Expecting value", str(app.exception[0].value))
 
-    def test_reopened_create_dialog_exposes_stale_preview_as_confirmable(self):
-        first_symbol = "SOLUSDT"
-        old_payload = {
-            "symbol": first_symbol,
-            "mode": "long",
-            "anchor_price": "100",
-            "grid_ratio": "0.005",
-            "grid_count": 5,
-            "order_usdt": "10",
-            "leverage": 3,
-            "poll_interval_sec": 50.0,
-            "move_grid": True,
-        }
+    def test_create_dialog_defaults_to_fixed_range_inputs(self):
         state = StubState(strategies=[])
         with stub_api(state):
             app = run_app()
-            # This is the exact state left behind when a previewed dialog is
-            # dismissed without creating. A newly opened form is blank, but the
-            # old preview and its confirmation action are still rendered.
-            app.session_state["grid_create_preview"] = preview_payload(first_symbol)
-            app.session_state["grid_create_payload"] = old_payload
-            app.button[0].click().run()
+            next(button for button in app.button if button.label == "＋").click().run()
 
-        self.assertEqual(app.text_input[0].value, "")
-        self.assertIsNone(app.number_input[0].value)
-        self.assertTrue(any(button.label == "确认创建" for button in app.button))
-        self.assertTrue(any("范围" in caption.value for caption in app.caption))
-        self.assertEqual(app.session_state["grid_create_payload"]["symbol"], first_symbol)
+        labels = {item.label for item in app.number_input}
+        self.assertTrue({"区间下界", "区间上界", "目标等比间距（%）", "网格交易预算 (USDT)"} <= labels)
+        self.assertNotIn("锚定价格", labels)
+        self.assertFalse(any(button.label.startswith("确认创建") for button in app.button))
 
 
 if __name__ == "__main__":

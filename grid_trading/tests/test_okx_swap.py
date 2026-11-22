@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from grid_server.application.fixed_engine import FixedGridEngine
 from grid_server.domain import ExchangeVenue, OrderSide, OrderStatus, SymbolFilters
-from grid_server.infrastructure.okx import OkxSwapExchange
+from grid_server.infrastructure.okx import OkxAPIError, OkxSwapExchange
 from grid_server.infrastructure.sqlite_store import SQLiteStore
 from grid_server.interfaces.api import create_app
 from tests.fakes import FakeExchange
@@ -129,12 +129,23 @@ class OkxSwapTests(unittest.TestCase):
         events = []
         store = type("Store", (), {"append_event": lambda self, *args, **kwargs: events.append(args)})()
         engine = FixedGridEngine(store, exchange, "grid")
-        engine.filters = SymbolFilters(Decimal("0.01"), Decimal("0.01"))
+        engine.filters = SymbolFilters(
+            Decimal("0.01"), Decimal("0.01"),
+            percent_price_up=Decimal("1.2"), percent_price_down=Decimal("0.8"),
+        )
         engine._submit_limit_order("ABC-USDT-SWAP", OrderSide.BUY, "LONG", Decimal("1"), Decimal("65"), "buy")
         engine._submit_limit_order("ABC-USDT-SWAP", OrderSide.SELL, "LONG", Decimal("1"), Decimal("63"), "sell")
         self.assertEqual([item[0][4] for item in submitted], [Decimal("64.51"), Decimal("63.49")])
         self.assertTrue(all(item[1]["post_only"] is False for item in submitted))
         self.assertEqual(len(events), 2)
+
+    def test_okx_price_band_race_is_retryable(self):
+        self.assertTrue(FixedGridEngine._retryable_price_rejection(
+            OkxAPIError("51006", "Order price is not within the price limit")
+        ))
+        self.assertFalse(FixedGridEngine._retryable_price_rejection(
+            OkxAPIError("51000", "Invalid parameter")
+        ))
 
     def test_database_binding_and_okx_fixed_grid_creation(self):
         with tempfile.TemporaryDirectory() as temp:

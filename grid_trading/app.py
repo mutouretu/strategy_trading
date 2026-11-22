@@ -13,6 +13,7 @@ import streamlit as st
 from dotenv import dotenv_values
 
 from grid_server.interfaces.web_client import GridApiClient, GridApiError
+from grid_server.domain.grid import fixed_grid_count_for_ratio, fixed_grid_ratio
 from grid_server.shared.config import DEFAULT_ENV_FILE, api_base_url
 from grid_server.shared.price_format import format_price, infer_price_precision
 
@@ -266,11 +267,16 @@ def normalize_strategy(item: dict) -> dict:
         "market_type": market_type,
         "venue": venue,
         "grid_kind": item.get("grid_kind", "triggered"),
+        "fixed_entry_mode": item.get("fixed_entry_mode", "seeded"),
+        "upper_seed_count": int(item.get("upper_seed_count", 0)),
+        "upper_seed_frontier": item.get("upper_seed_frontier"),
+        "upper_seed_active_count": int(item.get("upper_seed_active_count", 0)),
         "grid_budget_usdt": None if item.get("grid_budget_usdt") is None else decimal_number(item["grid_budget_usdt"]),
         "auto_reinvest_enabled": bool(item.get("auto_reinvest_enabled", False)),
         "auto_reinvest_percent": decimal_number(item.get("auto_reinvest_percent"), 100.0),
         "market_label": (
-            f"{'OKX' if venue == 'okx' else '币安'} · 固定等 U · U 本位永续"
+            f"{'OKX' if venue == 'okx' else '币安'} · 固定等 U"
+            f"{' · 回踩触发' if item.get('fixed_entry_mode') == 'price_triggered' else ''} · U 本位永续"
             if item.get("grid_kind") == "fixed_equal_usdt"
             else ("币本位永续" if market_type == "coinm" else "U 本位永续")
         ),
@@ -364,13 +370,25 @@ def display_flash() -> None:
 
 def render_fixed_grid_create() -> None:
     venue = st.session_state.get("exchange_venue", "binance")
-    st.caption(f"{'OKX' if venue == 'okx' else '币安'} U 本位 · 固定天地网格 · 1 倍做多 · 每格等 U")
+    st.caption(f"{'OKX' if venue == 'okx' else '币安'} U 本位 · 固定区间等 U · 1 倍做多")
     with st.form("fixed_grid_preview_form"):
         symbol = st.text_input("交易对", placeholder="例如 SOXL-USDT-SWAP" if venue == "okx" else "例如 SOLUSDT", key="fixed_symbol")
         lower = st.number_input("区间下界", min_value=0.0, value=None, step=0.01, format="%.8f")
         upper = st.number_input("区间上界", min_value=0.0, value=None, step=0.01, format="%.8f")
-        count = st.number_input("网格数量", min_value=1, max_value=500, value=20, step=1)
+        ratio_percent = st.number_input(
+            "目标等比间距（%）", min_value=0.001, value=0.50,
+            step=0.01, format="%.3f",
+            help="根据区间自动计算网格数量；为覆盖完整区间，实际间距不超过此值。",
+        )
         budget = st.number_input("网格交易预算 (USDT)", min_value=0.01, value=None, step=100.0, format="%.2f")
+        entry_mode_label = st.radio(
+            "启动方式", ["回踩触发", "预建仓天地单"], horizontal=True,
+            help="回踩触发会先挂已越过买价的近端买单；高位格子等价格上涨越过买价后才激活。",
+        )
+        upper_seed_count = st.selectbox(
+            "上方预买卖格", [0, 3, 4, 5], index=1,
+            help="仅回踩触发时生效。默认预买现价上方最近 3 格；价格向上推进后补新格，未完成的预买格总数不超过设定值。",
+        )
         auto_reinvest = st.checkbox("创建后开启自动复投", value=False)
         reinvest_percent = st.number_input(
             "每格净利复投比例（%）", min_value=0.0, max_value=100.0,
@@ -379,21 +397,34 @@ def render_fixed_grid_create() -> None:
         )
         preview_clicked = st.form_submit_button("生成预览", type="primary")
     if preview_clicked:
+        reset_create_preview()
         if not symbol.strip() or lower is None or upper is None or budget is None:
-            st.error("请填写交易对、上下界和交易预算。")
+            st.error("请填写交易对、价格区间和交易预算。")
         else:
-            payload = {
-                "symbol": symbol.strip().upper(),
-                "lower_price": str(lower),
-                "upper_price": str(upper),
-                "grid_count": int(count),
-                "grid_budget_usdt": str(budget),
-                "auto_reinvest_enabled": bool(auto_reinvest),
-                "auto_reinvest_percent": str(Decimal(str(reinvest_percent))),
-            }
             try:
+                lower_price = Decimal(str(lower))
+                upper_price = Decimal(str(upper))
+                target_ratio = Decimal(str(ratio_percent)) / Decimal("100")
+                count = fixed_grid_count_for_ratio(lower_price, upper_price, target_ratio)
+                if count > 500:
+                    minimum_percent = fixed_grid_ratio(lower_price, upper_price, 500) * Decimal("100")
+                    raise ValueError(
+                        f"此区间需要 {count} 格，超过当前 500 格上限；"
+                        f"目标间距至少设为 {minimum_percent:.4f}%。"
+                    )
+                payload = {
+                    "symbol": symbol.strip().upper(),
+                    "lower_price": str(lower_price),
+                    "upper_price": str(upper_price),
+                    "grid_count": count,
+                    "grid_budget_usdt": str(budget),
+                    "fixed_entry_mode": "price_triggered" if entry_mode_label.startswith("回踩") else "seeded",
+                    "upper_seed_count": int(upper_seed_count) if entry_mode_label.startswith("回踩") else 0,
+                    "auto_reinvest_enabled": bool(auto_reinvest),
+                    "auto_reinvest_percent": str(Decimal(str(reinvest_percent))),
+                }
                 preview = backend().preview_fixed_grid(payload)
-            except GridApiError as exc:
+            except (GridApiError, ValueError) as exc:
                 st.error(str(exc))
             else:
                 st.session_state["fixed_create_payload"] = payload
@@ -403,16 +434,33 @@ def render_fixed_grid_create() -> None:
     if not preview or not payload:
         return
     allocation = preview["allocation"]
+    actual_ratio = fixed_grid_ratio(
+        Decimal(payload["lower_price"]), Decimal(payload["upper_price"]),
+        int(payload["grid_count"]),
+    )
+    st.write(
+        f"自动计算：{payload['grid_count']} 格 · 实际等比间距 {actual_ratio * 100:.4f}% · "
+        f"单格约 {Decimal(payload['grid_budget_usdt']) / Decimal(payload['grid_count']):.4f} U"
+    )
     st.write(
         f"当前价 {allocation['current_price']} · 买格 {allocation['buy_cell_count']} · "
         f"卖格 {allocation['sell_cell_count']}"
     )
-    st.info(
-        f"启动时将按当时市价一次性买入全部 {allocation['sell_cell_count']} 个上方卖格"
-        f"对应的数量，预计花费约 {float(allocation['estimated_seed_market_buy_usdt']):.2f} U；"
-        f"这些格子的预算上限合计 {allocation['seed_notional_usdt']} U。"
-        "下方买格等待价格跌到格线后买入。"
-    )
+    if payload.get("fixed_entry_mode") == "price_triggered":
+        upper_count = allocation["initial_upper_seed_cell_count"]
+        st.info(
+            f"启动时预买上方 {upper_count} 格，预计约 "
+            f"{float(allocation['estimated_upper_seed_buy_usdt']):.2f} U；"
+            f"当前有 {allocation['initial_triggerable_buy_cell_count']} 格满足买价触发条件。"
+            "价格向上推进时只补新进入窗口的格子，价格回落不扩展预买范围。"
+        )
+    else:
+        st.info(
+            f"启动时将按当时市价一次性买入全部 {allocation['sell_cell_count']} 个上方卖格"
+            f"对应的数量，预计花费约 {float(allocation['estimated_seed_market_buy_usdt']):.2f} U；"
+            f"这些格子的预算上限合计 {allocation['seed_notional_usdt']} U。"
+            "下方买格等待价格跌到格线后买入。"
+        )
     st.caption(
         "数量按每格预算 ÷ 该格买价计算；完整循环的卖出目标金额理论上约为"
         "单格预算 × (1 + 等比间距)。受交易所数量与价格精度影响，"
@@ -465,11 +513,17 @@ def render_fixed_grid_create() -> None:
         else:
             st.session_state.pop("fixed_create_payload", None)
             st.session_state.pop("fixed_create_preview", None)
+            st.session_state["create_grid_dialog_open"] = False
             st.session_state["api_flash_success"] = f"{created['symbol']} 固定网格已创建"
             st.rerun()
 
 
-@st.dialog("新增币对网格")
+def dismiss_create_grid_dialog() -> None:
+    st.session_state["create_grid_dialog_open"] = False
+    reset_create_preview()
+
+
+@st.dialog("新增币对网格", on_dismiss=dismiss_create_grid_dialog)
 def create_grid_dialog() -> None:
     venues = list(st.session_state.get("venue_api_urls", {}))
     if not venues:
@@ -492,8 +546,9 @@ def create_grid_dialog() -> None:
         return
     kind = st.segmented_control(
         "策略类型", ["触发式网格", "固定区间等 U"],
-        default="触发式网格", selection_mode="single", key="create_grid_kind",
-    ) or "触发式网格"
+        default="固定区间等 U", selection_mode="single", key="create_grid_kind_v2",
+        on_change=reset_create_preview,
+    ) or "固定区间等 U"
     if kind == "固定区间等 U":
         render_fixed_grid_create()
         return
@@ -610,6 +665,7 @@ def create_grid_dialog() -> None:
         else:
             st.session_state.pop("grid_create_preview", None)
             st.session_state.pop("grid_create_payload", None)
+            st.session_state["create_grid_dialog_open"] = False
             st.session_state["api_flash_success"] = f"{created['symbol']} 网格已创建"
             st.rerun()
 
@@ -776,6 +832,8 @@ def change_run_toggle(strategy_id: str, venue: str, fixed_grid: bool = False) ->
 def render_add_button() -> None:
     add_col, _ = st.columns([0.42, 8])
     if add_col.button("＋", width="stretch", help="新增币对网格"):
+        st.session_state["create_grid_dialog_open"] = True
+    if st.session_state.get("create_grid_dialog_open"):
         create_grid_dialog()
 
 
@@ -1293,6 +1351,29 @@ def render_fixed_reconfiguration(grid: dict) -> None:
                 st.rerun()
 
 
+def render_upper_seed(grid: dict) -> None:
+    if grid.get("fixed_entry_mode") != "price_triggered":
+        return
+    strategy_id = grid["id"]
+    current = int(grid.get("upper_seed_count", 0))
+    active = int(grid.get("upper_seed_active_count", 0))
+    with st.expander(f"上方预买卖格 · {active}/{current} 格", expanded=False):
+        st.caption("只预买价格上方最近的格子；价格向上进入新区域时补新格。价格回落不扩展预买范围，未完成的预买格最多为设定数量。")
+        with st.form(f"upper_seed_form_{strategy_id}"):
+            selected = st.selectbox(
+                "预买格数", [0, 3, 4, 5], index=[0, 3, 4, 5].index(current),
+                key=f"upper_seed_count_{strategy_id}",
+            )
+            save = st.form_submit_button("保存预买格数")
+        if save:
+            try:
+                backend().set_upper_seed_count(strategy_id, int(selected))
+            except GridApiError as exc:
+                st.error(str(exc))
+            else:
+                st.rerun()
+
+
 def render_fixed_reinvestment(grid: dict, cells: list[dict]) -> dict[str, int] | None:
     strategy_id = grid["id"]
     try:
@@ -1452,6 +1533,7 @@ def _render_detail_live(strategy_id: str) -> None:
     if grid["grid_kind"] == "fixed_equal_usdt":
         render_fixed_topup(grid, cells)
         render_fixed_reconfiguration(grid)
+        render_upper_seed(grid)
         reinvest_counts = render_fixed_reinvestment(grid, cells)
     try:
         actions = backend().cell_actions(grid["id"])

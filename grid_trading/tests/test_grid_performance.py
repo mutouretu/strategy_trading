@@ -103,6 +103,27 @@ class GridPerformanceTests(unittest.TestCase):
         self.assertEqual(len(self.store.list_strategy_trades(self.config.strategy_id)), 3)
         self.assertEqual(exchange.calls[-1]["from_id"], 4)
 
+    def test_manual_flat_recovery_counts_account_pnl_without_inflating_grid_profit(self) -> None:
+        self.store.append_event(
+            self.config.strategy_id, "GRID_MANUAL_FLAT_RECOVERY",
+            {"manual_close_order_ids": [555]},
+        )
+        self.store.save_strategy_trades(self.config.strategy_id, [
+            self._trade(1, 101, "0", "0.02", side="BUY"),
+            self._trade(2, 102, "1", "0.02"),
+            self._trade(3, 555, "4", "0.30", qty="3"),
+        ])
+        summary = strategy_performance(
+            self.store, self.config, coverage_complete=True,
+            now=self.started + timedelta(days=1),
+        )
+        planned_net = self.cell.sell_price - self.cell.buy_price - Decimal("0.04")
+        self.assertEqual(Decimal(summary["net_grid_profit_usdt"]), planned_net)
+        self.assertEqual(Decimal(summary["gross_realized_pnl_usdt"]), Decimal("5"))
+        self.assertEqual(Decimal(summary["manual_flat_realized_pnl_usdt"]), Decimal("4"))
+        self.assertEqual(Decimal(summary["manual_flat_trading_fees_usdt"]), Decimal("0.30"))
+        self.assertEqual(Decimal(summary["trading_fees_usdt"]), Decimal("0.34"))
+
     def test_initial_entry_price_comes_from_seed_fill_event(self) -> None:
         self.store.append_event(
             self.config.strategy_id,

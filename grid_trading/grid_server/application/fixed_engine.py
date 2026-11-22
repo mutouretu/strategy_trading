@@ -6,10 +6,10 @@ import os
 from dataclasses import replace
 from decimal import Decimal, ROUND_CEILING
 
-from ..domain import CellStage, GridCell, OrderSide, OrderStatus, StrategyStatus
+from ..domain import CellStage, FixedEntryMode, GridCell, OrderSide, OrderStatus, StrategyStatus
 from ..domain.grid import fixed_cell_budgets, round_down
 from ..infrastructure.binance import BinanceAPIError, BinanceFuturesExchange
-from ..infrastructure.okx import OkxSwapExchange
+from ..infrastructure.okx import OkxAPIError, OkxSwapExchange
 from ..ports.exchange import ExchangeExecutionUnknownError, OrderNotFoundError
 from ..shared.config import fixed_grid_endpoint_allowed, okx_fixed_grid_endpoint_allowed
 from .engine import TradingEngine
@@ -23,6 +23,13 @@ class FixedGridEngine(TradingEngine):
     REBALANCE_BELOW = 5
     REBALANCE_ABOVE = 15
     MAX_WINDOW_CANCELS_PER_TICK = 10
+
+    @staticmethod
+    def _triggered_cash_reserve(config) -> Decimal:
+        # Keep a small fee/funding cushion without making tiny test grids
+        # require a full 1,000 USDT reserve.
+        assert config.grid_budget_usdt is not None
+        return min(Decimal("1000"), config.grid_budget_usdt * Decimal("0.01"))
 
     def _event(self, event_type: str, cell: GridCell, payload: dict) -> None:
         if event_type == "CYCLE_CLOSED" or (
@@ -89,7 +96,7 @@ class FixedGridEngine(TradingEngine):
         ):
             # Mark price can cross a grid line while the executable book has not.
             # Keep the catch-up limit on the favorable side of the grid target
-            # while moving it inside Binance's current percent-price band.
+            # while moving it inside the exchange's current price band.
             submitted_price = price
             if isinstance(getattr(self.exchange, "exchange", self.exchange), OkxSwapExchange):
                 buy_limit, sell_limit = self.exchange.get_price_limits(symbol)
@@ -101,7 +108,7 @@ class FixedGridEngine(TradingEngine):
                     submitted_price = max(submitted_price, legal_minimum)
             if side == OrderSide.BUY and self.filters.percent_price_up > 0:
                 submitted_price = min(
-                    price, round_down(mark * self.filters.percent_price_up, self.filters.tick_size)
+                    submitted_price, round_down(mark * self.filters.percent_price_up, self.filters.tick_size)
                 )
             elif side == OrderSide.SELL and self.filters.percent_price_down > 0:
                 minimum = mark * self.filters.percent_price_down
@@ -110,7 +117,7 @@ class FixedGridEngine(TradingEngine):
                     (minimum / tick).to_integral_value(rounding=ROUND_CEILING) * tick
                     if tick > 0 else minimum
                 )
-                submitted_price = max(price, legal_minimum)
+                submitted_price = max(submitted_price, legal_minimum)
             order_id = self.exchange.place_limit_order(
                 symbol, side, position_side, quantity, submitted_price, client_order_id,
                 post_only=False,
@@ -168,7 +175,9 @@ class FixedGridEngine(TradingEngine):
         )
 
     @staticmethod
-    def _retryable_price_rejection(exc: BinanceAPIError) -> bool:
+    def _retryable_price_rejection(exc: BinanceAPIError | OkxAPIError) -> bool:
+        if isinstance(exc, OkxAPIError):
+            return exc.code == "51006"
         return any(code in str(exc) for code in ("-4016", "-4024", "-5022"))
 
     def _place_entry(self, cell: GridCell) -> None:
@@ -177,11 +186,70 @@ class FixedGridEngine(TradingEngine):
             return
         if not self._order_is_ready(OrderSide.BUY, cell.buy_price):
             return
+        config = self._config()
+        cash_before = None
+        required = Decimal("0")
+        if config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+            quantity = self._quantity(cell.buy_price, cell)
+            if quantity > 0:
+                available = getattr(self, "_tick_free_cash", None)
+                if available is None:
+                    available = self.exchange.get_available_balance("USDT")
+                required = quantity * cell.buy_price
+                reserve = self._triggered_cash_reserve(config)
+                if available < required + reserve:
+                    if not getattr(self, "_triggered_cash_waiting", False):
+                        self.store.append_event(
+                            self.strategy_id, "TRIGGERED_ENTRY_FUNDS_WAIT", {
+                                "available_usdt": str(available),
+                                "required_order_usdt": str(required),
+                                "reserve_usdt": str(reserve),
+                            }, cell.cell_id, self.run_id,
+                        )
+                    self._triggered_cash_waiting = True
+                    self._tick_free_cash = available
+                    return
+                cash_before = available
+                # The account snapshot may not yet reflect orders submitted in
+                # this tick. Reserve their full notional locally before trying
+                # another cell; an unknown submission remains reserved.
+                self._tick_free_cash = available - required
         try:
             super()._place_entry(cell)
-        except BinanceAPIError as exc:
+        except (BinanceAPIError, OkxAPIError) as exc:
+            if cash_before is not None:
+                self._tick_free_cash = cash_before
+            if (isinstance(exc, BinanceAPIError)
+                    and config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED
+                    and any(code in str(exc) for code in ("-2018", "-2019"))):
+                # The exchange's margin check can be stricter than the last
+                # available-balance snapshot. Wait for a fresh next-cycle
+                # balance instead of turning the strategy into an error loop.
+                if not getattr(self, "_triggered_cash_waiting", False):
+                    self.store.append_event(
+                        self.strategy_id, "TRIGGERED_ENTRY_FUNDS_WAIT", {
+                            "available_usdt": str(cash_before),
+                            "required_order_usdt": str(required),
+                            "reason": "exchange_margin_rejection",
+                        }, cell.cell_id, self.run_id,
+                    )
+                self._triggered_cash_waiting = True
+                self._tick_free_cash = Decimal("0")
+                return
             if not self._retryable_price_rejection(exc):
                 raise
+            return
+        except Exception:
+            if cash_before is not None:
+                self._tick_free_cash = cash_before
+            raise
+        if cash_before is not None and getattr(self, "_triggered_cash_waiting", False):
+            self.store.append_event(
+                self.strategy_id, "TRIGGERED_ENTRY_FUNDS_AVAILABLE", {
+                    "available_usdt": str(cash_before),
+                }, cell.cell_id, self.run_id,
+            )
+            self._triggered_cash_waiting = False
 
     def _ensure_exit(self, cell: GridCell, quantity: Decimal | None = None) -> None:
         allowed = getattr(self, "_window_exit_ids", None)
@@ -191,7 +259,7 @@ class FixedGridEngine(TradingEngine):
             return
         try:
             super()._ensure_exit(cell, quantity)
-        except BinanceAPIError as exc:
+        except (BinanceAPIError, OkxAPIError) as exc:
             if not self._retryable_price_rejection(exc):
                 raise
 
@@ -245,15 +313,18 @@ class FixedGridEngine(TradingEngine):
         mark = self.exchange.get_mark_price(config.symbol)
         self._tick_mark = mark
         self._tick_price_limits = None
+        self._tick_free_cash = None
         seed_id = f"seed:{self.strategy_id}"
         seed = self.store.get_capital_action(seed_id)
         if seed is None:
             self._preflight_seed()
-            assert config.grid_budget_usdt is not None
-            self.store.create_capital_action(
-                seed_id, self.strategy_id, "seed", config.grid_budget_usdt
-            )
-            seed = self.store.get_capital_action(seed_id)
+            if config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+                seed = self.store.activate_triggered_fixed_grid(self.strategy_id)
+            else:
+                assert config.grid_budget_usdt is not None
+                seed = self.store.create_capital_action(
+                    seed_id, self.strategy_id, "seed", config.grid_budget_usdt
+                )
 
         if seed["status"] == "manual_review":
             raise RuntimeError(f"initial position needs manual review: {seed['message']}")
@@ -286,7 +357,11 @@ class FixedGridEngine(TradingEngine):
                     return mark
 
             self._reinvest_closed_cells()
-            self._arm_untriggered()
+            if config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+                self.store.arm_triggered_fixed_cells(self.strategy_id, mark)
+                self.store.arm_upper_seed_cells(self.strategy_id, mark)
+            else:
+                self._arm_untriggered()
             self.sync_orders_only()
             self._refresh_order_window(mark, prior_entries, before)
             self.sync_orders_only()
@@ -327,6 +402,19 @@ class FixedGridEngine(TradingEngine):
         ]
         ready_entries = sum(cell.cell_id in active_entries for cell in ready_entry_cells)
         ready_exits = sum(cell.cell_id in active_exits for cell in ready_exit_cells)
+        if self._config().fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+            # A zero-position grid has no sell orders to replenish yet. Do not
+            # rebalance every tick solely because that side is intentionally empty.
+            sparse_window = (
+                bool(ready_entry_cells) and ready_entries < self.REBALANCE_BELOW
+            ) or (
+                bool(ready_exit_cells) and ready_exits < self.REBALANCE_BELOW
+            )
+        else:
+            sparse_window = (
+                min(len(active_entries), len(active_exits)) < self.REBALANCE_BELOW
+                or min(ready_entries, ready_exits) == 0
+            )
         # ready_entry_cells has already passed the exchange price-band check.
         # A buy line crossed during the separate position patrol has priority
         # within the same ten-order target, even if mark has moved far below it.
@@ -404,10 +492,9 @@ class FixedGridEngine(TradingEngine):
         # A bounded cleanup can span several ticks and must finish even if
         # its first batch brings the count below the upper threshold.
         if (not getattr(self, "_window_initialized", False)
-                or min(len(active_entries), len(active_exits)) < self.REBALANCE_BELOW
+                or sparse_window
                 or max(len(active_entries), len(active_exits)) > self.REBALANCE_ABOVE
                 or getattr(self, "_window_cleanup_pending", False)
-                or min(ready_entries, ready_exits) == 0
                 or price_priority_changed
                 or entry_gap or exit_gap
                 or bool(audited_repair_exits)
@@ -630,8 +717,9 @@ class FixedGridEngine(TradingEngine):
             }
             cells = [
                 cell for cell in self.store.list_cells(self.strategy_id)
-                if cell.stage == CellStage.UNTRIGGERED and cell.cycle_count > 0
-                and cell.open_qty == 0 and cell.entry_order_id is None
+                if cell.stage in {CellStage.UNTRIGGERED, CellStage.PENDING_ENTRY}
+                and cell.cycle_count > 0 and cell.open_qty == 0
+                and (cell.entry_order_id is not None or not cell.entry_client_id)
                 and (cell.cell_id, cell.cycle_count) in earned_cycles
             ]
             if not cells:
@@ -677,7 +765,27 @@ class FixedGridEngine(TradingEngine):
         mark = self.exchange.get_mark_price(config.symbol)
         if not config.lower_price <= mark <= config.upper_price:
             raise ValueError("current price is outside fixed grid boundaries")
-        if self.exchange.get_available_balance("USDT") < config.grid_budget_usdt:
+        available = self.exchange.get_available_balance("USDT")
+        if config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+            # Only buy levels at or below the starting mark are exposed on a
+            # direct decline. Require enough cash for that path, then gate
+            # every later buy order against live free margin.
+            cells = self.store.list_cells(self.strategy_id)
+            downside_budget = sum(
+                (cell.budget_usdt for cell in cells if cell.buy_price <= mark), Decimal("0")
+            )
+            upper_seed_cells = [cell for cell in cells if cell.buy_price > mark][:config.upper_seed_count]
+            upper_seed_budget = sum((cell.budget_usdt for cell in upper_seed_cells), Decimal("0"))
+            required = min(
+                config.grid_budget_usdt,
+                downside_budget + upper_seed_budget + self._triggered_cash_reserve(config),
+            )
+            if available < required:
+                raise ValueError(
+                    f"available USDT {available} is below triggered downside "
+                    f"requirement {required}"
+                )
+        elif available < config.grid_budget_usdt:
             raise ValueError("available USDT is below the grid budget")
         if any(position.symbol == config.symbol for position in self.exchange.get_positions()):
             raise ValueError("existing position on the symbol must be resolved before seeding")

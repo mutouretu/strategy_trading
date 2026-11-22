@@ -31,6 +31,11 @@ class GridKind(StrEnum):
     FIXED_EQUAL_USDT = "fixed_equal_usdt"
 
 
+class FixedEntryMode(StrEnum):
+    SEEDED = "seeded"
+    PRICE_TRIGGERED = "price_triggered"
+
+
 class StrategyStatus(StrEnum):
     DRAFT = "draft"
     STARTING = "starting"
@@ -84,12 +89,15 @@ class StrategyConfig:
     order_coin_qty: Decimal | None = None
     contract_size: Decimal = Decimal("0")
     grid_kind: GridKind = GridKind.TRIGGERED
+    fixed_entry_mode: FixedEntryMode = FixedEntryMode.SEEDED
     lower_price: Decimal | None = None
     upper_price: Decimal | None = None
     grid_budget_usdt: Decimal | None = None
     auto_reinvest_enabled: bool = False
     auto_reinvest_percent: Decimal = Decimal("100")
     grid_generation: int = 0
+    upper_seed_count: int = 0
+    upper_seed_frontier: int | None = None
 
     def validate(self) -> None:
         if not self.strategy_id.strip():
@@ -113,6 +121,10 @@ class StrategyConfig:
             raise ValueError("grid_count must be >= 1")
         if self.grid_generation < 0:
             raise ValueError("grid_generation must be >= 0")
+        if self.upper_seed_count not in {0, 3, 4, 5}:
+            raise ValueError("upper seed count must be 0 or 3–5")
+        if self.upper_seed_frontier is not None and not (0 <= self.upper_seed_frontier <= self.grid_count):
+            raise ValueError("upper seed frontier is outside the grid")
         if not self.auto_reinvest_percent.is_finite() or not (Decimal("0") <= self.auto_reinvest_percent <= Decimal("100")):
             raise ValueError("auto_reinvest_percent must be between 0 and 100")
         if self.grid_kind == GridKind.FIXED_EQUAL_USDT:
@@ -129,6 +141,12 @@ class StrategyConfig:
                 raise ValueError("fixed grid requires 0 < lower_price < upper_price")
             if self.grid_budget_usdt is None or self.grid_budget_usdt <= 0:
                 raise ValueError("fixed grid requires positive grid_budget_usdt")
+            if self.fixed_entry_mode != FixedEntryMode.PRICE_TRIGGERED and self.upper_seed_count:
+                raise ValueError("upper seed requires price-triggered entry mode")
+        elif self.fixed_entry_mode != FixedEntryMode.SEEDED:
+            raise ValueError("price-triggered entry mode requires a fixed equal-USDT grid")
+        elif self.upper_seed_count:
+            raise ValueError("upper seed requires a fixed equal-USDT grid")
         if self.market_type == FuturesMarket.COINM:
             if self.order_coin_qty is None or self.order_coin_qty <= 0:
                 raise ValueError("order_coin_qty must be > 0 for COIN-M")

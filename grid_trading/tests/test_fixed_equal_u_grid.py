@@ -16,7 +16,10 @@ from grid_server.domain import (
     CellStage, FuturesMarket, GridKind, Mode, OrderSide, OrderSnapshot,
     OrderStatus, StrategyConfig,
 )
-from grid_server.domain.grid import build_cells, fixed_cell_budgets, fixed_grid_ratio, round_down
+from grid_server.domain.grid import (
+    build_cells, fixed_cell_budgets, fixed_grid_count_for_ratio,
+    fixed_grid_ratio, round_down,
+)
 from grid_server.infrastructure.binance import BinanceFuturesExchange
 from grid_server.interfaces.api import create_app
 from grid_server.ports.exchange import ExchangeExecutionUnknownError
@@ -33,6 +36,20 @@ class FixedEqualUGridTests(unittest.TestCase):
         self.addCleanup(self.tempdir.cleanup)
         self.store = SQLiteStore(Path(self.tempdir.name) / "fixed.sqlite3")
         self.exchange = FakeExchange(Decimal("100"))
+
+    def test_count_from_target_ratio_fits_range_without_exceeding_gap(self) -> None:
+        lower, upper, target = Decimal("15"), Decimal("90"), Decimal("0.005")
+        count = fixed_grid_count_for_ratio(lower, upper, target)
+        self.assertEqual(count, 360)
+        self.assertLessEqual(fixed_grid_ratio(lower, upper, count), target)
+        self.assertGreater(fixed_grid_ratio(lower, upper, count - 1), target)
+        self.assertEqual(sum(fixed_cell_budgets(Decimal("50000"), count)), Decimal("50000"))
+
+    def test_count_from_target_ratio_rejects_invalid_inputs(self) -> None:
+        with self.assertRaises(ValueError):
+            fixed_grid_count_for_ratio(Decimal("90"), Decimal("15"), Decimal("0.005"))
+        with self.assertRaises(ValueError):
+            fixed_grid_count_for_ratio(Decimal("15"), Decimal("90"), Decimal("0"))
 
     def make_engine(self) -> FixedGridEngine:
         config = StrategyConfig(

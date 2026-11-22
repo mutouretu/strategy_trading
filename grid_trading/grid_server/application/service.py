@@ -5,7 +5,7 @@ import uuid
 from dataclasses import replace
 from decimal import Decimal
 
-from ..domain import ExchangeVenue, FuturesMarket, GridKind, Mode, OrderSide, OrderStatus, StrategyConfig, StrategyStatus
+from ..domain import ExchangeVenue, FixedEntryMode, FuturesMarket, GridKind, Mode, OrderSide, OrderStatus, StrategyConfig, StrategyStatus
 from ..ports.exchange import Exchange
 from ..domain.grid import build_cells, fixed_cell_budgets, fixed_grid_ratio, round_down
 from .grid_performance import strategy_performance, sync_strategy_trades
@@ -106,6 +106,8 @@ class GridService:
         venue: ExchangeVenue = ExchangeVenue.BINANCE,
         auto_reinvest_enabled: bool = False,
         auto_reinvest_percent: Decimal = Decimal("100"),
+        fixed_entry_mode: FixedEntryMode = FixedEntryMode.SEEDED,
+        upper_seed_count: int = 0,
     ) -> tuple[StrategyConfig, list]:
         budgets = fixed_cell_budgets(grid_budget_usdt, grid_count)
         config = StrategyConfig(
@@ -122,6 +124,8 @@ class GridService:
             poll_interval_sec=poll_interval_sec,
             move_grid=False,
             grid_kind=GridKind.FIXED_EQUAL_USDT,
+            fixed_entry_mode=fixed_entry_mode,
+            upper_seed_count=upper_seed_count,
             lower_price=lower_price,
             upper_price=upper_price,
             grid_budget_usdt=grid_budget_usdt,
@@ -143,6 +147,8 @@ class GridService:
         venue: ExchangeVenue = ExchangeVenue.BINANCE,
         auto_reinvest_enabled: bool = False,
         auto_reinvest_percent: Decimal = Decimal("100"),
+        fixed_entry_mode: FixedEntryMode = FixedEntryMode.SEEDED,
+        upper_seed_count: int = 0,
     ) -> StrategyConfig:
         clean_symbol = symbol.strip().upper()
         slug = re.sub(r"[^a-z0-9]+", "-", clean_symbol.lower()).strip("-")
@@ -159,6 +165,8 @@ class GridService:
             venue=venue,
             auto_reinvest_enabled=auto_reinvest_enabled,
             auto_reinvest_percent=auto_reinvest_percent,
+            fixed_entry_mode=fixed_entry_mode,
+            upper_seed_count=upper_seed_count,
         )
         self.store.create_strategy(config)
         self.store.replace_cells(strategy_id, cells)
@@ -223,14 +231,63 @@ class GridService:
             grid_generation=current.grid_generation + 1,
         )
         cells = build_cells(config, filters.tick_size)
-        allocations = {
-            cell.cell_id: round_down(cell.budget_usdt / cell.buy_price, filters.step_size)
-            for cell in cells if cell.sell_price > mark
-        }
+        upper_seed_cell_ids: list[str] = []
+        if current.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+            # Existing inventory is the only source of new sell cells.  A
+            # sell-side price above mark does not authorize a new seed buy.
+            mapped: dict[str, str] = {}
+            allocations = {}
+            for old in old_cells:
+                if old.open_qty <= 0:
+                    continue
+                new = next((cell for cell in cells
+                            if cell.buy_price <= old.buy_price < cell.sell_price), None)
+                if new is None:
+                    raise ValueError(f"held cell {old.cell_id} is outside the new range")
+                mapped[old.cell_id] = new.cell_id
+                allocations[new.cell_id] = round_down(
+                    new.budget_usdt / new.buy_price, filters.step_size
+                )
+            active_old_seed_ids = self.store.list_active_upper_seed_cell_ids(strategy_id)
+            if len(active_old_seed_ids) > current.upper_seed_count:
+                raise ValueError("upper seed slots exceed the configured limit")
+            if any(old_id not in mapped for old_id in active_old_seed_ids):
+                raise ValueError("an upper seed slot has no held position to migrate")
+            upper_seed_cell_ids = list(dict.fromkeys(mapped[old_id] for old_id in active_old_seed_ids))
+            frontier = max(
+                (cell.index for cell in cells if cell.cell_id in upper_seed_cell_ids),
+                default=None,
+            )
+            config = replace(config, upper_seed_frontier=frontier)
+        else:
+            allocations = {
+                cell.cell_id: round_down(cell.budget_usdt / cell.buy_price, filters.step_size)
+                for cell in cells if cell.sell_price > mark
+            }
         if any(qty < filters.min_qty or qty * cell.buy_price < filters.min_notional
                for cell in cells if (qty := allocations.get(cell.cell_id)) is not None):
             raise ValueError("a new sell-side cell is below the exchange minimum")
         target_qty = sum(allocations.values(), Decimal("0"))
+        unallocated_downside_usdt = sum(
+            (cell.budget_usdt for cell in cells
+             if cell.buy_price <= mark and cell.cell_id not in allocations),
+            Decimal("0"),
+        ) if current.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED else Decimal("0")
+        immediate_buy_usdt = sum(
+            (cell.budget_usdt for cell in sorted(
+                (cell for cell in cells
+                 if cell.buy_price <= mark and cell.cell_id not in allocations),
+                key=lambda cell: cell.buy_price, reverse=True,
+            )[:10]),
+            Decimal("0"),
+        ) if current.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED else Decimal("0")
+        if current.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+            # Keep enough for a fresh three-slot turnover as well as the
+            # nearest rolling buy window. Future buys are cash-gated per order.
+            immediate_buy_usdt += sum(
+                (cell.budget_usdt for cell in cells[:current.upper_seed_count]),
+                Decimal("0"),
+            )
         return {
             "config": config, "cells": cells, "allocations": allocations,
             "mark": mark, "old_qty": old_qty, "target_qty": target_qty,
@@ -238,6 +295,9 @@ class GridService:
             "old_budget_usdt": current.grid_budget_usdt,
             "delta_qty": target_qty - old_qty,
             "new_sell_cell_ids": list(allocations),
+            "upper_seed_cell_ids": upper_seed_cell_ids,
+            "unallocated_downside_usdt": unallocated_downside_usdt,
+            "immediate_buy_usdt": immediate_buy_usdt,
         }
 
     def apply_fixed_reconfiguration(
@@ -255,6 +315,8 @@ class GridService:
         if (fresh["old_qty"] != plan["old_qty"]
                 or fresh["target_qty"] != plan["target_qty"]
                 or fresh["new_sell_cell_ids"] != plan["new_sell_cell_ids"]
+                or fresh["upper_seed_cell_ids"] != plan["upper_seed_cell_ids"]
+                or fresh["config"].upper_seed_frontier != config.upper_seed_frontier
                 or fresh["config"].grid_generation != config.grid_generation):
             raise ValueError("reconfiguration preview is stale")
         delta = plan["delta_qty"]
@@ -310,9 +372,140 @@ class GridService:
             config, plan["cells"], plan["allocations"], opening_fees,
             expected_generation=old_config.grid_generation, mark=plan["mark"],
             position_delta_qty=delta, position_delta_order_id=adjustment_order_id,
-            action_id=action_id,
+            action_id=action_id, upper_seed_cell_ids=plan["upper_seed_cell_ids"],
         )
         return self.store.get_strategy(config.strategy_id)
+
+    def preview_flat_triggered_reset(
+        self, strategy_id: str, lower_price: Decimal, upper_price: Decimal,
+        grid_count: int, grid_budget_usdt: Decimal, exchange: Exchange,
+    ) -> dict:
+        """Plan a new zero-position generation on an existing stopped strategy."""
+        current = self.store.get_strategy(strategy_id)
+        if current is None:
+            raise KeyError(strategy_id)
+        if (current.grid_kind != GridKind.FIXED_EQUAL_USDT
+                or current.fixed_entry_mode != FixedEntryMode.SEEDED
+                or current.venue != self.store.venue
+                or current.venue not in {ExchangeVenue.BINANCE, ExchangeVenue.OKX}
+                or current.status != StrategyStatus.STOPPED
+                or not current.has_started or current.archived):
+            raise ValueError("flat triggered reset requires a stopped seeded fixed grid on the selected venue")
+        if not 1 <= grid_count <= 500:
+            raise ValueError("fixed grid count must be between 1 and 500")
+        if any(
+            item["status"] in {"requested", "planned", "submitted", "manual_review"}
+            for item in self.store.list_fixed_reconfigurations(strategy_id)
+        ):
+            raise ValueError("a grid reconfiguration is still pending")
+        if any(
+            item["status"] in {"requested", "planned", "submitted", "manual_review"}
+            for item in self.store.list_capital_actions(strategy_id)
+        ):
+            raise ValueError("a capital action is still pending")
+        if strategy_id in self.store.pending_cell_action_strategy_ids():
+            raise ValueError("a cell action is still pending")
+        seed = self.store.get_capital_action(f"seed:{strategy_id}")
+        if seed is None or seed["status"] != "applied":
+            raise ValueError("the old seed action is not complete")
+        if exchange.get_open_orders(current.symbol):
+            raise ValueError("exchange still has open symbol orders")
+        if any(
+            position.symbol == current.symbol and position.quantity != 0
+            for position in exchange.get_positions()
+        ):
+            raise ValueError("exchange symbol position is not flat")
+        mark = exchange.get_mark_price(current.symbol)
+        if not lower_price <= mark <= upper_price:
+            raise ValueError("current price is outside new grid boundaries")
+        balance = exchange.get_available_balance("USDT")
+        if balance < grid_budget_usdt:
+            raise ValueError("available USDT is below the new grid budget")
+        filters = exchange.get_symbol_filters(current.symbol)
+        budgets = fixed_cell_budgets(grid_budget_usdt, grid_count)
+        config = replace(
+            current,
+            anchor_price=upper_price,
+            grid_ratio=fixed_grid_ratio(lower_price, upper_price, grid_count),
+            grid_count=grid_count,
+            order_usdt=budgets[0],
+            lower_price=lower_price,
+            upper_price=upper_price,
+            grid_budget_usdt=grid_budget_usdt,
+            grid_generation=current.grid_generation + 1,
+            fixed_entry_mode=FixedEntryMode.PRICE_TRIGGERED,
+        )
+        cells = build_cells(config, filters.tick_size)
+        if any(
+            (qty := round_down(cell.budget_usdt / cell.buy_price, filters.step_size))
+            < filters.min_qty or qty * cell.buy_price < filters.min_notional
+            for cell in cells
+        ):
+            raise ValueError("a new cell is below the exchange order minimum")
+        old_cells = self.store.list_cells(strategy_id)
+        if {cell.cell_id for cell in cells} & {cell.cell_id for cell in old_cells}:
+            raise ValueError("new cell IDs overlap old cells")
+        return {
+            "config": config,
+            "cells": cells,
+            "mark": mark,
+            "available_balance": balance,
+            "old_cell_count": len(old_cells),
+            "old_logical_qty": sum((cell.open_qty for cell in old_cells), Decimal("0")),
+            "old_order_references": sum(
+                (cell.entry_order_id is not None) + (cell.exit_order_id is not None)
+                for cell in old_cells
+            ),
+        }
+
+    def reset_flat_fixed_to_triggered(
+        self, strategy_id: str, lower_price: Decimal, upper_price: Decimal,
+        grid_count: int, grid_budget_usdt: Decimal, exchange: Exchange,
+    ) -> dict:
+        """Discard old cell state after the account is confirmed flat."""
+        plan = self.preview_flat_triggered_reset(
+            strategy_id, lower_price, upper_price, grid_count,
+            grid_budget_usdt, exchange,
+        )
+        old_config = self.store.get_strategy(strategy_id)
+        assert old_config is not None
+        coverage = sync_strategy_trades(self.store, exchange, old_config)
+        performance = strategy_performance(
+            self.store, old_config, coverage_complete=coverage,
+        )
+        if (not coverage or not performance["accounting_complete"]
+                or performance["net_grid_profit_usdt"] is None):
+            raise ValueError("old strategy trade or fee accounting is incomplete")
+        old_fill_qty = sum(
+            (Decimal(value) for value in performance["open_buy_qty_by_cell"].values()),
+            Decimal("0"),
+        )
+        if old_fill_qty != plan["old_logical_qty"]:
+            raise ValueError("old open fills differ from the logical cell quantity")
+        fresh = self.preview_flat_triggered_reset(
+            strategy_id, lower_price, upper_price, grid_count,
+            grid_budget_usdt, exchange,
+        )
+        if (fresh["old_logical_qty"] != plan["old_logical_qty"]
+                or fresh["old_cell_count"] != plan["old_cell_count"]):
+            raise ValueError("old cell state changed during the reset preflight")
+        self.store.reset_flat_fixed_to_triggered(
+            fresh["config"], fresh["cells"],
+            expected_generation=old_config.grid_generation,
+            expected_old_cell_count=fresh["old_cell_count"],
+            expected_old_qty=fresh["old_logical_qty"],
+            historical_net_grid_profit=Decimal(performance["net_grid_profit_usdt"]),
+            mark=fresh["mark"],
+        )
+        return {
+            "strategy_id": strategy_id,
+            "grid_generation": fresh["config"].grid_generation,
+            "old_cell_count": fresh["old_cell_count"],
+            "new_cell_count": len(fresh["cells"]),
+            "old_logical_qty_discarded": str(fresh["old_logical_qty"]),
+            "historical_net_grid_profit_usdt": performance["net_grid_profit_usdt"],
+            "fixed_entry_mode": FixedEntryMode.PRICE_TRIGGERED.value,
+        }
 
     def start(self, strategy_id: str) -> int:
         config = self.store.get_strategy(strategy_id)

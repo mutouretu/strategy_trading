@@ -7,7 +7,7 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from ..domain import StrategyConfig
+from ..domain import FixedEntryMode, StrategyConfig
 from ..infrastructure.sqlite_store import SQLiteStore
 
 
@@ -176,12 +176,37 @@ def strategy_performance(
         if event["event_type"] == "GRID_RECONFIGURED"
         and event["payload"].get("position_delta_order_id") is not None
     }
+    manual_flat_order_ids = {
+        int(order_id)
+        for event in strategy_events
+        if event["event_type"] == "GRID_MANUAL_FLAT_RECOVERY"
+        for order_id in event["payload"].get("manual_close_order_ids", [])
+    }
     trades = [
         trade for trade in store.list_strategy_trades(config.strategy_id)
         if trade["order_id"] in order_to_cell
         or trade["order_id"] in capital_order_ids
         or trade["order_id"] in reconfiguration_order_ids
+        or trade["order_id"] in manual_flat_order_ids
     ]
+    if initial_entry_price is None and config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED:
+        first_buy = min(
+            (trade for trade in trades
+             if trade["side"] == "BUY" and trade["order_id"] in order_to_cell),
+            key=lambda trade: (trade["traded_at_ms"], trade["trade_id"]),
+            default=None,
+        )
+        if first_buy is not None:
+            first_order_fills = [
+                trade for trade in trades
+                if trade["side"] == "BUY" and trade["order_id"] == first_buy["order_id"]
+            ]
+            total_qty = sum((Decimal(trade["quantity"]) for trade in first_order_fills), Decimal("0"))
+            if total_qty > 0:
+                initial_entry_price = str(sum(
+                    (Decimal(trade["price"]) * Decimal(trade["quantity"])
+                     for trade in first_order_fills), Decimal("0")
+                ) / total_qty)
     reconfiguration_fees = sum(
         (Decimal(trade["commission"]) for trade in trades
          if trade["order_id"] in reconfiguration_order_ids
@@ -192,6 +217,15 @@ def strategy_performance(
         (Decimal(trade["realized_pnl"]) for trade in trades
          if trade["order_id"] in reconfiguration_order_ids),
         Decimal("0"),
+    )
+    manual_flat_realized_pnl = sum(
+        (Decimal(trade["realized_pnl"]) for trade in trades
+         if trade["order_id"] in manual_flat_order_ids), Decimal("0")
+    )
+    manual_flat_fees = sum(
+        (Decimal(trade["commission"]) for trade in trades
+         if trade["order_id"] in manual_flat_order_ids
+         and trade["commission_asset"] == "USDT"), Decimal("0")
     )
     other_fee_assets = sorted({
         trade["commission_asset"] for trade in trades
@@ -358,6 +392,8 @@ def strategy_performance(
         "trading_fees_usdt": str(account_fees),
         "reconfiguration_trading_fees_usdt": str(reconfiguration_fees),
         "reconfiguration_realized_pnl_usdt": str(reconfiguration_realized_pnl),
+        "manual_flat_realized_pnl_usdt": str(manual_flat_realized_pnl),
+        "manual_flat_trading_fees_usdt": str(manual_flat_fees),
         "trend_and_execution_pnl_usdt": str(account_gross - grid_gross),
         "net_grid_profit_usdt": None if net is None else str(net),
         "cell_net_grid_profit_usdt": cell_net,
