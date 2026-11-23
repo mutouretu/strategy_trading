@@ -572,6 +572,26 @@ class SQLiteStore:
             ).fetchone()
         return self._strategy_from_row(row) if row else None
 
+    def get_strategy_with_cells(self, strategy_id: str) -> tuple[StrategyConfig | None, list[GridCell]]:
+        """Read the strategy and its cell budgets from one SQLite snapshot."""
+        with self.connection() as conn:
+            conn.execute("BEGIN")
+            row = conn.execute(
+                "SELECT * FROM strategies WHERE strategy_id=? AND deleted_at IS NULL",
+                (strategy_id,),
+            ).fetchone()
+            cell_rows = (
+                conn.execute(
+                    "SELECT * FROM cells WHERE strategy_id=? ORDER BY cell_index",
+                    (strategy_id,),
+                ).fetchall()
+                if row is not None else []
+            )
+        config = self._strategy_from_row(row) if row is not None else None
+        cells = [self._cell_from_row(item) for item in cell_rows]
+        cells.sort(key=lambda cell: cell.buy_price)
+        return config, cells
+
     def list_strategies(
         self,
         include_archived: bool = False,
@@ -1807,7 +1827,8 @@ class SQLiteStore:
     def mark_capital_action_rejected(self, action_id: str, message: str) -> None:
         with self.connection() as conn:
             conn.execute(
-                "UPDATE capital_actions SET status='rejected', message=?, updated_at=? WHERE id=? AND status='requested'",
+                """UPDATE capital_actions SET status='rejected', message=?, updated_at=?
+                   WHERE id=? AND status IN ('requested', 'planned')""",
                 (message, utc_now(), action_id),
             )
 

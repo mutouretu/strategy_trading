@@ -195,6 +195,149 @@ def test_triggered_topup_preserves_uncrossed_buy_levels() -> None:
         assert exchange.calls.get("place_market_order", 0) == 0
 
 
+def _triggered_grid_with_one_held_cell(path: Path):
+    store = SQLiteStore(path)
+    exchange = FakeExchange(Decimal("100"))
+    config = GridService(store).create_fixed(
+        "SOLUSDT", Decimal("80"), Decimal("120"), 4,
+        Decimal("400"), Decimal("0.01"),
+        fixed_entry_mode=FixedEntryMode.PRICE_TRIGGERED,
+    )
+    store.mark_started(config.strategy_id)
+    engine = FixedGridEngine(store, exchange, config.strategy_id)
+    engine.tick()
+    first = store.list_cells(config.strategy_id)[0]
+    assert first.entry_order_id is not None
+    exchange.fill(first.entry_order_id, first.buy_price)
+    engine.tick()
+    held = store.get_cell(config.strategy_id, first.cell_id)
+    assert held is not None and held.open_qty > 0
+    return store, exchange, config, engine
+
+
+def test_triggered_topup_uses_immediate_cash_instead_of_full_budget() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store, exchange, config, engine = _triggered_grid_with_one_held_cell(
+            Path(directory) / "funded-topup.sqlite3"
+        )
+        exchange.available_balance = Decimal("200")
+        client = TestClient(create_app(store.path, lambda: exchange))
+        response = client.post(
+            f"/strategies/{config.strategy_id}/topups/preview",
+            json={"amount_usdt": "400"},
+        )
+        assert response.status_code == 200, response.text
+        preview = response.json()
+        assert Decimal(preview["available_usdt"]) < Decimal("400")
+        assert Decimal(preview["minimum_available_usdt"]) == (
+            Decimal(preview["aggregate_buy_usdt"])
+            + Decimal(preview["estimated_opening_fee_usdt"])
+            + Decimal(preview["price_buffer_usdt"])
+            + Decimal(preview["cash_reserve_usdt"])
+        )
+        assert Decimal(preview["minimum_available_usdt"]) < exchange.available_balance
+        assert preview["can_submit"] is True
+        assert Decimal(preview["future_downside_budget_usdt"]) > 0
+
+        store.create_capital_action(
+            "funded-topup", config.strategy_id, "topup", Decimal("400"),
+            preview["sell_cell_ids"],
+        )
+        engine.tick()
+        assert store.get_capital_action("funded-topup")["status"] == "applied"
+        assert store.get_strategy(config.strategy_id).grid_budget_usdt == Decimal("800")
+        assert sum((cell.budget_usdt for cell in store.list_cells(config.strategy_id)), Decimal("0")) == Decimal("800")
+        assert exchange.calls.get("place_market_order", 0) == 1
+        engine.tick()
+        assert exchange.calls.get("place_market_order", 0) == 1
+
+
+def test_triggered_topup_reports_cash_gap_then_rejects_without_market_buy() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store, exchange, config, engine = _triggered_grid_with_one_held_cell(
+            Path(directory) / "underfunded-topup.sqlite3"
+        )
+        exchange.available_balance = Decimal("50")
+        client = TestClient(create_app(store.path, lambda: exchange))
+        response = client.post(
+            f"/strategies/{config.strategy_id}/topups/preview",
+            json={"amount_usdt": "400"},
+        )
+        assert response.status_code == 200, response.text
+        preview = response.json()
+        assert Decimal(preview["aggregate_buy_usdt"]) > exchange.available_balance
+        assert Decimal(preview["funding_gap_usdt"]) == (
+            Decimal(preview["minimum_available_usdt"]) - exchange.available_balance
+        )
+        assert preview["can_submit"] is False
+
+        store.create_capital_action(
+            "underfunded-topup", config.strategy_id, "topup", Decimal("400"),
+            preview["sell_cell_ids"],
+        )
+        engine.tick()
+        assert store.get_capital_action("underfunded-topup")["status"] == "rejected"
+        assert store.get_strategy(config.strategy_id).grid_budget_usdt == Decimal("400")
+        assert exchange.calls.get("place_market_order", 0) == 0
+
+
+def test_triggered_topup_rechecks_cash_before_a_planned_order_is_sent() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store, exchange, config, engine = _triggered_grid_with_one_held_cell(
+            Path(directory) / "planned-topup.sqlite3"
+        )
+        exchange.available_balance = Decimal("200")
+        action = store.create_capital_action(
+            "planned-topup", config.strategy_id, "topup", Decimal("400"),
+            [cell.cell_id for cell in store.list_cells(config.strategy_id) if cell.open_qty > 0],
+        )
+        engine._plan_capital_action(action, exchange.mark)
+        assert store.get_capital_action("planned-topup")["status"] == "planned"
+
+        exchange.available_balance = Decimal("50")
+        FixedGridEngine(store, exchange, config.strategy_id).tick()
+        assert store.get_capital_action("planned-topup")["status"] == "rejected"
+        assert store.get_strategy(config.strategy_id).grid_budget_usdt == Decimal("400")
+        assert exchange.calls.get("place_market_order", 0) == 0
+
+
+def test_triggered_topup_without_held_cells_only_updates_future_budgets() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = SQLiteStore(Path(directory) / "empty-position-topup.sqlite3")
+        exchange = FakeExchange(Decimal("100"))
+        config = GridService(store).create_fixed(
+            "SOLUSDT", Decimal("80"), Decimal("120"), 4,
+            Decimal("400"), Decimal("0.01"),
+            fixed_entry_mode=FixedEntryMode.PRICE_TRIGGERED,
+        )
+        store.mark_started(config.strategy_id)
+        engine = FixedGridEngine(store, exchange, config.strategy_id)
+        engine.tick()
+        assert exchange.get_positions() == []
+        exchange.available_balance = Decimal("9")
+        client = TestClient(create_app(store.path, lambda: exchange))
+        response = client.post(
+            f"/strategies/{config.strategy_id}/topups/preview",
+            json={"amount_usdt": "400"},
+        )
+        assert response.status_code == 200, response.text
+        preview = response.json()
+        assert preview["sell_cell_ids"] == []
+        assert Decimal(preview["aggregate_buy_usdt"]) == 0
+        assert Decimal(preview["minimum_available_usdt"]) == Decimal("8")
+        assert preview["can_submit"] is True
+
+        store.create_capital_action(
+            "empty-position-topup", config.strategy_id, "topup", Decimal("400"),
+            preview["sell_cell_ids"],
+        )
+        engine.tick()
+        assert store.get_capital_action("empty-position-topup")["status"] == "applied"
+        assert store.get_strategy(config.strategy_id).grid_budget_usdt == Decimal("800")
+        assert all(cell.budget_usdt == Decimal("200") for cell in store.list_cells(config.strategy_id))
+        assert exchange.calls.get("place_market_order", 0) == 0
+
+
 def test_upper_seed_frontier_never_spreads_on_flat_or_falling_price() -> None:
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "upper-seed.sqlite3"

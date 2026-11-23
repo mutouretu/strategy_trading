@@ -26,12 +26,13 @@ from ..shared.config import (
     okx_fixed_grid_endpoint_allowed,
     okx_simulated,
 )
-from ..domain import DEFAULT_POLL_INTERVAL_SEC, ExchangeVenue, FixedEntryMode, FuturesMarket, GridKind, Mode, StrategyConfig
-from ..domain.grid import fixed_cell_budgets, round_down
+from ..domain import CellStage, DEFAULT_POLL_INTERVAL_SEC, ExchangeVenue, FixedEntryMode, FuturesMarket, GridKind, Mode, StrategyConfig
+from ..domain.grid import round_down
 from ..application.service import GridService
 from ..application.fixed_reconfiguration import FixedReconfigurationWorkflow
 from ..application.grid_performance import strategy_performance, sync_strategy_trades
 from ..application.live_entry_policy import is_live_exchange, require_live_triggered_entry
+from ..application.topup_planning import MARKET_BUY_PRICE_BUFFER, plan_fixed_topup
 from ..infrastructure.sqlite_store import SQLiteStore
 from ..runtime.supervisor import StrategySupervisor
 
@@ -762,54 +763,62 @@ def create_app(
     @app.post("/strategies/{strategy_id}/topups/preview")
     def preview_topup(strategy_id: str, data: TopupPreviewInput) -> dict:
         try:
-            config = store.get_strategy(strategy_id)
+            config, cells = store.get_strategy_with_cells(strategy_id)
             if config is None:
                 raise KeyError(strategy_id)
             if config.grid_kind != GridKind.FIXED_EQUAL_USDT:
                 raise ValueError("top-up requires a fixed equal-USDT grid")
-            cells = store.list_cells(strategy_id)
-            increments = fixed_cell_budgets(data.amount_usdt, len(cells))
-            sell_count = sum(cell.open_qty > 0 for cell in cells)
-            sell_amount = sum(
-                (increment for cell, increment in zip(cells, increments) if cell.open_qty > 0),
-                Decimal("0"),
-            )
+            if any(cell.stage == CellStage.MANUAL_REVIEW for cell in cells):
+                raise ValueError("a grid cell requires manual review")
             exchange = exchange_for(config.market_type)
-            available = exchange.get_available_balance("USDT")
-            if available < data.amount_usdt:
-                raise ValueError("available USDT is below the top-up amount")
             filters = exchange.get_symbol_filters(config.symbol)
-            mark = exchange.get_mark_price(config.symbol)
-            quantity = sum(
-                (
-                    max(
-                        Decimal("0"),
-                        round_down((cell.budget_usdt + increment) / cell.buy_price, filters.step_size)
-                        - round_down(cell.budget_usdt / cell.buy_price, filters.step_size),
-                    )
-                    for cell, increment in zip(cells, increments) if cell.open_qty > 0
-                ),
+            actual_qty = sum(
+                (position.quantity for position in exchange.get_positions()
+                 if position.symbol == config.symbol and position.position_side == "LONG"),
                 Decimal("0"),
             )
-            if sell_count and (
-                quantity <= 0
-                or quantity < filters.min_qty
-                or quantity * mark < filters.min_notional
+            logical_qty = sum((cell.open_qty for cell in cells), Decimal("0"))
+            if abs(actual_qty - logical_qty) > filters.step_size:
+                raise ValueError("actual and logical positions differ; top-up requires review")
+            mark = exchange.get_mark_price(config.symbol)
+            plan = plan_fixed_topup(
+                config, cells, data.amount_usdt, filters, mark,
+                exchange.get_commission_rates(config.symbol)[1],
+            )
+            if plan.held_cell_ids and (
+                plan.aggregate_buy_qty <= 0
+                or plan.aggregate_buy_qty < filters.min_qty
+                or plan.aggregate_buy_usdt < filters.min_notional
             ):
                 raise ValueError("top-up sell-side amount is below exchange minimum")
-            estimated_buy = quantity * mark
+            available = exchange.get_available_balance("USDT")
+            if (config.fixed_entry_mode != FixedEntryMode.PRICE_TRIGGERED
+                    and available < plan.minimum_available_usdt):
+                raise ValueError("available USDT is below the top-up amount")
+            funding_gap = max(Decimal("0"), plan.minimum_available_usdt - available)
             return {
                 "amount_usdt": str(data.amount_usdt),
-                "per_cell_usdt": str(increments[0]),
-                "sell_cell_ids": [cell.cell_id for cell in cells if cell.open_qty > 0],
-                "sell_cell_count": sell_count,
-                "buy_cell_count": len(cells) - sell_count,
-                "aggregate_buy_usdt": str(estimated_buy),
-                "sell_budget_increase_usdt": str(sell_amount),
-                "buy_order_budget_increase_usdt": str(data.amount_usdt - sell_amount),
+                "per_cell_usdt": str(plan.per_cell_usdt),
+                "sell_cell_ids": plan.held_cell_ids,
+                "sell_cell_count": len(plan.held_cell_ids),
+                "buy_cell_count": len(cells) - len(plan.held_cell_ids),
+                "aggregate_buy_qty": str(plan.aggregate_buy_qty),
+                "aggregate_buy_usdt": str(plan.aggregate_buy_usdt),
+                "sell_budget_increase_usdt": str(plan.held_budget_increase_usdt),
+                "buy_order_budget_increase_usdt": str(plan.future_budget_increase_usdt),
+                "future_downside_budget_usdt": str(plan.future_downside_budget_usdt),
+                "target_grid_budget_usdt": str(config.grid_budget_usdt + data.amount_usdt),
+                "mark_price": str(mark),
                 "available_usdt": str(available),
-                "estimated_opening_fee_usdt": str(
-                    estimated_buy * exchange.get_commission_rates(config.symbol)[1]
+                "estimated_opening_fee_usdt": str(plan.estimated_opening_fee_usdt),
+                "market_price_buffer_percent": str(MARKET_BUY_PRICE_BUFFER * 100),
+                "price_buffer_usdt": str(plan.price_buffer_usdt),
+                "cash_reserve_usdt": str(plan.cash_reserve_usdt),
+                "minimum_available_usdt": str(plan.minimum_available_usdt),
+                "funding_gap_usdt": str(funding_gap),
+                "can_submit": funding_gap == 0,
+                "estimated_available_after_buy_usdt": str(
+                    available - plan.aggregate_buy_usdt - plan.estimated_opening_fee_usdt
                 ),
             }
         except KeyError as exc:

@@ -725,6 +725,24 @@ class FixedEqualUGridTests(unittest.TestCase):
         engine.tick()
         self.assertEqual(self.store.get_capital_action("normal-topup")["status"], "applied")
 
+    def test_seeded_topup_still_requires_full_added_budget(self) -> None:
+        engine = self.make_engine()
+        engine.tick()
+        self.exchange.available_balance = Decimal("20")
+        client = TestClient(create_app(self.store.path, lambda market=FuturesMarket.USDM: self.exchange))
+        preview = client.post(
+            f"/strategies/{engine.strategy_id}/topups/preview",
+            json={"amount_usdt": "40"},
+        )
+        self.assertEqual(preview.status_code, 400, preview.text)
+        self.store.create_capital_action(
+            "seeded-low-cash-topup", engine.strategy_id, "topup", Decimal("40")
+        )
+        engine.tick()
+        self.assertEqual(self.store.get_capital_action("seeded-low-cash-topup")["status"], "rejected")
+        self.assertEqual(self.store.get_strategy(engine.strategy_id).grid_budget_usdt, Decimal("400"))
+        self.assertEqual(self.exchange.calls.get("place_market_order", 0), 1)
+
     def test_production_url_cannot_initialize_fixed_engine(self) -> None:
         engine = self.make_engine()
         engine.exchange = BinanceFuturesExchange("", "", "https://fapi.binance.com")

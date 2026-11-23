@@ -3,11 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import replace
 from decimal import Decimal, ROUND_CEILING
 
 from ..domain import CellStage, FixedEntryMode, GridCell, OrderSide, OrderStatus, StrategyStatus
-from ..domain.grid import fixed_cell_budgets, round_down
+from ..domain.grid import round_down
 from ..infrastructure.binance import BinanceAPIError, BinanceFuturesExchange
 from ..infrastructure.okx import OkxAPIError, OkxSwapExchange
 from ..ports.exchange import ExchangeExecutionUnknownError, OrderNotFoundError
@@ -15,6 +14,7 @@ from ..shared.config import fixed_grid_endpoint_allowed, okx_fixed_grid_endpoint
 from .engine import TradingEngine
 from .grid_performance import strategy_performance, sync_strategy_trades
 from .live_entry_policy import is_live_exchange, require_live_triggered_entry
+from .topup_planning import plan_fixed_topup
 
 
 class FixedGridEngine(TradingEngine):
@@ -840,6 +840,8 @@ class FixedGridEngine(TradingEngine):
         if action["status"] == "rejected":
             return
         if action["status"] == "planned":
+            if action["operation"] == "topup" and not self._revalidate_planned_topup(action):
+                return
             if Decimal(action["target_qty"]) == 0:
                 allocations = self._planned_allocations(action, Decimal("0"))
                 self.store.apply_capital_action(action["id"], allocations, Decimal("0"))
@@ -896,6 +898,50 @@ class FixedGridEngine(TradingEngine):
             )
             self.config = None
 
+    def _revalidate_planned_topup(self, action: dict) -> bool:
+        """Recheck a planned action before its first exchange write, including after restart."""
+        assert self.filters is not None
+        config = self._config()
+        cells = self.store.list_cells(self.strategy_id)
+        if any(cell.stage == CellStage.MANUAL_REVIEW for cell in cells):
+            self.store.mark_capital_action_review(action["id"], "a grid cell requires manual review")
+            return False
+        invalidate = getattr(self.exchange, "invalidate_positions", None)
+        if invalidate is not None:
+            invalidate()
+        actual_qty = sum(
+            (position.quantity for position in self.exchange.get_positions()
+             if position.symbol == config.symbol and position.position_side == "LONG"),
+            Decimal("0"),
+        )
+        logical_qty = sum((cell.open_qty for cell in cells), Decimal("0"))
+        if abs(actual_qty - logical_qty) > self.filters.step_size:
+            self.store.mark_capital_action_review(action["id"], "actual and logical positions differ")
+            return False
+        mark = self.exchange.get_mark_price(config.symbol)
+        fee_rate = (
+            self.exchange.get_commission_rates(config.symbol)[1]
+            if config.fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED else Decimal("0")
+        )
+        plan = plan_fixed_topup(
+            config, cells, Decimal(action["amount_usdt"]), self.filters, mark, fee_rate,
+        )
+        if (plan.held_cell_ids != json.loads(action["sell_cell_ids_json"])
+                or plan.aggregate_buy_qty != Decimal(action["target_qty"])):
+            self.store.mark_capital_action_rejected(
+                action["id"], "held cells or target quantity changed before top-up order"
+            )
+            return False
+        available = self.exchange.get_available_balance("USDT")
+        if available < plan.minimum_available_usdt:
+            self.store.mark_capital_action_rejected(
+                action["id"],
+                f"available USDT {available} is below immediate top-up requirement "
+                f"{plan.minimum_available_usdt}",
+            )
+            return False
+        return True
+
     def _plan_capital_action(self, action: dict, mark: Decimal) -> dict:
         assert self.filters is not None
         if mark <= 0:
@@ -925,13 +971,19 @@ class FixedGridEngine(TradingEngine):
             if abs(actual_qty - logical_qty) > self.filters.step_size:
                 self.store.mark_capital_action_review(action["id"], "actual and logical positions differ")
                 raise ValueError("actual and logical positions differ; top-up requires review")
-            if self.exchange.get_available_balance("USDT") < Decimal(action["amount_usdt"]):
-                self.store.mark_capital_action_rejected(
-                    action["id"], "available USDT is below the top-up amount"
-                )
-                return self.store.get_capital_action(action["id"])
-            sell_cells = [cell for cell in cells if cell.open_qty > 0]
-            sell_ids = [cell.cell_id for cell in sell_cells]
+            # The mark can change during order reconciliation earlier in this
+            # tick. Reprice the immediate market buy before committing a plan.
+            mark = self.exchange.get_mark_price(self._config().symbol)
+            taker_fee_rate = (
+                self.exchange.get_commission_rates(self._config().symbol)[1]
+                if self._config().fixed_entry_mode == FixedEntryMode.PRICE_TRIGGERED
+                else Decimal("0")
+            )
+            plan = plan_fixed_topup(
+                self._config(), cells, Decimal(action["amount_usdt"]),
+                self.filters, mark, taker_fee_rate,
+            )
+            sell_ids = plan.held_cell_ids
             if action["expected_sell_cell_ids_json"] is not None:
                 expected_ids = json.loads(action["expected_sell_cell_ids_json"])
                 if sell_ids != expected_ids:
@@ -939,17 +991,19 @@ class FixedGridEngine(TradingEngine):
                         action["id"], "sell-side cells changed since the top-up preview"
                     )
                     return self.store.get_capital_action(action["id"])
-            increments = fixed_cell_budgets(Decimal(action["amount_usdt"]), len(cells))
-            increment_by_id = {
-                cell.cell_id: increment for cell, increment in zip(cells, increments)
-            }
-            allocations = {}
-            for cell in sell_cells:
-                old_target = self._quantity(cell.buy_price, cell)
-                updated = replace(cell, budget_usdt=cell.budget_usdt + increment_by_id[cell.cell_id])
-                new_target = self._quantity(cell.buy_price, updated)
-                allocations[cell.cell_id] = max(Decimal("0"), new_target - old_target)
-        sell_ids = [cell.cell_id for cell in sell_cells]
+            available = self.exchange.get_available_balance("USDT")
+            if available < plan.minimum_available_usdt:
+                self.store.mark_capital_action_rejected(
+                    action["id"],
+                    f"available USDT {available} is below immediate top-up requirement "
+                    f"{plan.minimum_available_usdt}",
+                )
+                return self.store.get_capital_action(action["id"])
+            allocations = plan.allocations
+        sell_ids = (
+            [cell.cell_id for cell in sell_cells]
+            if action["operation"] == "seed" else plan.held_cell_ids
+        )
         target_qty = sum(allocations.values(), Decimal("0"))
         if sell_ids and (
             target_qty <= 0

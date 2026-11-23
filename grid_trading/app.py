@@ -1248,12 +1248,26 @@ def render_fixed_topup_form(strategy_id: str) -> None:
         return
     details = planned["details"]
     st.info(
+        f"目标预算 {details['target_grid_budget_usdt']} U · "
         f"每格 +{details['per_cell_usdt']} U · "
-        f"合并买入 {details['aggregate_buy_usdt']} U（{details['sell_cell_count']} 格） · "
-        f"买单预算 +{details['buy_order_budget_increase_usdt']} U（{details['buy_cell_count']} 格） · "
-        f"预计开仓费 {float(details['estimated_opening_fee_usdt']):.4f} U"
+        f"现有 {details['sell_cell_count']} 个持仓格需合并买入 "
+        f"{details['aggregate_buy_qty']} 个，约 {details['aggregate_buy_usdt']} U；"
+        f"开仓费约 {float(details['estimated_opening_fee_usdt']):.4f} U。"
     )
-    if st.button("确认追加资金", type="primary", key=f"topup_confirm_{strategy_id}"):
+    st.caption(
+        f"其余 {details['buy_cell_count']} 格未来预算 +{details['buy_order_budget_increase_usdt']} U；"
+        f"现价及以下未持仓格计划买入总额约 {details['future_downside_budget_usdt']} U。"
+        f"交易账户可用 {details['available_usdt']} U；本次最低要求 "
+        f"{details['minimum_available_usdt']} U（含手续费、"
+        f"{details['market_price_buffer_percent']}% 价格余量和 "
+        f"{details['cash_reserve_usdt']} U 缓冲）。"
+    )
+    if not details.get("can_submit", True):
+        st.warning(f"本次即时资金还差 {details['funding_gap_usdt']} U。")
+    if st.button(
+        "确认追加资金", type="primary", key=f"topup_confirm_{strategy_id}",
+        disabled=not details.get("can_submit", True),
+    ):
         try:
             backend().request_topup(
                 strategy_id, planned["request_id"], details["amount_usdt"],
