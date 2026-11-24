@@ -861,9 +861,9 @@ def render_overview(strategies: list[dict]) -> None:
         render_add_button()
         return
 
-    widths = [.6, 1.2, .6, .85, 1.8, .9, .5, 1.1, .5, 1.2]
+    widths = [1.2, .6, .6, .85, 1.8, .9, .5, 1.1, .5, 1.2]
     header = st.columns(widths)
-    labels = ["平台", "币对", "方向", "当前价格", "网格范围 / 总数 / 间距", "单格数量", "杠杆", "状态 / 更新", "运行", "操作"]
+    labels = ["币对", "平台", "方向", "当前价格", "网格范围 / 总数 / 间距", "单格数量", "杠杆", "状态 / 更新", "运行", "操作"]
     for col, label in zip(header, labels):
         col.markdown(f"**{label}**")
     st.divider()
@@ -876,13 +876,13 @@ def render_overview(strategies: list[dict]) -> None:
             column.markdown(f"<span style='color:{row_color};font-weight:600'>{value}</span>", unsafe_allow_html=True)
 
         href = f"?venue={quote(item['venue'])}&strategy={quote(item['id'])}"
-        cell(cols[0], "OKX" if item["venue"] == "okx" else "币安")
-        cols[1].markdown(
+        cols[0].markdown(
             f"<a href='{href}' target='_self' "
-            f"style='color:{row_color};font-weight:700;text-decoration:none'>"
+            f"style='color:{row_color};font-weight:700;text-decoration:underline;text-underline-offset:3px'>"
             f"{escape(item['symbol'])}</a>",
             unsafe_allow_html=True,
         )
+        cell(cols[1], "OKX" if item["venue"] == "okx" else "币安")
         cell(cols[2], item["mode"])
         precision = item["price_precision"]
         cell(cols[3], format_price(item["current_price"], precision))

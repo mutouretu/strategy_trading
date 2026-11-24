@@ -4,6 +4,7 @@ import os
 import inspect
 import threading
 import time
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Literal
@@ -26,7 +27,17 @@ from ..shared.config import (
     okx_fixed_grid_endpoint_allowed,
     okx_simulated,
 )
-from ..domain import CellStage, DEFAULT_POLL_INTERVAL_SEC, ExchangeVenue, FixedEntryMode, FuturesMarket, GridKind, Mode, StrategyConfig
+from ..domain import (
+    CellStage,
+    DEFAULT_POLL_INTERVAL_SEC,
+    ExchangeVenue,
+    FixedEntryMode,
+    FuturesMarket,
+    GridKind,
+    Mode,
+    StrategyConfig,
+    StrategyStatus,
+)
 from ..domain.grid import round_down
 from ..application.service import GridService
 from ..application.fixed_reconfiguration import FixedReconfigurationWorkflow
@@ -339,6 +350,7 @@ def create_app(
 ) -> FastAPI:
     load_environment()
     venue = exchange_venue()
+    local_standby = os.getenv("GRID_LOCAL_STANDBY", "0") == "1"
     if db_path is None:
         db_path = os.getenv("GRID_DB_PATH", "grid_trading.sqlite3")
     store = SQLiteStore(db_path, venue=venue)
@@ -388,7 +400,7 @@ def create_app(
     app.state.service = service
     app.state.exchange_factory = exchange_factory
     app.state.exchange_for = exchange_for
-    performance_cache: dict[str, tuple[float, dict]] = {}
+    performance_cache: dict[str, tuple[float, StrategyStatus, dict]] = {}
     performance_lock = threading.Lock()
 
     @app.get("/health")
@@ -428,21 +440,38 @@ def create_app(
                 raise ValueError("realized performance currently supports fixed equal-USDT grids")
             with performance_lock:
                 cached = performance_cache.get(strategy_id)
-                if cached is not None and time.monotonic() - cached[0] < 15:
-                    return cached[1]
-                exchange = exchange_for(config.market_type)
-                coverage_complete = sync_strategy_trades(store, exchange, config)
+                if (
+                    cached is not None
+                    and cached[1] == config.status
+                    and time.monotonic() - cached[0] < 15
+                ):
+                    return cached[2]
+                frozen = local_standby and config.status in {
+                    StrategyStatus.STOPPED, StrategyStatus.ARCHIVED,
+                }
+                exchange = None if frozen else exchange_for(config.market_type)
+                if frozen:
+                    sync = store.get_strategy_trade_sync(strategy_id)
+                    coverage_complete = bool(sync and sync["history_complete"])
+                    runtime = store.get_runtime(strategy_id)
+                    stopped_at = runtime["stopped_at"] if runtime else None
+                else:
+                    coverage_complete = sync_strategy_trades(store, exchange, config)
                 result = strategy_performance(
-                    store, config, coverage_complete=coverage_complete
+                    store, config, coverage_complete=coverage_complete,
+                    now=datetime.fromisoformat(stopped_at) if frozen and stopped_at else None,
                 )
-                entry_price, break_even_price = exchange.get_position_prices(config.symbol)
+                entry_price, break_even_price = (
+                    (None, None) if frozen
+                    else exchange.get_position_prices(config.symbol)
+                )
                 result["position_entry_price"] = (
                     None if entry_price is None else str(entry_price)
                 )
                 result["position_break_even_price"] = (
                     None if break_even_price is None else str(break_even_price)
                 )
-                performance_cache[strategy_id] = (time.monotonic(), result)
+                performance_cache[strategy_id] = (time.monotonic(), config.status, result)
                 return result
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="strategy not found") from exc
@@ -455,6 +484,10 @@ def create_app(
             config = store.get_strategy(strategy_id)
             if config is None:
                 raise KeyError(strategy_id)
+            if local_standby and config.status in {
+                StrategyStatus.STOPPED, StrategyStatus.ARCHIVED,
+            }:
+                return {"entry_price": None}
             side = "LONG" if config.mode == Mode.LONG else "SHORT"
             entry_price = exchange_for(config.market_type).get_position_entry_price(
                 config.symbol, side
