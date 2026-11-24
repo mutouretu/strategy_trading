@@ -183,6 +183,9 @@ class SQLiteStore:
                 CREATE INDEX IF NOT EXISTS idx_events_strategy_id
                 ON events(strategy_id, id);
 
+                CREATE INDEX IF NOT EXISTS idx_events_strategy_time
+                ON events(strategy_id, created_at);
+
                 CREATE TABLE IF NOT EXISTS strategy_trade_fills (
                     strategy_id TEXT NOT NULL,
                     trade_id INTEGER NOT NULL,
@@ -2186,6 +2189,27 @@ class SQLiteStore:
                 "event_type": row["event_type"],
                 "payload": json.loads(row["payload_json"]),
                 "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def list_cycle_closure_events(
+        self, strategy_id: str, start_at: str, end_at: str,
+    ) -> list[dict]:
+        """Read only completed-cycle candidates inside a bounded UTC window."""
+        with self.connection() as conn:
+            rows = conn.execute(
+                """SELECT created_at, event_type, payload_json FROM events
+                   WHERE strategy_id=? AND created_at>=? AND created_at<?
+                     AND event_type IN ('CYCLE_CLOSED', 'EXIT_ENDED')
+                   ORDER BY created_at, id""",
+                (strategy_id, start_at, end_at),
+            ).fetchall()
+        return [
+            {
+                "created_at": row["created_at"],
+                "event_type": row["event_type"],
+                "payload": json.loads(row["payload_json"]),
             }
             for row in rows
         ]

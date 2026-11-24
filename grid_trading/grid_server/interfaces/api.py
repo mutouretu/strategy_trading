@@ -41,6 +41,7 @@ from ..domain import (
 from ..domain.grid import round_down
 from ..application.service import GridService
 from ..application.fixed_reconfiguration import FixedReconfigurationWorkflow
+from ..application.grid_activity import completed_cycle_activity
 from ..application.grid_performance import strategy_performance, sync_strategy_trades
 from ..application.live_entry_policy import is_live_exchange, require_live_triggered_entry
 from ..application.topup_planning import MARKET_BUY_PRICE_BUFFER, plan_fixed_topup
@@ -477,6 +478,12 @@ def create_app(
             raise HTTPException(status_code=404, detail="strategy not found") from exc
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/strategies/{strategy_id}/trade-activity")
+    def trade_activity(strategy_id: str) -> dict:
+        if store.get_strategy(strategy_id) is None:
+            raise HTTPException(status_code=404, detail="strategy not found")
+        return completed_cycle_activity(store, strategy_id)
 
     @app.get("/strategies/{strategy_id}/position")
     def strategy_position(strategy_id: str) -> dict:

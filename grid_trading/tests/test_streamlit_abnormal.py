@@ -339,6 +339,12 @@ class StreamlitAbnormalTests(unittest.TestCase):
                     "grid_profit_pct": "0.3125",
                     "simple_annualized_pct": "12.5",
                 }),
+                ("GET", f"/strategies/{item['strategy_id']}/trade-activity"): (200, {
+                    "periods": [
+                        {"started_at": "2026-11-23T08:00+08:00", "completed_cycles": 2},
+                        {"started_at": "2026-11-23T12:00+08:00", "completed_cycles": 5},
+                    ],
+                }),
             },
         )
         with stub_api(state):
@@ -367,6 +373,10 @@ class StreamlitAbnormalTests(unittest.TestCase):
             ["0 / 1 / 1.2500", "0 / 0 / 0.0000"],
         )
         self.assertTrue(any(metric.label == "总交易次数" and metric.value == "7" for metric in app.metric))
+        self.assertTrue(any("四小时成交次数" in section.value for section in app.markdown))
+        self.assertIn(
+            ("GET", f"/strategies/{item['strategy_id']}/trade-activity", None), state.calls,
+        )
         self.assertTrue(any(section.label == "追加资金" for section in app.expander))
         self.assertTrue(any(button.label == "预览资金分配" for button in app.button))
         self.assertFalse(any(button.key and button.key.startswith("add_cell_") for button in app.button))

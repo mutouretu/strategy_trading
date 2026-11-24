@@ -1455,6 +1455,30 @@ def render_fixed_reinvestment(grid: dict, cells: list[dict]) -> dict[str, int] |
     return counts
 
 
+def render_trade_activity(strategy_id: str) -> None:
+    st.markdown("#### 四小时成交次数")
+    try:
+        activity = backend().trade_activity(strategy_id)
+    except GridApiError as exc:
+        st.caption(f"成交统计暂不可用：{exc}")
+        return
+    periods = activity["periods"]
+    if not periods:
+        st.caption("尚无已结束的四小时统计周期。")
+        return
+    chart = pd.DataFrame({
+        "北京时间": pd.to_datetime(
+            [period["started_at"] for period in periods], utc=True,
+        ).tz_convert("Asia/Shanghai"),
+        "成交次数": [int(period["completed_cycles"]) for period in periods],
+    })
+    st.line_chart(chart, x="北京时间", y="成交次数", height=240)
+    st.caption(
+        "每完成一格买入、卖出计 1 次；统计最近 50 个已结束的周期，"
+        "按北京时间 00:00、04:00 等整点分段。"
+    )
+
+
 def _render_detail_live(strategy_id: str) -> None:
     try:
         fresh_strategies = load_strategies()
@@ -1545,6 +1569,8 @@ def _render_detail_live(strategy_id: str) -> None:
             st.warning("成交历史或买卖配对尚未完整，或手续费币种不是 USDT；暂不显示网格收益。")
         elif performance_error is not None:
             st.warning(f"盈利数据暂不可用：{performance_error}")
+        if grid["has_started"]:
+            render_trade_activity(grid["id"])
 
     try:
         cells = backend().cells(grid["id"])

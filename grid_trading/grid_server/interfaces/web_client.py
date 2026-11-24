@@ -115,6 +115,9 @@ class GridApiClient:
     def performance(self, strategy_id: str) -> dict:
         return self._request("GET", f"/strategies/{strategy_id}/performance")
 
+    def trade_activity(self, strategy_id: str) -> dict:
+        return self._request("GET", f"/strategies/{strategy_id}/trade-activity")
+
     def position(self, strategy_id: str) -> dict:
         return self._request("GET", f"/strategies/{strategy_id}/position")
 

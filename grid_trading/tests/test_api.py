@@ -89,6 +89,21 @@ class APITests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), [])
 
+    def test_trade_activity_reads_only_its_strategy(self):
+        strategy_id = self.client.post("/strategies", json=self.payload).json()["strategy_id"]
+        self.app.state.store.mark_started(strategy_id)
+        self.app.state.store.append_event(strategy_id, "CYCLE_CLOSED", {"cycle_count": 1})
+
+        response = self.client.get(f"/strategies/{strategy_id}/trade-activity")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["strategy_id"], strategy_id)
+        self.assertEqual(response.json()["period_hours"], 4)
+        self.assertLessEqual(len(response.json()["periods"]), 50)
+        self.assertEqual(
+            self.client.get("/strategies/missing/trade-activity").status_code, 404,
+        )
+
     def test_cells_include_recorded_entry_and_remaining_exit_quantities(self):
         strategy_id = self.client.post("/strategies", json=self.payload).json()["strategy_id"]
         cell = self.app.state.store.list_cells(strategy_id)[0]
