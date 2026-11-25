@@ -278,6 +278,14 @@ def normalize_strategy(item: dict) -> dict:
         "upper_seed_frontier": item.get("upper_seed_frontier"),
         "upper_seed_active_count": int(item.get("upper_seed_active_count", 0)),
         "grid_budget_usdt": None if item.get("grid_budget_usdt") is None else decimal_number(item["grid_budget_usdt"]),
+        "cell_budget_min_usdt": (
+            None if item.get("cell_budget_min_usdt") is None
+            else decimal_number(item["cell_budget_min_usdt"])
+        ),
+        "cell_budget_max_usdt": (
+            None if item.get("cell_budget_max_usdt") is None
+            else decimal_number(item["cell_budget_max_usdt"])
+        ),
         "auto_reinvest_enabled": bool(item.get("auto_reinvest_enabled", False)),
         "auto_reinvest_percent": decimal_number(item.get("auto_reinvest_percent"), 100.0),
         "market_label": (
@@ -896,7 +904,17 @@ def render_overview(strategies: list[dict]) -> None:
             f"{format_price(item['upper_price'], precision)}<br>"
             f"{item['grid_count']} 格 / {item['grid_ratio']:.2f}%",
         )
-        cell(cols[5], f"{format_quantity(item['order_amount'])} {item['order_unit']}")
+        if (item["grid_kind"] == "fixed_equal_usdt"
+                and item["cell_budget_min_usdt"] is not None
+                and item["cell_budget_max_usdt"] is not None
+                and item["cell_budget_min_usdt"] != item["cell_budget_max_usdt"]):
+            budget_label = (
+                f"{format_quantity(item['cell_budget_min_usdt'])}–"
+                f"{format_quantity(item['cell_budget_max_usdt'])} U"
+            )
+        else:
+            budget_label = f"{format_quantity(item['order_amount'])} {item['order_unit']}"
+        cell(cols[5], budget_label)
         cell(cols[6], f"{item['leverage']}×")
         cols[7].markdown(
             f"<span style='color:{row_color};font-weight:700'>{item['status']}</span><br>"
@@ -1529,11 +1547,20 @@ def _render_detail_live(strategy_id: str) -> None:
             projection = backend().projected_break_even(grid["id"])
         except GridApiError as exc:
             projection_error = str(exc)
-    per_cell_label = (
-        f"{format_quantity(grid['order_amount'])} {grid['order_unit']}/格"
-        if grid["market_type"] == "coinm"
-        else f"{format_quantity(grid['order_amount'])} U/格"
-    )
+    if (grid["grid_kind"] == "fixed_equal_usdt"
+            and grid["cell_budget_min_usdt"] is not None
+            and grid["cell_budget_max_usdt"] is not None
+            and grid["cell_budget_min_usdt"] != grid["cell_budget_max_usdt"]):
+        per_cell_label = (
+            f"{format_quantity(grid['cell_budget_min_usdt'])}–"
+            f"{format_quantity(grid['cell_budget_max_usdt'])} U/格"
+        )
+    else:
+        per_cell_label = (
+            f"{format_quantity(grid['order_amount'])} {grid['order_unit']}/格"
+            if grid["market_type"] == "coinm"
+            else f"{format_quantity(grid['order_amount'])} U/格"
+        )
     grid_configuration = (
         f"{format_price(grid['lower_price'], precision)}–"
         f"{format_price(grid['upper_price'], precision)} · "

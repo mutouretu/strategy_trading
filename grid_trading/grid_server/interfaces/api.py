@@ -131,6 +131,8 @@ def strategy_payload(config: StrategyConfig, store: SQLiteStore) -> dict:
             if hasattr(store, "upper_seed_active_count") else 0
         ),
         "grid_budget_usdt": None if config.grid_budget_usdt is None else str(config.grid_budget_usdt),
+        "cell_budget_min_usdt": str(min(cell.budget_usdt for cell in cells)) if cells else None,
+        "cell_budget_max_usdt": str(max(cell.budget_usdt for cell in cells)) if cells else None,
         "auto_reinvest_enabled": config.auto_reinvest_enabled,
         "auto_reinvest_percent": str(config.auto_reinvest_percent),
         "quantity_unit": "base_asset",
