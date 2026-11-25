@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
-from grid_server.application.grid_activity import hourly_break_even_activity
+from grid_server.application.grid_activity import four_hour_break_even_activity
 from grid_server.application.grid_break_even import project_break_even
 from grid_server.application.service import GridService
 from grid_server.domain import CellStage, GridCell, SymbolFilters
@@ -71,8 +71,8 @@ class ProjectedBreakEvenTests(unittest.TestCase):
         self.assertEqual(result["status"], "unavailable")
 
 
-class HourlyBreakEvenActivityTests(unittest.TestCase):
-    def test_sample_and_completed_cycles_share_beijing_hour(self) -> None:
+class FourHourBreakEvenActivityTests(unittest.TestCase):
+    def test_average_hourly_samples_and_cycle_count_share_beijing_period(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = SQLiteStore(Path(directory) / "grid.sqlite3")
             strategy_id = GridService(store, SimpleNamespace()).create_fixed(
@@ -91,18 +91,24 @@ class HourlyBreakEvenActivityTests(unittest.TestCase):
                     "UPDATE events SET created_at=? WHERE id=?",
                     ("2026-11-24T04:30:00+00:00", event_id),
                 )
-            store.save_break_even_sample(strategy_id, "2026-11-24T04:00:00+00:00", {
-                "status": "ok", "estimated_price": "93.333", "platform_break_even": "92.5",
-                "mark_price": "85", "position_qty": "4", "buy_count": 0, "sell_count": 1,
-            })
-            result = hourly_break_even_activity(
-                store, strategy_id, now=datetime(2026, 11, 24, 6, tzinfo=timezone.utc),
+            for hour, price in ((4, "90"), (5, "92"), (6, "94"), (7, "96"), (8, "100")):
+                store.save_break_even_sample(
+                    strategy_id, f"2026-11-24T{hour:02d}:00:00+00:00", {
+                        "status": "ok", "estimated_price": price,
+                        "platform_break_even": "92.5", "mark_price": "85",
+                        "position_qty": "4", "buy_count": 0, "sell_count": 1,
+                    },
+                )
+            result = four_hour_break_even_activity(
+                store, strategy_id, now=datetime(2026, 11, 24, 12, tzinfo=timezone.utc),
             )
-            self.assertEqual(result["period_hours"], 1)
+            self.assertEqual(result["period_hours"], 4)
             self.assertEqual(result["periods"][0]["started_at"], "2026-11-24T12:00+08:00")
             self.assertEqual(result["periods"][0]["completed_cycles"], 1)
-            self.assertEqual(result["periods"][0]["estimated_price"], "93.333")
-            self.assertIsNone(result["periods"][1]["estimated_price"])
+            self.assertEqual(result["periods"][0]["estimated_price"], "93")
+            self.assertEqual(result["periods"][0]["sample_count"], 4)
+            self.assertEqual(result["periods"][1]["estimated_price"], "100")
+            self.assertEqual(result["periods"][1]["sample_count"], 1)
 
     def test_scheduler_samples_once_per_hour_without_trading(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

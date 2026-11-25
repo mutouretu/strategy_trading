@@ -41,7 +41,7 @@ from ..domain import (
 from ..domain.grid import round_down
 from ..application.service import GridService
 from ..application.fixed_reconfiguration import FixedReconfigurationWorkflow
-from ..application.grid_activity import completed_cycle_activity, hourly_break_even_activity
+from ..application.grid_activity import completed_cycle_activity, four_hour_break_even_activity
 from ..application.grid_break_even import current_break_even_projection
 from ..application.grid_performance import strategy_performance, sync_strategy_trades
 from ..application.live_entry_policy import is_live_exchange, require_live_triggered_entry
@@ -514,7 +514,7 @@ def create_app(
     def break_even_activity(strategy_id: str) -> dict:
         if store.get_strategy(strategy_id) is None:
             raise HTTPException(status_code=404, detail="strategy not found")
-        return hourly_break_even_activity(store, strategy_id)
+        return four_hour_break_even_activity(store, strategy_id)
 
     @app.get("/strategies/{strategy_id}/position")
     def strategy_position(strategy_id: str) -> dict:

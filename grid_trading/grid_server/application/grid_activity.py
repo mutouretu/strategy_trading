@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from ..infrastructure.sqlite_store import SQLiteStore
 
@@ -68,48 +69,36 @@ def completed_cycle_activity(
     }
 
 
-def hourly_break_even_activity(
+def four_hour_break_even_activity(
     store: SQLiteStore, strategy_id: str, *, now: datetime | None = None,
 ) -> dict:
-    """Pair hourly cycle counts with the first break-even sample in each hour."""
+    """Pair four-hour cycle counts with the mean of valid hourly samples."""
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
         raise ValueError("now must include a timezone")
-    hour = 3600
-    completed_end = int(current.timestamp()) // hour * hour
-    started_at = store.get_first_started_at(strategy_id)
-    periods: list[dict] = []
-    if started_at is not None:
-        first_start = max(
-            completed_end - PERIOD_LIMIT * hour,
-            int(datetime.fromisoformat(started_at).timestamp()) // hour * hour,
+    activity = completed_cycle_activity(store, strategy_id, now=current)
+    periods = activity["periods"]
+    if not periods:
+        return activity
+    first_start = datetime.fromisoformat(periods[0]["started_at"])
+    completed_end = datetime.fromisoformat(periods[-1]["started_at"]) + timedelta(
+        seconds=PERIOD_SECONDS,
+    )
+    samples = store.list_break_even_samples(
+        strategy_id,
+        first_start.astimezone(timezone.utc).isoformat(timespec="seconds"),
+        completed_end.astimezone(timezone.utc).isoformat(timespec="seconds"),
+    )
+    prices_by_period: dict[int, list[Decimal]] = {}
+    for sample in samples:
+        bucket = (
+            int(datetime.fromisoformat(sample["hour_start_utc"]).timestamp())
+            // PERIOD_SECONDS * PERIOD_SECONDS
         )
-        if first_start < completed_end:
-            start_iso = datetime.fromtimestamp(first_start, timezone.utc).isoformat(timespec="seconds")
-            end_iso = datetime.fromtimestamp(completed_end, timezone.utc).isoformat(timespec="seconds")
-            counts = {start: 0 for start in range(first_start, completed_end, hour)}
-            for event in store.list_cycle_closure_events(strategy_id, start_iso, end_iso):
-                if event["event_type"] == "EXIT_ENDED" and event["payload"].get("action") != "cycle_closed":
-                    continue
-                bucket = int(datetime.fromisoformat(event["created_at"]).timestamp()) // hour * hour
-                if bucket in counts:
-                    counts[bucket] += 1
-            samples = {
-                int(datetime.fromisoformat(item["hour_start_utc"]).timestamp()): item
-                for item in store.list_break_even_samples(strategy_id, start_iso, end_iso)
-            }
-            periods = [
-                {
-                    "started_at": datetime.fromtimestamp(start, BEIJING_TIME).isoformat(timespec="minutes"),
-                    "completed_cycles": count,
-                    "estimated_price": samples[start]["estimated_price"] if start in samples else None,
-                    "sampled_at": samples[start]["observed_at"] if start in samples else None,
-                }
-                for start, count in counts.items()
-            ]
-    return {
-        "strategy_id": strategy_id,
-        "period_hours": 1,
-        "timezone": "Asia/Shanghai",
-        "periods": periods,
-    }
+        prices_by_period.setdefault(bucket, []).append(Decimal(sample["estimated_price"]))
+    for period in periods:
+        bucket = int(datetime.fromisoformat(period["started_at"]).timestamp())
+        prices = prices_by_period.get(bucket, [])
+        period["estimated_price"] = str(sum(prices) / len(prices)) if prices else None
+        period["sample_count"] = len(prices)
+    return activity

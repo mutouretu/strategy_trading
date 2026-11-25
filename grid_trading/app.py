@@ -1478,7 +1478,7 @@ def render_fixed_reinvestment(grid: dict, cells: list[dict]) -> dict[str, int] |
 
 
 def render_trade_activity(strategy_id: str) -> None:
-    st.markdown("#### 每小时交易与预估平衡价")
+    st.markdown("#### 每 4 小时交易与预估平衡价")
     try:
         activity = backend().break_even_activity(strategy_id)
     except GridApiError as exc:
@@ -1486,7 +1486,7 @@ def render_trade_activity(strategy_id: str) -> None:
         return
     periods = activity["periods"]
     if not periods:
-        st.caption("尚无已结束的小时统计周期。")
+        st.caption("尚无已结束的 4 小时统计周期。")
         return
     chart = pd.DataFrame({
         "北京时间": pd.to_datetime(
@@ -1497,23 +1497,24 @@ def render_trade_activity(strategy_id: str) -> None:
             float(period["estimated_price"]) if period.get("estimated_price") is not None else None
             for period in periods
         ],
+        "有效采样小时": [int(period.get("sample_count", 0)) for period in periods],
     })
     bars = alt.Chart(chart).mark_bar(color="#5B8DEF", opacity=0.65).encode(
         x=alt.X("北京时间:T", title="北京时间"),
-        y=alt.Y("成交次数:Q", title="完成买卖轮数"),
+        y=alt.Y("成交次数:Q", title="4 小时完成买卖轮数"),
         tooltip=["北京时间:T", "成交次数:Q"],
     )
     line = alt.Chart(chart.dropna(subset=["预估平衡价"])).mark_line(
         color="#F0B90B", point=True, strokeWidth=2,
     ).encode(
         x=alt.X("北京时间:T"),
-        y=alt.Y("预估平衡价:Q", title="预估平衡价 (U)", axis=alt.Axis(orient="right")),
-        tooltip=["北京时间:T", alt.Tooltip("预估平衡价:Q", format=".4f")],
+        y=alt.Y("预估平衡价:Q", title="平均预估平衡价 (U)", axis=alt.Axis(orient="right")),
+        tooltip=["北京时间:T", alt.Tooltip("预估平衡价:Q", format=".4f"), "有效采样小时:Q"],
     )
     st.altair_chart(alt.layer(bars, line).resolve_scale(y="independent").properties(height=250), width="stretch")
     st.caption(
-        "蓝柱：每小时完成的买卖轮数；黄线：该小时首次采样的直线路径预估平衡价。"
-        "仅显示最近 50 个已结束小时；历史采样从本功能启用后开始。"
+        "蓝柱：每 4 小时完成的买卖轮数；黄线：该周期内有效小时采样的预估平衡价平均值。"
+        "仅显示最近 50 个已结束周期；历史采样从本功能启用后开始。"
     )
 
 

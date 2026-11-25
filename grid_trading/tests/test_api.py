@@ -138,7 +138,7 @@ class APITests(unittest.TestCase):
 
         activity = self.client.get(f"/strategies/{strategy_id}/break-even-activity")
         self.assertEqual(activity.status_code, 200, activity.text)
-        self.assertEqual(activity.json()["period_hours"], 1)
+        self.assertEqual(activity.json()["period_hours"], 4)
 
     def test_cells_include_recorded_entry_and_remaining_exit_quantities(self):
         strategy_id = self.client.post("/strategies", json=self.payload).json()["strategy_id"]
