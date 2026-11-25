@@ -104,6 +104,42 @@ class APITests(unittest.TestCase):
             self.client.get("/strategies/missing/trade-activity").status_code, 404,
         )
 
+    def test_projected_break_even_and_hourly_chart_endpoints(self):
+        fixed = self.client.post("/fixed-grids", json={
+            "symbol": "SOXLUSDT", "lower_price": "80", "upper_price": "110",
+            "grid_count": 4, "grid_budget_usdt": "400",
+        })
+        self.assertEqual(fixed.status_code, 201, fixed.text)
+        strategy_id = fixed.json()["strategy_id"]
+        self.app.state.store.mark_started(strategy_id)
+        for cell in self.app.state.store.list_cells(strategy_id)[:2]:
+            cell.stage = CellStage.PENDING_EXIT
+            cell.open_qty = Decimal("1")
+            self.app.state.store.save_cell(cell)
+        self.exchange.mark = Decimal("85")
+        self.exchange.set_position("SOXLUSDT", "LONG", Decimal("2"))
+        self.exchange.get_position_prices = lambda symbol, side="LONG": (
+            Decimal("90"), Decimal("90"),
+        )
+
+        response = self.client.get(f"/strategies/{strategy_id}/projected-break-even")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["status"], "ok")
+        self.assertEqual(response.json()["sell_count"], 1)
+        first_samples = self.app.state.store.list_break_even_samples(
+            strategy_id, "2000-01-01T00:00:00+00:00", "2100-01-01T00:00:00+00:00",
+        )
+        self.assertEqual(len(first_samples), 1)
+        self.exchange.mark = Decimal("86")
+        self.client.get(f"/strategies/{strategy_id}/projected-break-even")
+        self.assertEqual(self.app.state.store.list_break_even_samples(
+            strategy_id, "2000-01-01T00:00:00+00:00", "2100-01-01T00:00:00+00:00",
+        ), first_samples)
+
+        activity = self.client.get(f"/strategies/{strategy_id}/break-even-activity")
+        self.assertEqual(activity.status_code, 200, activity.text)
+        self.assertEqual(activity.json()["period_hours"], 1)
+
     def test_cells_include_recorded_entry_and_remaining_exit_quantities(self):
         strategy_id = self.client.post("/strategies", json=self.payload).json()["strategy_id"]
         cell = self.app.state.store.list_cells(strategy_id)[0]

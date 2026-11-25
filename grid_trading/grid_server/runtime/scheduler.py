@@ -26,6 +26,7 @@ from ..shared.config import (
 from ..domain import ExchangeVenue, FuturesMarket, GridKind, Mode, StrategyStatus
 from ..application.engine import TradingEngine
 from ..application.fixed_engine import FixedGridEngine
+from ..application.grid_break_even import current_break_even_projection
 from ..ports.exchange import Exchange
 from ..application.position_coordinator import PositionCoordinator
 from ..infrastructure.snapshot_exchange import SnapshotExchange
@@ -75,6 +76,8 @@ class StrategyScheduler:
         self.engines: dict[str, TradingEngine] = {}
         self.next_due: dict[str, float] = {}
         self.rate_limited_until: dict[str, float] = {}
+        self.sampled_break_even_hours: dict[str, int] = {}
+        self.next_break_even_attempt: dict[str, float] = {}
         self.reconcile_interval_sec = max(5.0, reconcile_interval_sec)
         self.position_settlement_grace_sec = max(
             0.0,
@@ -95,6 +98,30 @@ class StrategyScheduler:
             observed_at=self._utc_from_epoch(self._last_loop_wall),
         )
 
+    def _sample_break_even_if_due(
+        self, config, mark: Decimal, current_time: float,
+    ) -> None:
+        if config.grid_kind != GridKind.FIXED_EQUAL_USDT or config.mode != Mode.LONG:
+            return
+        wall = float(self.wall_clock())
+        hour = int(wall) // 3600
+        if (self.sampled_break_even_hours.get(config.strategy_id) == hour
+                or current_time < self.next_break_even_attempt.get(config.strategy_id, 0.0)):
+            return
+        try:
+            projection = current_break_even_projection(
+                self.store, self._exchange_for(config.market_type), config, mark=mark,
+            )
+            if projection["status"] != "ok":
+                self.next_break_even_attempt[config.strategy_id] = current_time + 60.0
+                return
+            started = self._utc_from_epoch(hour * 3600)
+            self.store.save_break_even_sample(config.strategy_id, started, projection)
+            self.sampled_break_even_hours[config.strategy_id] = hour
+        except Exception:
+            # This read-only statistic must never interrupt order management.
+            self.next_break_even_attempt[config.strategy_id] = current_time + 60.0
+
     def run_once(self, now: float | None = None) -> int:
         current_time = self.clock() if now is None else now
         configs = {
@@ -107,6 +134,8 @@ class StrategyScheduler:
             self.engines.pop(strategy_id, None)
             self.next_due.pop(strategy_id, None)
             self.rate_limited_until.pop(strategy_id, None)
+            self.sampled_break_even_hours.pop(strategy_id, None)
+            self.next_break_even_attempt.pop(strategy_id, None)
 
         if not configs:
             self.next_reconcile_at = current_time + self.reconcile_interval_sec
@@ -166,8 +195,9 @@ class StrategyScheduler:
                     strategy_remains_active = False
                     continue
                 engine.process_cell_actions()
-                engine.tick()
+                mark = engine.tick()
                 self._record_strategy_recovery(config)
+                self._sample_break_even_if_due(config, mark, current_time)
                 self.rate_limited_until.pop(config.strategy_id, None)
                 if not self._strategy_is_active(config.strategy_id):
                     strategy_remains_active = False

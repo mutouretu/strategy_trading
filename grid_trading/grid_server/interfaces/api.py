@@ -4,7 +4,7 @@ import os
 import inspect
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Callable, Literal
@@ -41,7 +41,8 @@ from ..domain import (
 from ..domain.grid import round_down
 from ..application.service import GridService
 from ..application.fixed_reconfiguration import FixedReconfigurationWorkflow
-from ..application.grid_activity import completed_cycle_activity
+from ..application.grid_activity import completed_cycle_activity, hourly_break_even_activity
+from ..application.grid_break_even import current_break_even_projection
 from ..application.grid_performance import strategy_performance, sync_strategy_trades
 from ..application.live_entry_policy import is_live_exchange, require_live_triggered_entry
 from ..application.topup_planning import MARKET_BUY_PRICE_BUFFER, plan_fixed_topup
@@ -484,6 +485,34 @@ def create_app(
         if store.get_strategy(strategy_id) is None:
             raise HTTPException(status_code=404, detail="strategy not found")
         return completed_cycle_activity(store, strategy_id)
+
+    @app.get("/strategies/{strategy_id}/projected-break-even")
+    def projected_break_even(strategy_id: str) -> dict:
+        config = store.get_strategy(strategy_id)
+        if config is None:
+            raise HTTPException(status_code=404, detail="strategy not found")
+        if config.grid_kind != GridKind.FIXED_EQUAL_USDT:
+            return {"status": "unavailable", "reason": "仅支持固定等 U 网格"}
+        if config.status not in {StrategyStatus.RUNNING, StrategyStatus.STARTING}:
+            return {"status": "unavailable", "reason": "策略未运行，平台仓位快照不可用"}
+        try:
+            result = current_break_even_projection(store, exchange_for(config.market_type), config)
+            observed = datetime.now(timezone.utc)
+            result["as_of"] = observed.isoformat(timespec="seconds")
+            if result["status"] == "ok":
+                hour_start = observed.replace(minute=0, second=0, microsecond=0)
+                store.save_break_even_sample(
+                    strategy_id, hour_start.isoformat(timespec="seconds"), result,
+                )
+            return result
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/strategies/{strategy_id}/break-even-activity")
+    def break_even_activity(strategy_id: str) -> dict:
+        if store.get_strategy(strategy_id) is None:
+            raise HTTPException(status_code=404, detail="strategy not found")
+        return hourly_break_even_activity(store, strategy_id)
 
     @app.get("/strategies/{strategy_id}/position")
     def strategy_position(strategy_id: str) -> dict:

@@ -9,6 +9,7 @@ import os
 import uuid
 
 import pandas as pd
+import altair as alt
 import streamlit as st
 from dotenv import dotenv_values
 
@@ -27,6 +28,9 @@ BINANCE_GREEN = "#0ECB81"
 BINANCE_RED = "#F6465D"
 BINANCE_TEXT = "#EAECEF"
 DEFAULT_FRONTEND_REFRESH_INTERVAL = "10s"
+DETAIL_REFRESH_INTERVAL = (
+    "5s" if os.getenv("GRID_FRONTEND_REFRESH_SECONDS") == "5" else "30s"
+)
 
 
 STATUS_LABELS = {
@@ -199,12 +203,12 @@ def apply_styles() -> None:
         div[data-testid="stMetric"] { padding-top: .15rem; padding-bottom: .15rem; }
         .grid-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1.2rem; margin: .8rem 0 1.15rem; }
         .grid-summary.config { grid-template-columns: 1.1fr 1.6fr 1fr; margin-bottom: .55rem; }
-        .grid-summary.prices { margin-top: .25rem; }
+        .grid-summary.prices { grid-template-columns: repeat(5, minmax(0, 1fr)); margin-top: .25rem; }
         .grid-summary .item { min-width: 0; }
         .grid-summary .label { font-size: .72rem; opacity: .72; margin-bottom: .22rem; }
         .grid-summary .value { font-size: 1.05rem; font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
-        @media (max-width: 900px) { .grid-summary, .grid-summary.config { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-        @media (max-width: 600px) { .grid-summary, .grid-summary.config { grid-template-columns: 1fr; } }
+        @media (max-width: 900px) { .grid-summary, .grid-summary.config, .grid-summary.prices { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        @media (max-width: 600px) { .grid-summary, .grid-summary.config, .grid-summary.prices { grid-template-columns: 1fr; } }
         </style>
         """,
         unsafe_allow_html=True,
@@ -1456,26 +1460,42 @@ def render_fixed_reinvestment(grid: dict, cells: list[dict]) -> dict[str, int] |
 
 
 def render_trade_activity(strategy_id: str) -> None:
-    st.markdown("#### 四小时成交次数")
+    st.markdown("#### 每小时交易与预估平衡价")
     try:
-        activity = backend().trade_activity(strategy_id)
+        activity = backend().break_even_activity(strategy_id)
     except GridApiError as exc:
         st.caption(f"成交统计暂不可用：{exc}")
         return
     periods = activity["periods"]
     if not periods:
-        st.caption("尚无已结束的四小时统计周期。")
+        st.caption("尚无已结束的小时统计周期。")
         return
     chart = pd.DataFrame({
         "北京时间": pd.to_datetime(
             [period["started_at"] for period in periods], utc=True,
         ).tz_convert("Asia/Shanghai"),
         "成交次数": [int(period["completed_cycles"]) for period in periods],
+        "预估平衡价": [
+            float(period["estimated_price"]) if period.get("estimated_price") is not None else None
+            for period in periods
+        ],
     })
-    st.line_chart(chart, x="北京时间", y="成交次数", height=240)
+    bars = alt.Chart(chart).mark_bar(color="#5B8DEF", opacity=0.65).encode(
+        x=alt.X("北京时间:T", title="北京时间"),
+        y=alt.Y("成交次数:Q", title="完成买卖轮数"),
+        tooltip=["北京时间:T", "成交次数:Q"],
+    )
+    line = alt.Chart(chart.dropna(subset=["预估平衡价"])).mark_line(
+        color="#F0B90B", point=True, strokeWidth=2,
+    ).encode(
+        x=alt.X("北京时间:T"),
+        y=alt.Y("预估平衡价:Q", title="预估平衡价 (U)", axis=alt.Axis(orient="right")),
+        tooltip=["北京时间:T", alt.Tooltip("预估平衡价:Q", format=".4f")],
+    )
+    st.altair_chart(alt.layer(bars, line).resolve_scale(y="independent").properties(height=250), width="stretch")
     st.caption(
-        "每完成一格买入、卖出计 1 次；统计最近 50 个已结束的周期，"
-        "按北京时间 00:00、04:00 等整点分段。"
+        "蓝柱：每小时完成的买卖轮数；黄线：该小时首次采样的直线路径预估平衡价。"
+        "仅显示最近 50 个已结束小时；历史采样从本功能启用后开始。"
     )
 
 
@@ -1493,6 +1513,8 @@ def _render_detail_live(strategy_id: str) -> None:
     precision = grid["price_precision"]
     performance = None
     performance_error = None
+    projection = None
+    projection_error = None
     entry_price = None
     try:
         if grid["grid_kind"] == "fixed_equal_usdt" and grid["has_started"]:
@@ -1502,6 +1524,11 @@ def _render_detail_live(strategy_id: str) -> None:
             entry_price = backend().position(grid["id"]).get("entry_price")
     except GridApiError as exc:
         performance_error = str(exc)
+    if grid["grid_kind"] == "fixed_equal_usdt" and grid["status_value"] == "running":
+        try:
+            projection = backend().projected_break_even(grid["id"])
+        except GridApiError as exc:
+            projection_error = str(exc)
     per_cell_label = (
         f"{format_quantity(grid['order_amount'])} {grid['order_unit']}/格"
         if grid["market_type"] == "coinm"
@@ -1531,6 +1558,9 @@ def _render_detail_live(strategy_id: str) -> None:
             ("建仓均价", shown_price(entry_price)),
             ("当前价", shown_price(grid["current_price"])),
             ("损益两平价", shown_price(performance.get("position_break_even_price") if performance else None)),
+            ("直线预估平衡价", shown_price(
+                projection.get("estimated_price") if projection and projection.get("status") == "ok" else None
+            )),
         ]
         summary_sections = [("config", config_items), ("prices", price_items)]
     else:
@@ -1547,6 +1577,15 @@ def _render_detail_live(strategy_id: str) -> None:
             f"<div class='grid-summary {section_class}' style='color:{direction_color}'>{summary_html}</div>",
             unsafe_allow_html=True,
         )
+    if grid["grid_kind"] == "fixed_equal_usdt" and grid["status_value"] == "running":
+        if projection and projection.get("status") == "ok":
+            path = "上涨" if projection["direction"] == "up" else "下跌"
+            st.caption(
+                f"直线{path}估算：预计买 {projection['buy_count']} 单 / 卖 {projection['sell_count']} 单，"
+                f"届时剩余 {format_quantity(projection['remaining_qty'])}；忽略手续费、资金费和上方预买。"
+            )
+        elif projection_error or projection:
+            st.caption(f"直线预估暂不可用：{projection_error or projection.get('reason')}")
     if grid["grid_kind"] == "fixed_equal_usdt":
         if performance is not None:
             metrics = st.columns(4)
@@ -1717,7 +1756,7 @@ def render_detail_live(strategy_id: str) -> None:
     _render_detail_live(strategy_id)
 
 
-@st.fragment(run_every=DEFAULT_FRONTEND_REFRESH_INTERVAL)
+@st.fragment(run_every=DETAIL_REFRESH_INTERVAL)
 def render_pending_detail_live(strategy_id: str) -> None:
     _render_detail_live(strategy_id)
 

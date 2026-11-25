@@ -126,6 +126,11 @@ class SnapshotExchange:
             self._positions = self.exchange.get_positions()
         return list(self._positions)
 
+    def get_position_prices(
+        self, symbol: str, position_side: str = "LONG",
+    ) -> tuple[Decimal | None, Decimal | None]:
+        return self.exchange.get_position_prices(symbol, position_side)
+
     def get_available_balance(self, asset: str = "USDT") -> Decimal:
         return self.exchange.get_available_balance(asset)
 

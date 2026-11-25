@@ -118,6 +118,12 @@ class GridApiClient:
     def trade_activity(self, strategy_id: str) -> dict:
         return self._request("GET", f"/strategies/{strategy_id}/trade-activity")
 
+    def projected_break_even(self, strategy_id: str) -> dict:
+        return self._request("GET", f"/strategies/{strategy_id}/projected-break-even")
+
+    def break_even_activity(self, strategy_id: str) -> dict:
+        return self._request("GET", f"/strategies/{strategy_id}/break-even-activity")
+
     def position(self, strategy_id: str) -> dict:
         return self._request("GET", f"/strategies/{strategy_id}/position")
 

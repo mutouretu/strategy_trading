@@ -135,6 +135,20 @@ class SQLiteStore:
                 CREATE INDEX IF NOT EXISTS idx_cells_strategy_index
                 ON cells(strategy_id, cell_index);
 
+                CREATE TABLE IF NOT EXISTS break_even_samples (
+                    strategy_id TEXT NOT NULL,
+                    hour_start_utc TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    estimated_price TEXT NOT NULL,
+                    platform_break_even TEXT NOT NULL,
+                    mark_price TEXT NOT NULL,
+                    position_qty TEXT NOT NULL,
+                    buy_count INTEGER NOT NULL,
+                    sell_count INTEGER NOT NULL,
+                    PRIMARY KEY(strategy_id, hour_start_utc),
+                    FOREIGN KEY(strategy_id) REFERENCES strategies(strategy_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS upper_seed_slots (
                     strategy_id TEXT NOT NULL,
                     cell_id TEXT NOT NULL,
@@ -1430,6 +1444,31 @@ class SQLiteStore:
         cells = [self._cell_from_row(row) for row in rows]
         cells.sort(key=lambda cell: cell.buy_price)
         return cells
+
+    def save_break_even_sample(self, strategy_id: str, hour_start_utc: str, projection: dict) -> bool:
+        if projection.get("status") != "ok":
+            return False
+        with self.connection() as conn:
+            result = conn.execute(
+                """INSERT OR IGNORE INTO break_even_samples(
+                    strategy_id, hour_start_utc, observed_at, estimated_price,
+                    platform_break_even, mark_price, position_qty, buy_count, sell_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (strategy_id, hour_start_utc, utc_now(), projection["estimated_price"],
+                 projection["platform_break_even"], projection["mark_price"],
+                 projection["position_qty"], projection["buy_count"], projection["sell_count"]),
+            )
+            return result.rowcount == 1
+
+    def list_break_even_samples(self, strategy_id: str, start: str, end: str) -> list[dict]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """SELECT * FROM break_even_samples
+                   WHERE strategy_id=? AND hour_start_utc>=? AND hour_start_utc<?
+                   ORDER BY hour_start_utc""",
+                (strategy_id, start, end),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_cell(self, strategy_id: str, cell_id: str) -> GridCell | None:
         with self.connection() as conn:
